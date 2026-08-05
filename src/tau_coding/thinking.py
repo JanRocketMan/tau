@@ -17,7 +17,7 @@ THINKING_LEVELS: tuple[ThinkingLevel, ...] = (
     "high",
     "xhigh",
 )
-DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium"
+DEFAULT_THINKING_LEVEL: ThinkingLevel = "high"
 
 THINKING_LEVEL_DESCRIPTIONS: dict[ThinkingLevel, str] = {
     "off": "No reasoning",
