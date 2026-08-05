@@ -84,9 +84,9 @@ Optional text after `/compact` is added as extra focus for the summary. Manual
 compaction summarizes the whole active context into one summary and fails visibly
 if the request fails.
 
-In the TUI, a manual compaction looks like a normal working turn: the prompt
-activity indicator and terminal tab title animate while it runs, and a
-turn-finished notification fires when it completes while the app is unfocused.
+In the TUI, a manual compaction looks like a normal working turn: the terminal
+tab title animates while it runs, and a turn-finished notification fires when it
+completes while the app is unfocused.
 Press `Esc` to cancel a running compaction.
 
 ## Thinking modes

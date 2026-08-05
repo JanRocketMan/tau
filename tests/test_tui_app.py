@@ -2509,6 +2509,19 @@ def test_activity_prompt_border_uses_tool_running_color_in_shell_mode() -> None:
 
 
 @pytest.mark.anyio
+async def test_tui_app_hides_prompt_prefix() -> None:
+    app = TauTuiApp(FakeSession())
+
+    async with app.run_test(size=(120, 30)):
+        prompt = app.query_one("#prompt", PromptInput)
+        prefix = app.query_one("#prompt-prefix", Static)
+
+        assert prefix.display is False
+        assert prefix.size.width == 0
+        assert prompt.size.width > 100
+
+
+@pytest.mark.anyio
 async def test_tui_app_highlights_prompt_shell_mode() -> None:
     app = TauTuiApp(FakeSession())
 

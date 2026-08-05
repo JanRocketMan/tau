@@ -73,9 +73,9 @@ You can run a shell command yourself without asking the model:
 - `!!<command>` runs it and shows the output **without** adding it to context.
 
 As soon as the input starts with `!`, the whole input and its left border turn
-the same amber/orange color as a tool while it is running, and the `τ` prompt
-prefix becomes a matching `$`, so you can tell at a glance that submitting will
-execute a shell command instead of messaging the model.
+the same amber/orange color as a tool while it is running, so you can tell at a
+glance that submitting will execute a shell command instead of messaging the
+model.
 
 While typing a path after `!`/`!!`, press **Tab** to complete filenames from the
 working directory. Dot-prefixed paths such as `.env` and `.agents/` are included.
@@ -108,9 +108,8 @@ first, such as the macOS Dock's Downloads stack.
 ## Tool output
 
 Tool calls keep a static marker in the transcript while they run: orange means
-in progress, green means success, and red means failure. The prompt-area activity
-indicator provides the run-wide animation without adding a second spinner to each
-tool row.
+in progress, green means success, and red means failure. The terminal tab title
+also animates during a run without adding a second spinner to each tool row.
 
 Tool results (like long `read` or `bash` output) render as compact previews so
 the transcript stays readable. Toggle full tool output with **Ctrl+O**. Markdown

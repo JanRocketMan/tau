@@ -182,7 +182,7 @@ COMPLETION_MAX_VISIBLE_LINES = 16
 COMPLETION_INITIAL_TERMINAL_FRACTION = 3
 COMPLETION_MIN_TRANSCRIPT_LINES = 4
 COMPLETION_WIDGET_CHROME_LINES = 3
-PROMPT_PLACEHOLDER = "Ask Tau…  Enter submits, Shift+Enter inserts a newline"
+PROMPT_PLACEHOLDER = ""
 NO_STORED_CREDENTIALS_MESSAGE = (
     "No stored credentials to remove. /logout only removes credentials saved by /login; "
     "environment variables and providers.json config are unchanged."
@@ -2997,13 +2997,10 @@ class TauTuiApp(App[None]):
     }
 
     #prompt-prefix {
-        width: 2;
-        height: 3;
-        padding: 0 0 0 0;
-        margin: 0;
-        content-align: center middle;
-        color: $tau-accent;
-        text-style: bold;
+        /* Keep the prompt row as a clean, full-width editor. The widget is
+           retained so activity/shell state can still be updated without
+           changing the prompt layout. */
+        display: none;
     }
 
     #prompt {
