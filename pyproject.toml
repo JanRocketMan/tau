@@ -19,6 +19,7 @@ dependencies = [
     "pygments>=2.18",
     "rich>=13.0",
     "textual>=8.2.8",
+    "ty>=0.0.67",
     "typer>=0.12",
 ]
 
