@@ -10,18 +10,12 @@ from tau_coding.thinking import ThinkingLevel, ThinkingParameter
 
 ProviderKind = Literal[
     "openai-compatible",
-    "anthropic",
     "openai-codex",
-    "google-generative-ai",
-    "mistral-conversations",
 ]
 ProviderApi = Literal[
     "openai-completions",
     "openai-responses",
-    "anthropic-messages",
     "openai-codex-responses",
-    "google-generative-ai",
-    "mistral-conversations",
 ]
 ModelInput = Literal["text", "image"]
 ThinkingLevelMap = dict[ThinkingLevel, str | None]

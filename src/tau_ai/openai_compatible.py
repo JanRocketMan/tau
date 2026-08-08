@@ -243,8 +243,6 @@ class OpenAICompatibleProvider:
             api_key = self._config.api_key
             request_url = url
             headers = dict(self._config.headers or {})
-            if self._config.provider_name == "github-copilot" and has_images:
-                headers["Copilot-Vision-Request"] = "true"
             if self._config.credential_resolver is not None:
                 auth = await self._config.credential_resolver()
                 api_key = auth.api_key

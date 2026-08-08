@@ -11,20 +11,22 @@ from tau_agent.tools import ToolCall
 from tau_agent.types import JSONValue
 
 
-class ProviderResponseStartEvent(BaseModel):
-    """The provider has started a model response."""
+class BaseProviderEvent(BaseModel):
+    """Base class for all provider events. Forbids extra fields."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class ProviderResponseStartEvent(BaseProviderEvent):
+    """The provider has started a model response."""
 
     type: Literal["response_start"] = "response_start"
     model: str
     response_provider: str | None = None
 
 
-class ProviderRetryEvent(BaseModel):
+class ProviderRetryEvent(BaseProviderEvent):
     """The provider adapter is retrying a transient request failure."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["retry"] = "retry"
     attempt: int
@@ -34,47 +36,37 @@ class ProviderRetryEvent(BaseModel):
     data: dict[str, JSONValue] | None = None
 
 
-class ProviderTextDeltaEvent(BaseModel):
+class ProviderTextDeltaEvent(BaseProviderEvent):
     """A streamed text fragment from the provider."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["text_delta"] = "text_delta"
     delta: str
 
 
-class ProviderThinkingDeltaEvent(BaseModel):
+class ProviderThinkingDeltaEvent(BaseProviderEvent):
     """A streamed thinking/reasoning fragment from the provider."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["thinking_delta"] = "thinking_delta"
     delta: str
 
 
-class ProviderToolCallEvent(BaseModel):
+class ProviderToolCallEvent(BaseProviderEvent):
     """A complete tool call requested by the model."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["tool_call"] = "tool_call"
     tool_call: ToolCall
 
 
-class ProviderResponseEndEvent(BaseModel):
+class ProviderResponseEndEvent(BaseProviderEvent):
     """The provider has completed a model response."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["response_end"] = "response_end"
     message: AssistantMessage
     finish_reason: str | None = None
 
 
-class ProviderErrorEvent(BaseModel):
+class ProviderErrorEvent(BaseProviderEvent):
     """A provider-level error that can be surfaced by the agent layer."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: Literal["error"] = "error"
     message: str

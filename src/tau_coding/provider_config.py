@@ -14,16 +14,10 @@ from typing import Any, Protocol, cast
 from urllib.parse import urlsplit
 
 from tau_ai.env import (
-    CACHE_RETENTION_LONG,
-    CACHE_RETENTION_NONE,
-    CACHE_RETENTION_SHORT,
-    DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
     DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES,
     DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
     DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
-    AnthropicConfig,
-    CacheRetention,
     OpenAICompatibleConfig,
 )
 from tau_ai.openai_codex import DEFAULT_OPENAI_CODEX_BASE_URL
@@ -43,14 +37,13 @@ from tau_coding.thinking import (
     DEFAULT_THINKING_LEVEL,
     ThinkingLevel,
     ThinkingParameter,
-    anthropic_thinking_budget_for_level,
     normalize_thinking_level,
     normalize_thinking_levels,
     reasoning_effort_for_level,
 )
 
-DEFAULT_PROVIDER_NAME = "openai"
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_PROVIDER_NAME = "openai-codex"
+DEFAULT_MODEL = "gpt-5.6-luna"
 PROVIDER_SETTINGS_SCHEMA_VERSION = 2
 
 
@@ -184,77 +177,6 @@ class OpenAICompatibleProviderConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class AnthropicProviderConfig:
-    """Durable settings for Anthropic's Messages API."""
-
-    name: str = "anthropic"
-    base_url: str = DEFAULT_ANTHROPIC_BASE_URL
-    api: ProviderApi = "anthropic-messages"
-    api_key_env: str = "ANTHROPIC_API_KEY"
-    credential_name: str | None = "anthropic"
-    models: tuple[str, ...] = ("claude-sonnet-4-6",)
-    default_model: str = "claude-sonnet-4-6"
-    context_windows: dict[str, int] = field(default_factory=dict)
-    headers: dict[str, str] = field(default_factory=dict)
-    compat: dict[str, Any] = field(default_factory=dict)
-    model_metadata: dict[str, ProviderModelMetadata] = field(default_factory=dict)
-    timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
-    max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
-    max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
-    thinking_levels: tuple[ThinkingLevel, ...] | None = None
-    thinking_models: tuple[str, ...] = ()
-    thinking_default: ThinkingLevel | None = None
-    thinking_parameter: ThinkingParameter | None = None
-    thinking_defaults: dict[str, ThinkingLevel] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        _validate_provider_numbers(
-            timeout_seconds=self.timeout_seconds,
-            max_retries=self.max_retries,
-            max_retry_delay_seconds=self.max_retry_delay_seconds,
-        )
-        _validate_context_windows(self.context_windows)
-        _validate_model_metadata(self.models, self.model_metadata)
-        _validate_json_object(self.compat, "Provider compat")
-        _validate_thinking_config(
-            thinking_levels=self.thinking_levels,
-            thinking_models=self.thinking_models,
-            thinking_default=self.thinking_default,
-            thinking_parameter=self.thinking_parameter,
-        )
-        _validate_thinking_defaults(self.thinking_defaults)
-
-    def to_json(self) -> dict[str, Any]:
-        """Serialize this provider config to JSON-compatible data."""
-        return {
-            "name": self.name,
-            "type": "anthropic",
-            "base_url": self.base_url,
-            "api": self.api,
-            "api_key_env": self.api_key_env,
-            "credential_name": self.credential_name,
-            "models": list(self.models),
-            "default_model": self.default_model,
-            "context_windows": dict(self.context_windows),
-            "headers": dict(self.headers),
-            "compat": dict(self.compat),
-            "model_metadata": {
-                model: metadata.to_json() for model, metadata in self.model_metadata.items()
-            },
-            "timeout_seconds": self.timeout_seconds,
-            "max_retries": self.max_retries,
-            "max_retry_delay_seconds": self.max_retry_delay_seconds,
-            "thinking_levels": (
-                list(self.thinking_levels) if self.thinking_levels is not None else None
-            ),
-            "thinking_models": list(self.thinking_models),
-            "thinking_default": self.thinking_default,
-            "thinking_parameter": self.thinking_parameter,
-            "thinking_defaults": dict(self.thinking_defaults),
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class OpenAICodexProviderConfig:
     """Durable settings for OpenAI Codex subscription OAuth."""
 
@@ -328,7 +250,7 @@ class OpenAICodexProviderConfig:
 
 
 type ProviderConfig = (
-    OpenAICompatibleProviderConfig | AnthropicProviderConfig | OpenAICodexProviderConfig
+    OpenAICompatibleProviderConfig | OpenAICodexProviderConfig
 )
 
 
@@ -401,25 +323,6 @@ def provider_config_from_entry(entry: ProviderCatalogEntry) -> ProviderConfig:
     """Create a durable provider config from a catalog entry."""
     context_windows = dict(entry.context_windows or {})
     model_metadata = _provider_model_metadata_from_catalog(entry.model_metadata)
-    if entry.kind == "anthropic":
-        return AnthropicProviderConfig(
-            name=entry.name,
-            base_url=entry.base_url,
-            api=_default_api_for_kind(entry.kind),
-            api_key_env=entry.api_key_env,
-            credential_name=entry.credential_name,
-            models=entry.models,
-            default_model=entry.default_model,
-            context_windows=context_windows,
-            headers=dict(entry.headers),
-            compat=dict(entry.compat),
-            model_metadata=model_metadata,
-            thinking_levels=entry.thinking_levels,
-            thinking_models=entry.thinking_models,
-            thinking_default=entry.thinking_default,
-            thinking_parameter=entry.thinking_parameter,
-            thinking_defaults={},
-        )
     if entry.kind == "openai-codex":
         return OpenAICodexProviderConfig(
             name=entry.name,
@@ -458,14 +361,8 @@ def provider_config_from_entry(entry: ProviderCatalogEntry) -> ProviderConfig:
 
 
 def _default_api_for_kind(kind: str) -> ProviderApi:
-    if kind == "anthropic":
-        return "anthropic-messages"
     if kind == "openai-codex":
         return "openai-codex-responses"
-    if kind == "google-generative-ai":
-        return "google-generative-ai"
-    if kind == "mistral-conversations":
-        return "mistral-conversations"
     return "openai-completions"
 
 
@@ -892,11 +789,6 @@ def _merge_provider_config(existing: ProviderConfig, incoming: ProviderConfig) -
     ):
         return _merge_openai_compatible_provider(existing, incoming)
 
-    if isinstance(existing, AnthropicProviderConfig) and isinstance(
-        incoming, AnthropicProviderConfig
-    ):
-        return _merge_anthropic_provider(existing, incoming)
-
     return incoming
 
 
@@ -943,51 +835,6 @@ def _merge_openai_compatible_provider(
         ),
         thinking_defaults=existing.thinking_defaults,
         inference_providers=existing.inference_providers,
-    )
-
-
-def _merge_anthropic_provider(
-    existing: AnthropicProviderConfig,
-    incoming: AnthropicProviderConfig,
-) -> AnthropicProviderConfig:
-    models = _unique_strings((*incoming.models, *existing.models))
-    return replace(
-        incoming,
-        models=models,
-        default_model=(
-            existing.default_model if existing.default_model in models else incoming.default_model
-        ),
-        headers={**incoming.headers, **existing.headers},
-        compat={**incoming.compat, **existing.compat},
-        model_metadata=_merge_provider_model_metadata(
-            incoming.model_metadata,
-            existing.model_metadata,
-        ),
-        timeout_seconds=existing.timeout_seconds,
-        max_retries=existing.max_retries,
-        max_retry_delay_seconds=existing.max_retry_delay_seconds,
-        context_windows={**incoming.context_windows, **existing.context_windows},
-        thinking_levels=(
-            existing.thinking_levels
-            if existing.thinking_levels is not None
-            else incoming.thinking_levels
-        ),
-        thinking_models=(
-            existing.thinking_models
-            if existing.thinking_levels is not None
-            else incoming.thinking_models
-        ),
-        thinking_default=(
-            existing.thinking_default
-            if existing.thinking_levels is not None
-            else incoming.thinking_default
-        ),
-        thinking_parameter=(
-            existing.thinking_parameter
-            if existing.thinking_levels is not None
-            else incoming.thinking_parameter
-        ),
-        thinking_defaults=existing.thinking_defaults,
     )
 
 
@@ -1548,7 +1395,7 @@ def _detected_compat(provider: ProviderConfig, model: str) -> dict[str, Any]:
     is_openai_responses = _provider_api(provider, model) == "openai-responses"
     is_nonstandard = is_cerebras or is_grok or is_together or is_deepseek or is_zai or is_moonshot
     use_max_tokens = is_moonshot or is_together
-    is_anthropic_api = urlsplit(base_url).hostname == urlsplit(DEFAULT_ANTHROPIC_BASE_URL).hostname
+    is_anthropic_api = urlsplit(base_url).hostname == "api.anthropic.com"
     return {
         "supportsStore": not is_nonstandard,
         "supportsReasoningEffort": not (is_grok or is_zai or is_moonshot or is_together),
@@ -1681,57 +1528,10 @@ def openai_compatible_config_from_provider(
     )
 
 
-def anthropic_config_from_provider(
-    provider: AnthropicProviderConfig,
-    *,
-    credential_reader: CredentialReader | None = None,
-    model: str | None = None,
-    thinking_level: ThinkingLevel | None = None,
-) -> AnthropicConfig:
-    """Build Anthropic runtime config from durable settings."""
-    api_key = _api_key_from_provider(provider, credential_reader=credential_reader)
-    selected_model = model or provider.default_model
-    thinking_budget_tokens = _anthropic_thinking_budget_from_provider(
-        provider,
-        model=selected_model,
-        thinking_level=thinking_level,
-    )
-    base_url = _normalize_anthropic_base_url(_model_base_url(provider, selected_model))
-    cache_retention, cache_control_on_tools = anthropic_cache_settings(provider, selected_model)
-    return AnthropicConfig(
-        api_key=api_key,
-        provider_name=provider.name,
-        base_url=base_url,
-        cache_retention=cache_retention,
-        cache_control_on_tools=cache_control_on_tools,
-        headers=_model_headers(provider, selected_model),
-        timeout_seconds=provider.timeout_seconds,
-        max_retries=provider.max_retries,
-        max_retry_delay_seconds=provider.max_retry_delay_seconds,
-        supports_images=provider_model_supports_images(provider, selected_model),
-        thinking_budget_tokens=thinking_budget_tokens,
-        thinking_effort=_reasoning_effort_from_anthropic_provider(
-            provider,
-            model=selected_model,
-            thinking_level=thinking_level,
-        ),
-        thinking_mode=_anthropic_thinking_mode(
-            provider, selected_model, thinking_level=thinking_level
-        ),
-    )
-
-
 def provider_kind(provider: ProviderConfig) -> ProviderKind:
     """Return the durable provider kind."""
-    if isinstance(provider, AnthropicProviderConfig):
-        return "anthropic"
     if isinstance(provider, OpenAICodexProviderConfig):
         return "openai-codex"
-    if isinstance(provider, OpenAICompatibleProviderConfig):
-        if provider.api == "google-generative-ai":
-            return "google-generative-ai"
-        if provider.api == "mistral-conversations":
-            return "mistral-conversations"
     return "openai-compatible"
 
 
@@ -1788,32 +1588,6 @@ def _reasoning_effort_from_provider(
     return reasoning_effort_for_level(normalized)
 
 
-def _anthropic_thinking_budget_from_provider(
-    provider: AnthropicProviderConfig,
-    *,
-    model: str | None,
-    thinking_level: ThinkingLevel | None,
-) -> int | None:
-    if thinking_level is None or provider.thinking_parameter != "anthropic.thinking":
-        return None
-
-    selected_model = model or provider.default_model
-    if _anthropic_thinking_mode(provider, selected_model) == "adaptive":
-        return None
-
-    levels = provider_thinking_levels(provider, model=selected_model)
-    if not levels:
-        return None
-
-    normalized = normalize_thinking_level(thinking_level)
-    if normalized not in levels:
-        available = ", ".join(levels)
-        raise ProviderConfigError(
-            f"Thinking mode {normalized} is not available for "
-            f"{provider.name}:{selected_model}. Available modes: {available}"
-        )
-    return anthropic_thinking_budget_for_level(normalized)
-
 
 def _metadata_thinking_value(
     provider: ProviderConfig,
@@ -1861,77 +1635,12 @@ def _include_reasoning_effort_none(
     return _metadata_thinking_value(provider, model, "off") == "none"
 
 
-def _reasoning_effort_from_anthropic_provider(
-    provider: AnthropicProviderConfig,
-    *,
-    model: str,
-    thinking_level: ThinkingLevel | None,
-) -> str | None:
-    if thinking_level is None:
-        return None
-    selected_model = model
-    normalized = normalize_thinking_level(thinking_level)
-    if normalized == "off":
-        return None
-    mapped = _metadata_thinking_value(provider, selected_model, normalized)
-    return mapped or normalized
-
-
-def _anthropic_thinking_mode(
-    provider: AnthropicProviderConfig,
-    model: str,
-    *,
-    thinking_level: ThinkingLevel | None = None,
-) -> str:
-    compat = _model_compat(provider, model)
-    if compat.get("forceAdaptiveThinking") is True:
-        if thinking_level is not None and normalize_thinking_level(thinking_level) == "off":
-            return "disabled"
-        return "adaptive"
-    return "budget"
-
-
-def _normalize_anthropic_base_url(base_url: str) -> str:
-    normalized = base_url.rstrip("/")
-    if normalized.endswith("/v1"):
-        return normalized
-    return f"{normalized}/v1"
-
-
-def anthropic_cache_settings(
-    provider: ProviderConfig,
-    model: str | None = None,
-    *,
-    oauth: bool = False,
-) -> tuple[CacheRetention, bool]:
-    """Resolve prompt-cache settings for one Anthropic-protocol request.
-
-    Capability comes from compat, which layers a detected default under the
-    provider's own compat and then per-model compat. Intent comes from the auth
-    mode: subscription OAuth is not billed per token, so it asks for the 1 hour
-    TTL, while an API key keeps the shorter default. Capability only ever narrows
-    intent, so the two compose without any precedence rule.
-    """
-    compat = _model_compat(provider, model)
-    if compat.get("supportsCacheControl") is False:
-        return CACHE_RETENTION_NONE, False
-    retention = CACHE_RETENTION_LONG if oauth else CACHE_RETENTION_SHORT
-    if retention == CACHE_RETENTION_LONG and compat.get("supportsLongCacheRetention") is False:
-        retention = CACHE_RETENTION_SHORT
-    return retention, compat.get("supportsCacheControlOnTools") is not False
-
 
 def _provider_from_json(data: object) -> ProviderConfig:
     if not isinstance(data, dict):
         raise ProviderConfigError("Provider entries must be JSON objects")
     provider_type = _string(data.get("type"), "providers[].type")
-    if provider_type not in {
-        "openai-compatible",
-        "anthropic",
-        "openai-codex",
-        "google-generative-ai",
-        "mistral-conversations",
-    }:
+    if provider_type not in {"openai-compatible", "openai-codex"}:
         raise ProviderConfigError(f"Unsupported provider type: {provider_type}")
     name = _string(data.get("name"), "providers[].name")
     base_url = _string(data.get("base_url"), f"providers[{name}].base_url").rstrip("/")
@@ -1984,28 +1693,6 @@ def _provider_from_json(data: object) -> ProviderConfig:
     )
     if default_model not in models:
         models = (*models, default_model)
-    if provider_type == "anthropic":
-        return AnthropicProviderConfig(
-            name=name,
-            base_url=base_url,
-            api=api or "anthropic-messages",
-            api_key_env=api_key_env,
-            credential_name=credential_name,
-            models=models,
-            default_model=default_model,
-            context_windows=context_windows,
-            headers=headers,
-            compat=compat,
-            model_metadata=model_metadata,
-            timeout_seconds=timeout_seconds,
-            max_retries=max_retries,
-            max_retry_delay_seconds=max_retry_delay_seconds,
-            thinking_levels=thinking_levels,
-            thinking_models=thinking_models,
-            thinking_default=thinking_default,
-            thinking_parameter=thinking_parameter,
-            thinking_defaults=thinking_defaults,
-        )
     if provider_type == "openai-codex":
         _reject_codex_legacy_compat(compat)
         return OpenAICodexProviderConfig(
@@ -2281,10 +1968,7 @@ def _optional_provider_api(value: object, field_name: str) -> ProviderApi | None
     if value in {
         "openai-completions",
         "openai-responses",
-        "anthropic-messages",
         "openai-codex-responses",
-        "google-generative-ai",
-        "mistral-conversations",
     }:
         return cast(ProviderApi, value)
     raise ProviderConfigError(f"Provider field has unsupported API: {field_name}")

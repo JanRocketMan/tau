@@ -17,10 +17,7 @@ from tau_coding.skills import Skill
 from tau_coding.system_prompt import ProjectContextFile
 from tau_coding.thinking import normalize_thinking_level
 
-LOGIN_PROVIDER_ALIASES = {
-    "anthropic-api": ("anthropic", "api-key"),
-    "anthropic-subscription": ("anthropic", "subscription"),
-}
+LOGIN_PROVIDER_ALIASES: dict[str, tuple[str, str]] = {}
 
 
 class CommandSession(Protocol):

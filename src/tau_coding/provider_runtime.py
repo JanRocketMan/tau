@@ -11,10 +11,7 @@ from typing import Protocol
 from weakref import WeakKeyDictionary
 
 from tau_agent.provider import ModelProvider
-from tau_ai.anthropic import AnthropicProvider
-from tau_ai.env import AnthropicConfig, RuntimeProviderAuth
-from tau_ai.google import GoogleGenerativeAIProvider
-from tau_ai.mistral import MistralConversationsProvider
+from tau_ai.env import RuntimeProviderAuth
 from tau_ai.openai_codex import (
     OpenAICodexConfig,
     OpenAICodexCredentials,
@@ -30,13 +27,10 @@ from tau_coding.oauth import (
 from tau_coding.oauth_registry import get_oauth_provider
 from tau_coding.oauth_types import OAuthProvider
 from tau_coding.provider_config import (
-    AnthropicProviderConfig,
     OpenAICodexProviderConfig,
     OpenAICompatibleProviderConfig,
     ProviderConfig,
     ProviderConfigError,
-    anthropic_cache_settings,
-    anthropic_config_from_provider,
     openai_compatible_config_from_provider,
     provider_model_supports_images,
     provider_thinking_levels,
@@ -73,30 +67,6 @@ def create_model_provider(
             )
         inference_provider = validate_huggingface_inference_provider(inference_provider)
     credentials = credential_store or FileCredentialStore()
-    if isinstance(provider, AnthropicProviderConfig):
-        credential = _oauth_credential(provider, credentials)
-        config = anthropic_config_from_provider(
-            provider,
-            credential_reader=credentials,
-            model=model,
-            thinking_level=thinking_level,
-        )
-        if credential is not None:
-            runtime_auth = _required_oauth_provider(provider.name).runtime_auth(credential)
-            oauth_retention, _ = anthropic_cache_settings(provider, model, oauth=True)
-            config = replace(
-                config,
-                api_key=runtime_auth.api_key,
-                bearer_auth=True,
-                headers={**dict(config.headers or {}), **dict(runtime_auth.headers or {})},
-                oauth_system_prompt="You are Claude Code, Anthropic's official CLI for Claude.",
-                cache_retention=oauth_retention,
-                credential_resolver=OAuthRuntimeCredentialResolver(
-                    provider,
-                    credential_store=credentials,
-                ),
-            )
-        return AnthropicProvider(config)
     if isinstance(provider, OpenAICodexProviderConfig):
         return OpenAICodexProvider(
             OpenAICodexConfig(
@@ -151,36 +121,6 @@ def create_model_provider(
                     credential_store=credentials,
                 ),
             )
-        selected_api = compatible_config.api
-        if selected_api == "anthropic-messages":
-            if credential is None:
-                raise ProviderConfigError(
-                    "Anthropic-protocol models on openai-compatible providers require OAuth"
-                )
-            gateway_retention, gateway_cache_control_on_tools = anthropic_cache_settings(
-                provider, model, oauth=True
-            )
-            anthropic_config = AnthropicConfig(
-                api_key=compatible_config.api_key,
-                base_url=compatible_config.base_url,
-                headers=compatible_config.headers,
-                timeout_seconds=compatible_config.timeout_seconds,
-                provider_name=compatible_config.provider_name,
-                max_retries=compatible_config.max_retries,
-                max_retry_delay_seconds=compatible_config.max_retry_delay_seconds,
-                bearer_auth=True,
-                credential_resolver=compatible_config.credential_resolver,
-                supports_images=compatible_config.supports_images,
-                # Resolved from compat like the first-party path, so a gateway
-                # proxying real Claude can opt back in per provider or per model.
-                cache_retention=gateway_retention,
-                cache_control_on_tools=gateway_cache_control_on_tools,
-            )
-            return AnthropicProvider(anthropic_config)
-        if selected_api == "google-generative-ai":
-            return GoogleGenerativeAIProvider(compatible_config)
-        if selected_api == "mistral-conversations":
-            return MistralConversationsProvider(compatible_config)
         return OpenAICompatibleProvider(compatible_config)
     raise ProviderConfigError(f"Unsupported provider config: {provider.name}")
 
