@@ -9,14 +9,12 @@ from tau_coding.paths import TauPaths
 from tau_coding.provider_catalog import ModelCostTier
 from tau_coding.provider_config import (
     DEFAULT_MODEL,
-    AnthropicProviderConfig,
     OpenAICodexProviderConfig,
     OpenAICompatibleProviderConfig,
     ProviderConfigError,
     ProviderModelMetadata,
     ProviderSettings,
     ScopedModelConfig,
-    anthropic_config_from_provider,
     load_provider_settings,
     openai_compatible_config_from_provider,
     provider_default_thinking_level,
@@ -57,174 +55,49 @@ def test_stale_preferences_cannot_restore_removed_codex_alias(tmp_path: Path) ->
     settings = load_provider_settings(TauPaths(home=tau_home))
     codex = settings.get_provider("openai-codex")
 
-    assert codex.default_model == "gpt-5.5"
+    assert codex.default_model == "gpt-5.6-luna"
     assert "gpt-5.6" not in codex.models
     assert "gpt-5.6" not in codex.thinking_defaults
 
 
-def test_load_provider_settings_accepts_huggingface_inference_provider_preferences(
-    tmp_path: Path,
-) -> None:
-    tau_home = tmp_path / ".tau"
-    tau_home.mkdir()
-    (tau_home / "providers.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "default_provider": "huggingface",
-                "provider_preferences": {
-                    "huggingface": {
-                        "default_model": "zai-org/GLM-5.2",
-                        "inference_providers": {"zai-org/GLM-5.2": "deepinfra"},
-                    }
-                },
-                "scoped_models": [],
-            }
-        )
-    )
-
-    provider = load_provider_settings(TauPaths(home=tau_home)).get_provider("huggingface")
-
-    assert isinstance(provider, OpenAICompatibleProviderConfig)
-    assert provider.inference_providers == {"zai-org/GLM-5.2": "deepinfra"}
-
-
-def test_load_provider_settings_missing_file_uses_openai_default(tmp_path: Path) -> None:
+def test_load_provider_settings_missing_file_uses_current_catalog(tmp_path: Path) -> None:
     settings = load_provider_settings(TauPaths(home=tmp_path / ".tau"))
 
-    assert settings.default_provider == "openai"
+    assert settings.default_provider == "openai-codex"
     assert [provider.name for provider in settings.providers] == [
-        "openai",
         "openai-codex",
-        "anthropic",
-        "google",
-        "deepseek",
-        "xai",
-        "groq",
-        "cerebras",
-        "nvidia",
-        "openrouter",
-        "zai",
-        "mistral",
-        "minimax",
-        "minimax-cn",
-        "moonshotai",
-        "kimi-code",
-        "moonshotai-cn",
-        "huggingface",
-        "fireworks",
-        "together",
-        "vercel-ai-gateway",
-        "xiaomi",
-        "xiaomi-token-plan-cn",
-        "xiaomi-token-plan-ams",
-        "xiaomi-token-plan-sgp",
         "opencode-go",
         "opencode",
-        "github-copilot",
     ]
-    assert settings.providers[0].default_model == DEFAULT_MODEL
-    assert settings.get_provider("anthropic").api_key_env == "ANTHROPIC_API_KEY"
-    assert settings.get_provider("openrouter").api_key_env == "OPENROUTER_API_KEY"
-    assert settings.get_provider("huggingface").api_key_env == "HF_TOKEN"
+    assert settings.get_provider("openai-codex").default_model == DEFAULT_MODEL
 
 
 def test_builtin_codex_preserves_model_input_capabilities() -> None:
     codex = ProviderSettings().get_provider("openai-codex")
 
-    for model in (
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.3-codex",
-        "gpt-5.2",
-    ):
-        assert provider_model_supports_images(codex, model)
-    assert not provider_model_supports_images(codex, "gpt-5.3-codex-spark")
+    assert provider_model_supports_images(codex, "gpt-5.6-luna")
+    assert provider_model_supports_images(codex, "gpt-5.6-sol")
+    assert not provider_model_supports_images(codex, "gpt-5.5")
 
 
-def test_builtin_openai_declares_model_scoped_thinking_capabilities() -> None:
+def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     settings = ProviderSettings()
-    openai = settings.get_provider("openai")
-    openrouter = settings.get_provider("openrouter")
-    huggingface = settings.get_provider("huggingface")
     codex = settings.get_provider("openai-codex")
-    anthropic = settings.get_provider("anthropic")
+    opencode_go = settings.get_provider("opencode-go")
 
-    assert openai.context_windows["gpt-5.5"] == 272_000
-    assert openai.context_windows["gpt-5.5-pro"] == 1_050_000
-    assert settings.get_provider("anthropic").context_windows["claude-sonnet-4-6"] == 1_000_000
-    assert openrouter.context_windows["openai/gpt-5.5"] == 1_050_000
-    assert provider_thinking_levels(openai, model="gpt-5.5") == (
-        "off",
+    assert codex.context_windows["gpt-5.6-luna"] == 272_000
+    assert opencode_go.context_windows["kimi-k3"] == 1_000_000
+    assert provider_thinking_levels(codex, model="gpt-5.6-luna") == (
         "low",
         "medium",
         "high",
         "xhigh",
     )
-    assert provider_default_thinking_level(openai, model="gpt-5.5") == "medium"
-    assert provider_thinking_unavailable_reason(openai, model="gpt-5.5") is None
-    assert provider_thinking_levels(openai, model="gpt-4.1") == ()
-    assert (
-        provider_thinking_unavailable_reason(openai, model="gpt-4.1")
-        == "openai:gpt-4.1 is not a reasoning model"
+    assert provider_default_thinking_level(codex, model="gpt-5.6-luna") == "xhigh"
+    assert provider_thinking_unavailable_reason(codex, model="unknown") == (
+        "openai-codex:unknown is not declared in thinking_models"
     )
-    assert provider_thinking_levels(openrouter, model="openai/gpt-5.5") == (
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-    )
-    assert provider_thinking_unavailable_reason(openrouter, model="openai/gpt-5.5") is None
-    assert provider_thinking_levels(openrouter, model="anthropic/claude-sonnet-4.6") == (
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-    )
-    assert (
-        provider_thinking_unavailable_reason(openrouter, model="anthropic/claude-sonnet-4.6")
-        is None
-    )
-    assert provider_thinking_levels(huggingface, model="MiniMaxAI/MiniMax-M2.7") == (
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-    )
-    assert provider_thinking_unavailable_reason(huggingface, model="MiniMaxAI/MiniMax-M2.7") is None
-    assert provider_thinking_levels(codex, model="gpt-5.5") == (
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-    )
-    assert provider_thinking_unavailable_reason(codex, model="gpt-5.5") is None
-    assert provider_thinking_levels(anthropic, model="claude-sonnet-4-6") == (
-        "off",
-        "low",
-        "medium",
-        "high",
-    )
-    assert provider_thinking_unavailable_reason(anthropic, model="claude-sonnet-4-6") is None
-    assert provider_thinking_levels(anthropic, model="claude-haiku-4-5") == (
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-    )
-    assert provider_thinking_levels(anthropic, model="claude-opus-5") == (
-        "off",
+    assert provider_thinking_levels(opencode_go, model="kimi-k3") == (
         "low",
         "medium",
         "high",
@@ -287,11 +160,11 @@ docs_url = "http://localhost:11434/v1"
 def test_provider_settings_ignore_unknown_fields(tmp_path: Path) -> None:
     settings = provider_settings_from_json(
         {
-            "default_provider": "openai",
+            "default_provider": "opencode-go",
             "future_top_level_option": True,
             "provider_preferences": {
-                "openai": {
-                    "default_model": "gpt-5-mini",
+                "opencode-go": {
+                    "default_model": "gpt-5.6-luna",
                     "future_provider_option": {"enabled": True},
                 }
             },
@@ -299,8 +172,8 @@ def test_provider_settings_ignore_unknown_fields(tmp_path: Path) -> None:
         paths=TauPaths(home=tmp_path / ".tau"),
     )
 
-    assert settings.default_provider == "openai"
-    assert settings.get_provider("openai").default_model == "gpt-5-mini"
+    assert settings.default_provider == "opencode-go"
+    assert settings.get_provider("opencode-go").default_model == "gpt-5.6-luna"
 
 
 def test_load_provider_settings_ignores_preference_without_catalog_entry(
@@ -311,9 +184,9 @@ def test_load_provider_settings_ignores_preference_without_catalog_entry(
     (tau_home / "providers.json").write_text(
         json.dumps(
             {
-                "default_provider": "openai",
+                "default_provider": "opencode-go",
                 "provider_preferences": {
-                    "openai": {"default_model": "gpt-5-mini"},
+                    "opencode-go": {"default_model": "gpt-5.6-luna"},
                     "llama-cpp": {"default_model": "local"},
                 },
             }
@@ -323,7 +196,7 @@ def test_load_provider_settings_ignores_preference_without_catalog_entry(
 
     settings = load_provider_settings(TauPaths(home=tau_home))
 
-    assert settings.get_provider("openai").default_model == "gpt-5-mini"
+    assert settings.get_provider("opencode-go").default_model == "gpt-5.6-luna"
     assert "llama-cpp" not in {provider.name for provider in settings.providers}
 
 
@@ -332,7 +205,7 @@ def test_save_provider_settings_writes_backup_when_replacing(tmp_path: Path) -> 
     initial = ProviderSettings(
         providers=(
             OpenAICompatibleProviderConfig(
-                name="openai",
+                name="local",
                 models=("gpt-5",),
                 default_model="gpt-5",
             ),
@@ -341,7 +214,7 @@ def test_save_provider_settings_writes_backup_when_replacing(tmp_path: Path) -> 
     updated = ProviderSettings(
         providers=(
             OpenAICompatibleProviderConfig(
-                name="openai",
+                name="local",
                 models=("gpt-5-mini",),
                 default_model="gpt-5-mini",
             ),
@@ -353,12 +226,9 @@ def test_save_provider_settings_writes_backup_when_replacing(tmp_path: Path) -> 
 
     backup = path.with_suffix(path.suffix + ".bak")
     assert backup.exists()
-    assert load_provider_settings(paths).get_provider("openai").default_model == "gpt-5-mini"
+    assert load_provider_settings(paths).get_provider("local").default_model == "gpt-5-mini"
     assert (
-        provider_settings_from_json(json.loads(backup.read_text()))
-        .get_provider("openai")
-        .default_model
-        == "gpt-5"
+        json.loads(backup.read_text())["provider_preferences"]["local"]["default_model"] == "gpt-5"
     )
 
 
@@ -736,9 +606,8 @@ def _kimi_code_like_provider() -> OpenAICompatibleProviderConfig:
 def test_resolve_startup_thinking_level_uses_k3_max_default() -> None:
     provider = _kimi_code_like_provider()
 
-    # K3 does not support the global "medium" default, so startup uses its
-    # catalog default (xhigh, sent as "max") instead of the first level.
-    assert resolve_startup_thinking_level(provider, "k3") == "xhigh"
+    # The current global startup preference is high, which K3 supports.
+    assert resolve_startup_thinking_level(provider, "k3") == "high"
 
 
 def test_resolve_startup_thinking_level_prefers_remembered_model_default() -> None:
@@ -877,24 +746,6 @@ def test_huggingface_runtime_config_captures_inference_provider_header(
     assert config.response_provider_header == "x-inference-provider"
 
 
-def test_openai_compatible_config_from_provider_preserves_openai_base_url_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1/")
-
-    class FakeCredentials:
-        def get(self, name: str) -> str | None:
-            return "stored-key" if name == "openai" else None
-
-    config = openai_compatible_config_from_provider(
-        OpenAICompatibleProviderConfig(name="openai", credential_name="openai"),
-        credential_reader=FakeCredentials(),
-    )
-
-    assert config.api_key == "stored-key"
-    assert config.base_url == "https://proxy.example/v1"
-
-
 def test_openai_compatible_config_from_provider_uses_configured_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -968,24 +819,29 @@ def test_openai_compatible_config_from_provider_sets_reasoning_effort(
 
 @pytest.mark.parametrize(
     ("level", "expected_effort"),
-    [("low", "low"), ("high", "high"), ("xhigh", "max")],
+    [("low", "low"), ("high", "high"), ("xhigh", "xhigh")],
 )
 def test_kimi_k3_maps_thinking_levels_to_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch,
     level: ThinkingLevel,
     expected_effort: str,
 ) -> None:
-    monkeypatch.setenv("KIMI_CODE_API_KEY", "test-key")
+    monkeypatch.setenv("OPENCODE_API_KEY", "test-key")
     settings = load_provider_settings(TauPaths(home=Path("/missing")))
-    provider = settings.get_provider("kimi-code")
+    provider = settings.get_provider("opencode-go")
 
     config = openai_compatible_config_from_provider(
         provider,
-        model="k3",
+        model="kimi-k3",
         thinking_level=level,
     )
 
-    assert provider_thinking_levels(provider, model="k3") == ("low", "high", "xhigh")
+    assert provider_thinking_levels(provider, model="kimi-k3") == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
     assert config.reasoning_effort == expected_effort
 
 
@@ -1082,64 +938,6 @@ def test_provider_has_usable_credentials_checks_stored_key_and_env(
     monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
 
     assert provider_has_usable_credentials(provider, credential_reader=EmptyCredentials())
-
-
-def test_anthropic_config_from_provider_uses_stored_credential(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    provider = AnthropicProviderConfig(credential_name="anthropic")
-
-    class FakeCredentials:
-        def get(self, name: str) -> str | None:
-            return "stored-anthropic-key" if name == "anthropic" else None
-
-    config = anthropic_config_from_provider(provider, credential_reader=FakeCredentials())
-
-    assert config.api_key == "stored-anthropic-key"
-    assert config.base_url == "https://api.anthropic.com/v1"
-
-
-def test_anthropic_config_from_provider_sets_thinking_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    provider = AnthropicProviderConfig(
-        thinking_levels=("off", "low", "high"),
-        thinking_default="low",
-        thinking_parameter="anthropic.thinking",
-    )
-
-    off_config = anthropic_config_from_provider(provider, thinking_level="off")
-    high_config = anthropic_config_from_provider(provider, thinking_level="high")
-
-    assert off_config.thinking_budget_tokens is None
-    assert high_config.thinking_budget_tokens == 8192
-
-
-def test_anthropic_config_from_provider_maps_opus_5_adaptive_thinking(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    provider = ProviderSettings().get_provider("anthropic")
-    assert isinstance(provider, AnthropicProviderConfig)
-
-    off_config = anthropic_config_from_provider(
-        provider, model="claude-opus-5", thinking_level="off"
-    )
-    medium_config = anthropic_config_from_provider(
-        provider, model="claude-opus-5", thinking_level="medium"
-    )
-    xhigh_config = anthropic_config_from_provider(
-        provider, model="claude-opus-5", thinking_level="xhigh"
-    )
-
-    assert off_config.thinking_mode == "disabled"
-    assert off_config.thinking_effort is None
-    assert medium_config.thinking_mode == "adaptive"
-    assert medium_config.thinking_effort == "medium"
-    assert xhigh_config.thinking_mode == "adaptive"
-    assert xhigh_config.thinking_effort == "max"
 
 
 @pytest.mark.parametrize(
@@ -1283,83 +1081,41 @@ def test_provider_settings_from_json_loads_openai_codex_provider() -> None:
     assert provider.headers == {"X-Test": "enabled"}
 
 
-def test_provider_settings_from_json_loads_anthropic_thinking_provider() -> None:
-    settings = provider_settings_from_json(
-        {
-            "default_provider": "anthropic",
-            "providers": [
-                {
-                    "type": "anthropic",
-                    "name": "anthropic",
-                    "base_url": "https://api.anthropic.com/v1",
-                    "api_key_env": "ANTHROPIC_API_KEY",
-                    "models": ["claude-sonnet-4-6"],
-                    "default_model": "claude-sonnet-4-6",
-                    "thinking_levels": ["off", "low", "high"],
-                    "thinking_models": ["claude-sonnet-4-6"],
-                    "thinking_parameter": "anthropic.thinking",
-                }
-            ],
-        }
-    )
-
-    provider = settings.get_provider("anthropic")
-
-    assert isinstance(provider, AnthropicProviderConfig)
-    assert provider_thinking_levels(provider, model="claude-sonnet-4-6") == (
-        "off",
-        "low",
-        "high",
-    )
-    assert provider.thinking_parameter == "anthropic.thinking"
-
-
 def test_load_provider_settings_does_not_restore_stale_codex_builtin_models(
     tmp_path: Path,
 ) -> None:
     tau_home = tmp_path / ".tau"
     tau_home.mkdir()
     (tau_home / "providers.json").write_text(
-        """
-{
-  "default_provider": "openai-codex",
-  "providers": [
-    {
-      "type": "openai-codex",
-      "name": "openai-codex",
-      "base_url": "https://chatgpt.com/backend-api",
-      "api_key_env": "OPENAI_CODEX_ACCESS_TOKEN",
-      "credential_name": "openai-codex",
-      "models": ["gpt-5", "gpt-5.5"],
-      "default_model": "gpt-5",
-      "thinking_levels": ["off", "minimal", "low", "medium", "high", "xhigh"],
-      "thinking_models": ["gpt-5.5"],
-      "thinking_default": "medium",
-      "thinking_parameter": "reasoning.effort"
-    }
-  ]
-}
-""".strip(),
+        json.dumps(
+            {
+                "default_provider": "openai-codex",
+                "providers": [
+                    {
+                        "type": "openai-codex",
+                        "name": "openai-codex",
+                        "base_url": "https://chatgpt.com/backend-api",
+                        "api_key_env": "OPENAI_CODEX_ACCESS_TOKEN",
+                        "credential_name": "openai-codex",
+                        "models": ["gpt-5", "gpt-5.5"],
+                        "default_model": "gpt-5",
+                        "thinking_levels": ["off", "minimal", "low", "medium", "high", "xhigh"],
+                        "thinking_models": ["gpt-5.5"],
+                        "thinking_default": "medium",
+                        "thinking_parameter": "reasoning.effort",
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
 
     settings = load_provider_settings(TauPaths(home=tau_home))
     provider = settings.get_provider("openai-codex")
 
-    assert provider.models == (
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.3-codex",
-        "gpt-5.3-codex-spark",
-        "gpt-5.2",
-    )
-    assert provider.default_model == "gpt-5.5"
-    assert provider_thinking_levels(provider, model="gpt-5.6-sol") == (
-        "off",
+    assert provider.models == ("gpt-5.6-luna", "gpt-5.6-sol")
+    assert provider.default_model == "gpt-5.6-luna"
+    assert provider_thinking_levels(provider, model="gpt-5.6-luna") == (
         "low",
         "medium",
         "high",
@@ -1376,35 +1132,129 @@ def test_load_provider_settings_merges_builtin_model_catalog(tmp_path: Path) -> 
     tau_home = tmp_path / ".tau"
     tau_home.mkdir()
     (tau_home / "providers.json").write_text(
-        """
-{
-  "default_provider": "huggingface",
-  "providers": [
-    {
-      "type": "openai-compatible",
-      "name": "huggingface",
-      "base_url": "https://router.huggingface.co/v1",
-      "api_key_env": "HF_TOKEN",
-      "credential_name": "huggingface",
-      "models": ["MiniMaxAI/MiniMax-M2.7", "custom/coder"],
-      "default_model": "MiniMaxAI/MiniMax-M2.7",
-      "headers": {"X-HF-Bill-To": "my-org"}
-    }
-  ]
-}
-""".strip(),
+        json.dumps(
+            {
+                "default_provider": "opencode-go",
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "name": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "api_key_env": "OPENCODE_API_KEY",
+                        "credential_name": "opencode",
+                        "models": ["gpt-5.6-luna", "custom/coder"],
+                        "default_model": "gpt-5.6-luna",
+                        "headers": {"X-Test": "my-org"},
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
 
     settings = load_provider_settings(TauPaths(home=tau_home))
 
-    provider = settings.get_provider("huggingface")
-    assert provider.default_model == "MiniMaxAI/MiniMax-M2.7"
-    assert provider.headers == {"X-HF-Bill-To": "my-org"}
-    assert provider.context_windows["MiniMaxAI/MiniMax-M2.7"] == 204_800
-    assert "Qwen/Qwen3-Coder-480B-A35B-Instruct" in provider.models
-    assert "moonshotai/Kimi-K2.6" in provider.models
+    provider = settings.get_provider("opencode-go")
+    assert provider.default_model == "gpt-5.6-luna"
+    assert provider.headers == {"X-Test": "my-org"}
+    assert provider.context_windows["gpt-5.6-luna"] == 1_000_000
+    assert "deepseek-v4-flash" in provider.models
     assert "custom/coder" not in provider.models
+
+
+def test_load_provider_settings_restores_builtin_providers_with_stored_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(provider_config, "environ", {})
+    tau_home = tmp_path / ".tau"
+    tau_home.mkdir()
+    (tau_home / "providers.json").write_text(
+        json.dumps(
+            {
+                "default_provider": "local",
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "name": "local",
+                        "base_url": "http://localhost:11434/v1",
+                        "api_key_env": "LOCAL_API_KEY",
+                        "credential_name": None,
+                        "models": ["qwen"],
+                        "default_model": "qwen",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = FileCredentialStore(tau_home / "credentials.json")
+    store.set("opencode", "stored-opencode-key")
+    store.set_oauth(
+        "openai-codex",
+        OAuthCredential(
+            access="access-token",
+            refresh="refresh-token",
+            expires=123456,
+            account_id="account-1",
+        ),
+    )
+
+    settings = load_provider_settings(TauPaths(home=tau_home))
+
+    assert {provider.name for provider in settings.providers} == {
+        "local",
+        "openai-codex",
+        "opencode-go",
+        "opencode",
+    }
+    assert settings.default_provider == "local"
+    assert settings.get_provider("opencode-go").credential_name == "opencode"
+    assert settings.get_provider("openai-codex").credential_name == "openai-codex"
+
+
+def test_load_provider_settings_restores_builtin_credential_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(provider_config, "environ", {})
+    tau_home = tmp_path / ".tau"
+    tau_home.mkdir()
+    (tau_home / "providers.json").write_text(
+        json.dumps(
+            {
+                "default_provider": "opencode-go",
+                "providers": [
+                    {
+                        "type": "openai-compatible",
+                        "name": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "api_key_env": "OPENCODE_API_KEY",
+                        "credential_name": None,
+                        "models": ["gpt-5.6-luna"],
+                        "default_model": "gpt-5.6-luna",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeCredentials:
+        def get(self, name: str) -> str | None:
+            return "stored-key" if name == "opencode" else None
+
+    settings = load_provider_settings(TauPaths(home=tau_home))
+    provider = settings.get_provider("opencode-go")
+
+    assert isinstance(provider, OpenAICompatibleProviderConfig)
+    assert provider.credential_name == "opencode"
+    assert provider.context_windows["gpt-5.6-luna"] == 1_000_000
+    config = openai_compatible_config_from_provider(
+        provider,
+        credential_reader=FakeCredentials(),
+    )
+    assert config.api_key == "stored-key"
 
 
 def test_load_provider_settings_migrates_custom_provider_to_catalog(
@@ -1480,105 +1330,6 @@ def test_legacy_migration_aborts_before_changes_when_backup_fails(
     assert json.loads(settings_path.read_text()) == original
     assert not (tau_home / "providers.json.bak").exists()
     assert not (tau_home / "catalog.toml").exists()
-
-
-def test_load_provider_settings_restores_builtin_providers_with_stored_credentials(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    # Isolate from the host environment so built-in provider discovery depends
-    # only on the credential store, not on stray env vars (e.g. GEMINI_API_KEY).
-    monkeypatch.setattr(provider_config, "environ", {})
-    tau_home = tmp_path / ".tau"
-    tau_home.mkdir()
-    (tau_home / "providers.json").write_text(
-        """
-{
-  "default_provider": "local",
-  "providers": [
-    {
-      "type": "openai-compatible",
-      "name": "local",
-      "base_url": "http://localhost:11434/v1",
-      "api_key_env": "LOCAL_API_KEY",
-      "credential_name": null,
-      "models": ["qwen"],
-      "default_model": "qwen"
-    }
-  ]
-}
-""".strip(),
-        encoding="utf-8",
-    )
-    store = FileCredentialStore(tau_home / "credentials.json")
-    store.set("openrouter", "stored-openrouter-key")
-    store.set_oauth(
-        "openai-codex",
-        OAuthCredential(
-            access="access-token",
-            refresh="refresh-token",
-            expires=123456,
-            account_id="account-1",
-        ),
-    )
-
-    settings = load_provider_settings(TauPaths(home=tau_home))
-
-    # Provider order is an implementation detail of BUILTIN_PROVIDER_CATALOG and
-    # shifts when built-ins are added; use set equality (not position) so the
-    # test still verifies that only credentialed built-ins are restored.
-    assert {provider.name for provider in settings.providers} == {
-        "local",
-        "openai-codex",
-        "openrouter",
-    }
-    assert settings.default_provider == "local"
-    assert settings.get_provider("openrouter").credential_name == "openrouter"
-    assert settings.get_provider("openai-codex").credential_name == "openai-codex"
-
-
-def test_load_provider_settings_restores_builtin_credential_name(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "env-key")
-    tau_home = tmp_path / ".tau"
-    tau_home.mkdir()
-    (tau_home / "providers.json").write_text(
-        """
-{
-  "default_provider": "openrouter",
-  "providers": [
-    {
-      "type": "openai-compatible",
-      "name": "openrouter",
-      "base_url": "https://openrouter.ai/api/v1",
-      "api_key_env": "OPENROUTER_API_KEY",
-      "credential_name": null,
-      "models": ["openai/gpt-5.5"],
-      "default_model": "openai/gpt-5.5"
-    }
-  ]
-}
-""".strip(),
-        encoding="utf-8",
-    )
-
-    class FakeCredentials:
-        def get(self, name: str) -> str | None:
-            return "stored-key" if name == "openrouter" else None
-
-    settings = load_provider_settings(TauPaths(home=tau_home))
-    provider = settings.get_provider("openrouter")
-
-    assert isinstance(provider, OpenAICompatibleProviderConfig)
-    assert provider.credential_name == "openrouter"
-    assert provider.context_windows["openai/gpt-5.5"] == 1_050_000
-    config = openai_compatible_config_from_provider(
-        provider,
-        credential_reader=FakeCredentials(),
-    )
-    assert config.api_key == "stored-key"
 
 
 def test_provider_settings_from_json_rejects_unknown_schema_version() -> None:

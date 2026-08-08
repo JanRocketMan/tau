@@ -57,18 +57,19 @@ def test_builtin_catalog_matches_expected_providers() -> None:
         "opencode",
     ]
 
- def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
-     codex = builtin_provider_entry("openai-codex")
-     copilot = builtin_provider_entry("github-copilot")
-     opencode_go = builtin_provider_entry("opencode-go")
-     opencode = builtin_provider_entry("opencode")
 
-     assert codex is not None and codex.auth_methods == ("oauth",)
-     assert copilot is not None and copilot.auth_methods == ("oauth",)
-     assert opencode_go is not None and opencode_go.auth_methods == ("api_key",)
-     assert opencode is not None and opencode.auth_methods == ("api_key",)
-     assert opencode_go.api_key_env == "OPENCODE_API_KEY"
-     assert opencode.api_key_env == "OPENCODE_API_KEY"
+def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
+    codex = builtin_provider_entry("openai-codex")
+    copilot = builtin_provider_entry("github-copilot")
+    opencode_go = builtin_provider_entry("opencode-go")
+    opencode = builtin_provider_entry("opencode")
+
+    assert codex is not None and codex.auth_methods == ("oauth",)
+    assert copilot is not None and copilot.auth_methods == ("oauth",)
+    assert opencode_go is not None and opencode_go.auth_methods == ("api_key",)
+    assert opencode is not None and opencode.auth_methods == ("api_key",)
+    assert opencode_go.api_key_env == "OPENCODE_API_KEY"
+    assert opencode.api_key_env == "OPENCODE_API_KEY"
 
 
 @pytest.mark.parametrize(
@@ -102,11 +103,11 @@ def test_sparse_provider_catalogs_declare_model_input_modalities(
 ) -> None:
     provider = builtin_provider_entry(provider_name)
 
-     assert provider is not None
-     assert set(provider.model_metadata) == set(provider.models)
-     assert {
-         model for model, metadata in provider.model_metadata.items() if "image" in metadata.input
-     } == vision_models
+    assert provider is not None
+    assert set(provider.model_metadata) == set(provider.models)
+    assert {
+        model for model, metadata in provider.model_metadata.items() if "image" in metadata.input
+    } == vision_models
 
 
 def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> None:

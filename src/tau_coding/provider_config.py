@@ -249,9 +249,7 @@ class OpenAICodexProviderConfig:
         }
 
 
-type ProviderConfig = (
-    OpenAICompatibleProviderConfig | OpenAICodexProviderConfig
-)
+type ProviderConfig = OpenAICompatibleProviderConfig | OpenAICodexProviderConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -1588,7 +1586,6 @@ def _reasoning_effort_from_provider(
     return reasoning_effort_for_level(normalized)
 
 
-
 def _metadata_thinking_value(
     provider: ProviderConfig,
     model: str,
@@ -1633,7 +1630,6 @@ def _include_reasoning_effort_none(
     if normalized != "off":
         return False
     return _metadata_thinking_value(provider, model, "off") == "none"
-
 
 
 def _provider_from_json(data: object) -> ProviderConfig:

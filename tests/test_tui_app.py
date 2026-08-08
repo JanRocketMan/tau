@@ -175,12 +175,12 @@ class FakeSession:
         self.model = "fake-model"
         self.available_models = ("fake-model", "other-model")
         self.available_model_choices = (
-            ModelChoice(provider_name="openai", model="fake-model"),
-            ModelChoice(provider_name="openai", model="other-model"),
+            ModelChoice(provider_name="opencode", model="fake-model"),
+            ModelChoice(provider_name="opencode", model="other-model"),
             ModelChoice(provider_name="local", model="local-model"),
         )
         self.scoped_model_choices: tuple[ModelChoice, ...] = ()
-        self.available_providers = ("openai",)
+        self.available_providers = ("opencode",)
         self.tools = tuple(create_coding_tools(cwd=self.cwd))
         self.extension_tool_sources: dict[str, str] = {}
         self.skills = (Skill(name="review", path=self.cwd / "review.md", content="Review code"),)
@@ -283,13 +283,13 @@ class FakeSession:
             return CommandResult(handled=True, login_picker_requested=True)
         if text in {"/login custom", "/login new", "/login add"}:
             return CommandResult(handled=True, custom_provider_login_requested=True)
-        if text == "/login anthropic-api":
+        if text == "/login openai-codex":
             return CommandResult(
                 handled=True,
                 login_provider="anthropic",
                 login_method="api-key",
             )
-        if text == "/login anthropic-subscription":
+        if text == "/login openai-codex":
             return CommandResult(
                 handled=True,
                 login_provider="anthropic",
@@ -6134,7 +6134,7 @@ async def test_tui_login_saves_provider_key(
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt")
-        prompt.value = "/login openai"
+        prompt.value = "/login opencode"
         await pilot.press("enter")
         await pilot.pause()
 
@@ -6147,7 +6147,7 @@ async def test_tui_login_saves_provider_key(
 
     assert session.reload_count == 0
     assert session.provider_reload_count == 1
-    assert session.provider_name == "openai"
+    assert session.provider_name == "opencode"
     assert session.prompt_texts == []
     assert all(item.text != "stored-openai-key" for item in app.state.items)
     assert (tmp_path / ".tau" / "credentials.json").read_text(encoding="utf-8")
@@ -6171,7 +6171,7 @@ async def test_tui_anthropic_subscription_alias_opens_oauth(
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt")
-        prompt.value = "/login anthropic-subscription"
+        prompt.value = "/login openai-codex"
         await pilot.press("enter")
         await pilot.pause()
 
@@ -6186,7 +6186,7 @@ async def test_tui_anthropic_api_alias_opens_api_key_login() -> None:
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt")
-        prompt.value = "/login anthropic-api"
+        prompt.value = "/login opencode"
         await pilot.press("enter")
         await pilot.pause()
 
@@ -6392,14 +6392,14 @@ async def test_tui_logout_removes_stored_api_key(
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt")
-        prompt.value = "/logout openai"
+        prompt.value = "/logout opencode"
         await pilot.press("enter")
         await pilot.pause()
 
     assert FileCredentialStore(credential_path).get("openai") is None
     assert session.provider_reload_count == 1
     assert notifications == [
-        "Removed stored API key for OpenAI. "
+        "Removed stored API key for OpenCode Zen. "
         "Environment variables and providers.json config are unchanged."
     ]
 
@@ -6516,7 +6516,7 @@ async def test_tui_login_method_picker_supports_arrow_keys() -> None:
         assert isinstance(app.screen, LoginProviderPickerScreen)
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels[0] == "OpenAI — openai"
+        assert labels[0] == "OpenCode Zen — opencode"
 
 
 @pytest.mark.anyio
@@ -6674,7 +6674,7 @@ async def test_tui_login_api_key_opens_api_provider_picker() -> None:
         assert isinstance(app.screen, LoginProviderPickerScreen)
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels[0] == "OpenAI — openai"
+        assert labels[0] == "OpenCode Zen — opencode"
         assert "OpenAI Codex subscription — openai-codex" not in labels
 
         await pilot.press("down")
@@ -6757,9 +6757,9 @@ async def test_tui_scoped_models_picker_toggles_scoped_models_without_switching_
         await pilot.pause()
 
         assert session.scoped_model_choices == (
-            ModelChoice(provider_name="openai", model="fake-model"),
+            ModelChoice(provider_name="opencode", model="fake-model"),
         )
-        assert session.provider_name == "openai"
+        assert session.provider_name == "opencode"
         assert session.model == "fake-model"
         model_list = app.screen.query_one("#model-picker-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in model_list.children]
@@ -6769,7 +6769,7 @@ async def test_tui_scoped_models_picker_toggles_scoped_models_without_switching_
         await pilot.pause()
 
         assert session.scoped_model_choices == ()
-        assert session.provider_name == "openai"
+        assert session.provider_name == "opencode"
         assert session.model == "fake-model"
 
 
@@ -7511,8 +7511,8 @@ async def test_tui_app_cycles_thinking_from_keybinding_while_running() -> None:
 async def test_tui_app_cycles_scoped_model_from_keybinding() -> None:
     session = FakeSession()
     session.scoped_model_choices = (
-        ModelChoice(provider_name="openai", model="fake-model"),
-        ModelChoice(provider_name="openai", model="other-model"),
+        ModelChoice(provider_name="opencode", model="fake-model"),
+        ModelChoice(provider_name="opencode", model="other-model"),
     )
     app = TauTuiApp(session)
     notifications: list[str] = []
@@ -7527,7 +7527,7 @@ async def test_tui_app_cycles_scoped_model_from_keybinding() -> None:
         await pilot.press("ctrl+p")
         await pilot.pause()
 
-    assert session.provider_name == "openai"
+    assert session.provider_name == "opencode"
     assert session.model == "other-model"
     assert notifications == []
 
@@ -7538,8 +7538,8 @@ async def test_tui_app_cycles_scoped_model_without_redrawing_transcript() -> Non
         messages=[UserMessage(content=f"Earlier prompt {index}") for index in range(120)]
     )
     session.scoped_model_choices = (
-        ModelChoice(provider_name="openai", model="fake-model"),
-        ModelChoice(provider_name="openai", model="other-model"),
+        ModelChoice(provider_name="opencode", model="fake-model"),
+        ModelChoice(provider_name="opencode", model="other-model"),
     )
     app = TauTuiApp(session)
     transcript_refreshes = 0
@@ -7556,7 +7556,7 @@ async def test_tui_app_cycles_scoped_model_without_redrawing_transcript() -> Non
         await pilot.press("ctrl+p")
         await pilot.pause()
 
-    assert session.provider_name == "openai"
+    assert session.provider_name == "opencode"
     assert session.model == "other-model"
     assert transcript_refreshes == 0
 
@@ -8614,7 +8614,7 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
             assert "Missing provider API key." in notices[0]
             assert "Tau 0.2.0 is available" in notices
             assert "Login required. Run /login" in message
-            assert "/login openai" in message
+            assert "/login openai-codex" in message
             assert "OPENAI_API_KEY" not in message
             assert "environment variable" not in message
 

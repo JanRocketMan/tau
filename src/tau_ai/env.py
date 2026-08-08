@@ -60,4 +60,3 @@ class OpenAICompatibleConfig:
     omit_authorization_header: bool = False
     credential_resolver: RuntimeProviderAuthResolver | None = None
     response_headers_observer: RuntimeResponseHeadersObserver | None = None
-
