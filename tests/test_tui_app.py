@@ -108,6 +108,7 @@ from tau_coding.tui.app import (
 )
 from tau_coding.tui.autocomplete import CompletionItem, CompletionState
 from tau_coding.tui.config import (
+    CODEYELLOW_THEME,
     HIGH_CONTRAST_THEME,
     TAU_DARK_THEME,
     TAU_LIGHT_THEME,
@@ -284,17 +285,7 @@ class FakeSession:
         if text in {"/login custom", "/login new", "/login add"}:
             return CommandResult(handled=True, custom_provider_login_requested=True)
         if text == "/login openai-codex":
-            return CommandResult(
-                handled=True,
-                login_provider="anthropic",
-                login_method="api-key",
-            )
-        if text == "/login openai-codex":
-            return CommandResult(
-                handled=True,
-                login_provider="anthropic",
-                login_method="subscription",
-            )
+            return CommandResult(handled=True, login_provider="openai-codex")
         if text.startswith("/login "):
             return CommandResult(handled=True, login_provider=text.removeprefix("/login "))
         if text == "/logout":
@@ -1377,7 +1368,7 @@ async def test_textual_markdown_widget_uses_theme_link_style() -> None:
         for span in block.content.spans
         if isinstance(span.style, TextualStyle) and "@click" in span.style.meta
     ]
-    assert markdown.tau_link_style == TAU_DARK_THEME.markdown_link
+    assert markdown.tau_link_style == CODEYELLOW_THEME.markdown_link
     assert not block.styles.link_style
     assert block.styles.link_style_hover.underline is True
     assert [(span.start, span.end) for span in link_spans] == [(5, 9)]
@@ -2652,7 +2643,7 @@ async def test_tui_sidebar_is_visible_on_medium_windows() -> None:
         assert sidebar.styles.border_top[0] == ""
         assert sidebar.styles.border_bottom[0] == ""
         assert sidebar_brand.region.bottom == sidebar.content_region.bottom
-        assert sidebar.styles.background == Color.parse(TAU_DARK_THEME.prompt_background)
+        assert sidebar.styles.background == Color.parse(CODEYELLOW_THEME.prompt_background)
         assert compact_info.display is True
         assert not app.has_class("-hide-sidebar")
 
@@ -2942,7 +2933,7 @@ async def test_tui_app_removes_source_project_themes_after_resume(
             await app._resume_session("destination-session")
             await pilot.pause()
 
-            assert app.theme == "tau-dark"
+            assert app.theme == "codeyellow"
             assert "project-theme" not in app.available_themes
             assert "project-theme" not in available_tui_theme_names()
             assert app.tui_settings.theme == "project-theme"
@@ -2950,14 +2941,14 @@ async def test_tui_app_removes_source_project_themes_after_resume(
         set_custom_tui_themes({})
 
 
-def test_tui_app_falls_back_to_tau_dark_when_theme_is_missing(
+def test_tui_app_falls_back_to_codeyellow_when_theme_is_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
 
     app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(theme="missing-theme"))
 
-    assert app.theme == "tau-dark"
+    assert app.theme == "codeyellow"
     assert any("missing-theme" in item.text for item in app.state.items if item.role == "status")
     # The fallback must not be persisted over the user's configured theme:
     # if the theme file reappears, their choice should be honored again.
@@ -2997,7 +2988,7 @@ def test_textual_theme_mapping_uses_tau_theme_values() -> None:
 
 
 def test_tau_dark_theme_uses_aqua_as_its_shared_accent() -> None:
-    theme = TuiSettings().resolved_theme
+    theme = TuiSettings(theme="tau-dark").resolved_theme
 
     assert theme.accent == "#a7f3f0"
     assert theme.highlight_background == theme.accent
@@ -3094,7 +3085,7 @@ async def test_tui_app_shows_activity_indicator_while_running() -> None:
 
         assert not app.query("#status")
         assert not app.query("#activity-status")
-        assert prompt.styles.border_left[1].hex.lower() == "#2d3748"
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
         assert prompt.styles.border_top[0] == ""
         assert prompt.styles.border_right[0] == ""
         assert prompt.styles.border_bottom[0] == ""
@@ -3105,19 +3096,19 @@ async def test_tui_app_shows_activity_indicator_while_running() -> None:
 
         assert pytest.approx(tui_app.ACTIVITY_TICK_SECONDS) == 0.15
         assert tui_app.ACTIVITY_COLOR_FADE_STEPS == 24
-        assert prompt.styles.border_left[1].hex.lower() == "#2d3748"
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
         assert indicator.render().plain.startswith("■")
 
         app._tick_activity()
 
-        assert prompt.styles.border_left[1].hex.lower() == "#2d3748"
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
         assert indicator.render().plain.splitlines()[1] == "■"
 
         app.adapter.apply(AgentEndEvent())
         app._refresh()
 
         assert not app.query("#status")
-        assert prompt.styles.border_left[1].hex.lower() == "#2d3748"
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
         assert indicator.render().plain == "τ"
 
 
@@ -3244,7 +3235,7 @@ async def test_tui_app_clears_activity_status_on_error() -> None:
 
         assert not app.query("#status")
         assert not app.query("#activity-status")
-        assert prompt.styles.border_left[1].hex.lower() == "#2d3748"
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
         assert prompt.styles.border_top[0] == ""
         assert prompt.styles.border_right[0] == ""
         assert prompt.styles.border_bottom[0] == ""
@@ -3416,21 +3407,21 @@ async def test_tui_app_theme_command_opens_picker_and_persists_selection(
         picker = app.screen
         assert isinstance(picker, ThemePickerScreen)
         assert [str(item.query_one(Label).render()) for item in picker.query(ListItem)] == [
-            "✓ tau-dark",
+            "  tau-dark",
             "  tau-light",
             "  high-contrast",
-            "  codeyellow",
+            "✓ codeyellow",
         ]
 
         theme_list = picker.query_one("#theme-picker-list", ListView)
-        assert theme_list.index == 0
-        await pilot.press("down")
-        await pilot.pause()
-        assert theme_list.index == 1
+        assert theme_list.index == 3
         await pilot.press("up")
         await pilot.pause()
-        assert theme_list.index == 0
-        await pilot.press("down", "enter")
+        assert theme_list.index == 2
+        await pilot.press("up")
+        await pilot.pause()
+        assert theme_list.index == 1
+        await pilot.press("enter")
         await pilot.pause()
 
         assert app.tui_settings.theme == "tau-light"
@@ -5228,16 +5219,16 @@ async def test_tui_app_tree_picker_branches_with_summary() -> None:
             "  assistant: Left",
             "* assistant: Right",
         ]
-        assert str(rendered_labels[0].spans[0].style) == _style_rgb(TAU_DARK_THEME.accent)
-        assert str(rendered_labels[3].spans[0].style) == _style_rgb(TAU_DARK_THEME.highlight_text)
+        assert str(rendered_labels[0].spans[0].style) == _style_rgb(CODEYELLOW_THEME.accent)
+        assert str(rendered_labels[3].spans[0].style) == _style_rgb(CODEYELLOW_THEME.highlight_text)
 
         await pilot.press("up")
         await pilot.pause()
         assert tree_list.index == 2
         left_label = tree_list.children[2].query_one(Label).render()
         right_label = tree_list.children[3].query_one(Label).render()
-        assert str(left_label.spans[0].style) == _style_rgb(TAU_DARK_THEME.highlight_text)
-        assert str(right_label.spans[0].style) == _style_rgb(TAU_DARK_THEME.accent)
+        assert str(left_label.spans[0].style) == _style_rgb(CODEYELLOW_THEME.highlight_text)
+        assert str(right_label.spans[0].style) == _style_rgb(CODEYELLOW_THEME.accent)
         await pilot.press("s")
         await pilot.pause()
 
@@ -6154,19 +6145,17 @@ async def test_tui_login_saves_provider_key(
 
 
 @pytest.mark.anyio
-async def test_tui_anthropic_subscription_alias_opens_oauth(
+async def test_tui_openai_codex_alias_opens_oauth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     login_started = asyncio.Event()
 
-    class FakeOAuthProvider:
-        async def login(self, _callbacks: object) -> OAuthCredential:
-            login_started.set()
-            await asyncio.Event().wait()
-            raise AssertionError("unreachable")
+    async def fake_login_openai_codex(**_kwargs: object) -> OAuthCredential:
+        login_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
 
-    fake_provider = FakeOAuthProvider()
-    monkeypatch.setattr(tui_app, "get_oauth_provider", lambda _name: fake_provider)
+    monkeypatch.setattr(tui_app, "login_openai_codex", fake_login_openai_codex)
     app = TauTuiApp(FakeSession())
 
     async with app.run_test() as pilot:
@@ -6176,12 +6165,13 @@ async def test_tui_anthropic_subscription_alias_opens_oauth(
         await pilot.pause()
 
         assert isinstance(app.screen, OAuthLoginScreen)
-        assert app.screen.provider.name == "anthropic"
+        assert app.screen.provider.name == "openai-codex"
+        await pilot.pause()
         assert login_started.is_set()
 
 
 @pytest.mark.anyio
-async def test_tui_anthropic_api_alias_opens_api_key_login() -> None:
+async def test_tui_opencode_alias_opens_api_key_login() -> None:
     app = TauTuiApp(FakeSession())
 
     async with app.run_test() as pilot:
@@ -6191,7 +6181,7 @@ async def test_tui_anthropic_api_alias_opens_api_key_login() -> None:
         await pilot.pause()
 
         assert isinstance(app.screen, LoginScreen)
-        assert app.screen.provider.name == "anthropic"
+        assert app.screen.provider.name == "opencode"
 
 
 @pytest.mark.anyio
@@ -6229,7 +6219,7 @@ async def test_tui_login_openai_codex_saves_oauth_credentials(
     assert session.reload_count == 0
     assert session.provider_reload_count == 1
     assert session.provider_name == "openai-codex"
-    assert tui_app.load_provider_settings().default_provider == "openai"
+    assert tui_app.load_provider_settings().default_provider == "openai-codex"
     assert all("access-token" not in item.text for item in app.state.items)
     credentials = (tmp_path / ".tau" / "credentials.json").read_text(encoding="utf-8")
     assert '"type": "oauth"' in credentials
@@ -6311,19 +6301,19 @@ async def test_tui_login_preserves_existing_scoped_models_and_providers(
     save_provider_settings(settings)
     session = FakeSession()
     app = TauTuiApp(session)
-    entry = tui_app.builtin_provider_entry("openrouter")
+    entry = tui_app.builtin_provider_entry("opencode-go")
     assert entry is not None
 
     async with app.run_test():
-        app._handle_login_result(entry, "stored-openrouter-key")
+        app._handle_login_result(entry, "stored-opencode-key")
 
     saved = tui_app.load_provider_settings()
     assert saved.default_provider == "local"
     assert saved.get_provider("local").default_model == "qwen"
-    assert saved.get_provider("openrouter").credential_name == "openrouter"
+    assert saved.get_provider("opencode-go").credential_name == "opencode"
     assert saved.scoped_models == (ScopedModelConfig(provider="local", model="qwen"),)
-    assert FileCredentialStore(tau_home / "credentials.json").get("openrouter") == (
-        "stored-openrouter-key"
+    assert FileCredentialStore(tau_home / "credentials.json").get("opencode") == (
+        "stored-opencode-key"
     )
 
 
@@ -6335,15 +6325,15 @@ async def test_tui_login_provider_does_not_change_default_startup_provider(
     isolate_home(monkeypatch, tmp_path)
     session = FakeSession()
     app = TauTuiApp(session)
-    entry = tui_app.builtin_provider_entry("openrouter")
+    entry = tui_app.builtin_provider_entry("opencode-go")
     assert entry is not None
 
     async with app.run_test():
-        app._handle_login_result(entry, "stored-openrouter-key")
+        app._handle_login_result(entry, "stored-opencode-key")
 
     assert session.provider_reload_count == 1
-    assert session.provider_name == "openrouter"
-    assert tui_app.load_provider_settings().default_provider == "openai"
+    assert session.provider_name == "opencode-go"
+    assert tui_app.load_provider_settings().default_provider == "openai-codex"
 
 
 @pytest.mark.anyio
@@ -6379,7 +6369,7 @@ async def test_tui_logout_removes_stored_api_key(
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
     credential_path = tmp_path / ".tau" / "credentials.json"
-    FileCredentialStore(credential_path).set("openai", "stored-openai-key")
+    FileCredentialStore(credential_path).set("opencode", "stored-opencode-key")
     session = FakeSession()
     app = TauTuiApp(session)
     notifications: list[str] = []
@@ -6396,7 +6386,7 @@ async def test_tui_logout_removes_stored_api_key(
         await pilot.press("enter")
         await pilot.pause()
 
-    assert FileCredentialStore(credential_path).get("openai") is None
+    assert FileCredentialStore(credential_path).get("opencode") is None
     assert session.provider_reload_count == 1
     assert notifications == [
         "Removed stored API key for OpenCode Zen. "
@@ -6447,7 +6437,7 @@ async def test_tui_logout_opens_stored_credential_provider_picker(
     tmp_path: Path,
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
-    FileCredentialStore(tmp_path / ".tau" / "credentials.json").set("anthropic", "stored-key")
+    FileCredentialStore(tmp_path / ".tau" / "credentials.json").set("opencode", "stored-key")
     app = TauTuiApp(FakeSession())
 
     async with app.run_test() as pilot:
@@ -6461,7 +6451,7 @@ async def test_tui_logout_opens_stored_credential_provider_picker(
         assert str(title.render()) == "Logout"
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels == ["Anthropic — anthropic"]
+        assert labels == ["OpenCode Go — opencode-go", "OpenCode Zen — opencode"]
 
 
 @pytest.mark.anyio
@@ -6516,7 +6506,7 @@ async def test_tui_login_method_picker_supports_arrow_keys() -> None:
         assert isinstance(app.screen, LoginProviderPickerScreen)
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels[0] == "OpenCode Zen — opencode"
+        assert labels[0] == "OpenCode Go — opencode-go"
 
 
 @pytest.mark.anyio
@@ -6574,11 +6564,7 @@ async def test_tui_login_subscription_opens_oauth_provider_picker() -> None:
         assert isinstance(app.screen, LoginProviderPickerScreen)
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels == [
-            "OpenAI Codex subscription — openai-codex",
-            "Anthropic — anthropic",
-            "GitHub Copilot — github-copilot",
-        ]
+        assert labels == ["OpenAI Codex subscription — openai-codex"]
         assert "gpt-5.5" not in "\n".join(labels)
 
 
@@ -6599,31 +6585,27 @@ async def test_tui_login_api_provider_picker_filters_by_name_and_display_name() 
 
         assert isinstance(app.screen, LoginProviderPickerScreen)
         search = app.screen.query_one("#login-provider-search", Input)
-        search.value = "kimi"
+        search.value = "go"
 
         # Flush the asynchronous filter events completely
         await pilot.wait_for_scheduled_animations()
 
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert "Moonshot AI (Kimi) — moonshotai" in labels
-        assert "Kimi Code subscription — kimi-code" in labels
+        assert labels == ["OpenCode Go — opencode-go"]
 
-        search.value = "moonshotai"
+        search.value = "zen"
 
         # Flush the second async filter event
         await pilot.wait_for_scheduled_animations()
 
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels == [
-            "Moonshot AI (Kimi) — moonshotai",
-            "Moonshot AI (China) — moonshotai-cn",
-        ]
+        assert labels == ["OpenCode Zen — opencode"]
 
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, LoginScreen)
-        assert app.screen.provider.name == "moonshotai"
+        assert app.screen.provider.name == "opencode"
 
 
 @pytest.mark.anyio
@@ -6674,7 +6656,7 @@ async def test_tui_login_api_key_opens_api_provider_picker() -> None:
         assert isinstance(app.screen, LoginProviderPickerScreen)
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels[0] == "OpenCode Zen — opencode"
+        assert labels[0] == "OpenCode Go — opencode-go"
         assert "OpenAI Codex subscription — openai-codex" not in labels
 
         await pilot.press("down")
@@ -6682,7 +6664,7 @@ async def test_tui_login_api_key_opens_api_provider_picker() -> None:
         await pilot.pause()
 
         assert isinstance(app.screen, LoginScreen)
-        assert app.screen.provider.name == "anthropic"
+        assert app.screen.provider.name == "opencode"
 
 
 @pytest.mark.anyio
@@ -6709,8 +6691,8 @@ async def test_tui_model_opens_interactive_picker() -> None:
         model_list = app.screen.query_one("#model-picker-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in model_list.children]
         assert labels == [
-            "* openai:fake-model",
-            "  openai:other-model",
+            "  opencode:fake-model",
+            "  opencode:other-model",
             "  local:local-model",
         ]
 
@@ -6759,17 +6741,17 @@ async def test_tui_scoped_models_picker_toggles_scoped_models_without_switching_
         assert session.scoped_model_choices == (
             ModelChoice(provider_name="opencode", model="fake-model"),
         )
-        assert session.provider_name == "opencode"
+        assert session.provider_name == "openai"
         assert session.model == "fake-model"
         model_list = app.screen.query_one("#model-picker-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in model_list.children]
-        assert labels[0] == "* openai:fake-model [scoped]"
+        assert labels[0] == "  opencode:fake-model [scoped]"
 
         await pilot.press("enter")
         await pilot.pause()
 
         assert session.scoped_model_choices == ()
-        assert session.provider_name == "opencode"
+        assert session.provider_name == "openai"
         assert session.model == "fake-model"
 
 
@@ -7532,6 +7514,7 @@ async def test_tui_app_cycles_thinking_from_keybinding_while_running() -> None:
 @pytest.mark.anyio
 async def test_tui_app_cycles_scoped_model_from_keybinding() -> None:
     session = FakeSession()
+    session.provider_name = "opencode"
     session.scoped_model_choices = (
         ModelChoice(provider_name="opencode", model="fake-model"),
         ModelChoice(provider_name="opencode", model="other-model"),
@@ -7559,6 +7542,7 @@ async def test_tui_app_cycles_scoped_model_without_redrawing_transcript() -> Non
     session = FakeSession(
         messages=[UserMessage(content=f"Earlier prompt {index}") for index in range(120)]
     )
+    session.provider_name = "opencode"
     session.scoped_model_choices = (
         ModelChoice(provider_name="opencode", model="fake-model"),
         ModelChoice(provider_name="opencode", model="other-model"),
@@ -8661,7 +8645,11 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
         startup_notice="Tau 0.2.0 is available",
     )
 
-    assert calls == [f"prepare:{tmp_path}:gpt-5.4:openai", "load:LoginRequiredProvider", "run"]
+    assert calls == [
+        f"prepare:{tmp_path}:gpt-5.6-luna:openai-codex",
+        "load:LoginRequiredProvider",
+        "run",
+    ]
 
 
 @pytest.mark.anyio

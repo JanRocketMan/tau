@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from tau_coding.resources import TauResourcePaths
-from tau_coding.tui.config import TuiSettings
+from tau_coding.tui.config import CODEYELLOW_THEME, TuiSettings
 from tau_coding.tui.themes import (
     BUILTIN_TUI_THEME_NAMES,
     TAU_DARK_THEME,
@@ -265,10 +265,10 @@ def test_custom_theme_registry_replaces_and_resolves() -> None:
         get_tui_theme("midnight")
 
 
-def test_resolved_theme_falls_back_to_tau_dark_for_unknown_names() -> None:
+def test_resolved_theme_falls_back_to_codeyellow_for_unknown_names() -> None:
     settings = TuiSettings(theme="missing-theme")
 
-    assert settings.resolved_theme == TAU_DARK_THEME
+    assert settings.resolved_theme == CODEYELLOW_THEME
 
 
 def test_resolved_theme_finds_registered_custom_theme() -> None:

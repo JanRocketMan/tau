@@ -4,6 +4,7 @@ import pytest
 
 from tau_coding.paths import TauPaths
 from tau_coding.tui.config import (
+    CODEYELLOW_THEME,
     HIGH_CONTRAST_THEME,
     TuiConfigError,
     TuiKeybindings,
@@ -130,7 +131,7 @@ def test_tui_settings_accept_unknown_theme_and_fall_back_when_resolving() -> Non
     settings = tui_settings_from_json({"theme": "solarized"})
 
     assert settings.theme == "solarized"
-    assert settings.resolved_theme == get_tui_theme("tau-dark")
+    assert settings.resolved_theme == CODEYELLOW_THEME
 
 
 def test_tui_settings_reject_non_string_theme() -> None:

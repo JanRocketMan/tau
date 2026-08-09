@@ -221,8 +221,16 @@ async def test_load_empty_session_defers_transcript_file(tmp_path: Path) -> None
     assert not storage.path.exists()
     assert session.messages == ()
     assert session.state.model == "fake"
-    assert session.thinking_level == "high"
-    assert session.available_thinking_levels == ("off", "minimal", "low", "medium", "high", "xhigh")
+    assert session.thinking_level == "xhigh"
+    assert session.available_thinking_levels == (
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
     assert session.cwd == tmp_path
     assert session.model == "fake"
     assert [tool.name for tool in session.tools] == ["read", "write", "edit", "bash"]
@@ -554,7 +562,7 @@ async def test_prompt_persists_user_assistant_and_leaf_entries(tmp_path: Path) -
     assert entries[2] == ThinkingLevelChangeEntry(
         id=entries[2].id,
         parent_id=entries[1].id,
-        thinking_level="high",
+        thinking_level="xhigh",
         timestamp=entries[2].timestamp,
     )
     message_entries = [entry for entry in entries if entry.type == "message"]
@@ -944,20 +952,20 @@ async def test_session_persists_and_replays_thinking_level_changes(tmp_path: Pat
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
 
-    message = await session.set_thinking_level("xhigh")
+    message = await session.set_thinking_level("high")
     entries = await storage.read_all()
     thinking_entries = [entry for entry in entries if entry.type == "thinking_level_change"]
     leaves = [entry for entry in entries if entry.type == "leaf"]
 
     restored = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
 
-    assert message == "Thinking mode: xhigh"
-    assert session.thinking_level == "xhigh"
+    assert message == "Thinking mode: high"
+    assert session.thinking_level == "high"
     assert len(thinking_entries) == 2
-    assert thinking_entries[-1].thinking_level == "xhigh"
+    assert thinking_entries[-1].thinking_level == "high"
     assert leaves[-1].entry_id == thinking_entries[-1].id
-    assert restored.thinking_level == "xhigh"
-    assert restored.state.thinking_level == "xhigh"
+    assert restored.thinking_level == "high"
+    assert restored.state.thinking_level == "high"
 
 
 @pytest.mark.anyio
@@ -967,8 +975,8 @@ async def test_session_cycles_thinking_level(tmp_path: Path) -> None:
 
     message = await session.cycle_thinking_level()
 
-    assert message == "Thinking mode: xhigh"
-    assert session.thinking_level == "xhigh"
+    assert message == "Thinking mode: max"
+    assert session.thinking_level == "max"
 
 
 @pytest.mark.anyio
@@ -1039,9 +1047,9 @@ async def test_session_uses_active_model_thinking_capabilities(
     )
 
     assert session.available_thinking_levels == ("off", "low", "high")
-    assert session.thinking_level == "high"
+    assert session.thinking_level == "low"
     assert session.thinking_unavailable_reason is None
-    assert await session.set_thinking_level("low") == "Thinking mode: low"
+    assert await session.set_thinking_level("high") == "Thinking mode: high"
 
     with pytest.raises(ValueError, match="not available"):
         await session.set_thinking_level("medium")
@@ -1056,7 +1064,7 @@ async def test_session_uses_active_model_thinking_capabilities(
     session.set_model("reasoner")
 
     assert session.available_thinking_levels == ("off", "low", "high")
-    assert session.thinking_level == "low"
+    assert session.thinking_level == "high"
     assert session.thinking_unavailable_reason is None
 
 
@@ -1087,7 +1095,7 @@ async def test_session_persists_thinking_preference_for_new_sessions(tmp_path: P
         )
     )
 
-    assert session.thinking_level == "high"
+    assert session.thinking_level == "xhigh"
     assert await session.set_thinking_level("low") == "Thinking mode: low"
 
     saved = load_provider_settings(tau_paths)

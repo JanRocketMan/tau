@@ -69,7 +69,12 @@ def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path) -> Non
 def test_huggingface_runtime_pins_backing_provider_with_model_alias(tmp_path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_api_key("huggingface", "hf-test")
-    config = provider_config_from_catalog_entry("huggingface")
+    config = OpenAICompatibleProviderConfig(
+        name="huggingface",
+        credential_name="huggingface",
+        models=("zai-org/GLM-5.2",),
+        default_model="zai-org/GLM-5.2",
+    )
 
     provider = create_model_provider(
         config,
@@ -85,10 +90,16 @@ def test_huggingface_runtime_pins_backing_provider_with_model_alias(tmp_path) ->
 def test_huggingface_runtime_rejects_policy_suffix(tmp_path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_api_key("huggingface", "hf-test")
+    config = OpenAICompatibleProviderConfig(
+        name="huggingface",
+        credential_name="huggingface",
+        models=("zai-org/GLM-5.2",),
+        default_model="zai-org/GLM-5.2",
+    )
 
     with pytest.raises(ProviderConfigError, match="explicit"):
         create_model_provider(
-            provider_config_from_catalog_entry("huggingface"),
+            config,
             credential_store=store,
             model="zai-org/GLM-5.2",
             inference_provider="fastest",

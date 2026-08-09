@@ -6,8 +6,8 @@ from tau_coding.session_usage import collect_session_usage, render_usage_dashboa
 def _assistant(
     entry_id: str,
     *,
-    provider: str = "anthropic",
-    model: str = "claude-sonnet-4-5",
+    provider: str = "opencode",
+    model: str = "gpt-5.6-luna",
     usage: Usage | None = None,
     tools: list[ToolCall] | None = None,
 ) -> MessageEntry:
@@ -90,7 +90,7 @@ def test_render_usage_dashboard_renders_charts_and_table() -> None:
     assert markup.count('class="png-button"') == 3
     assert "Prompt input by request" in markup
     assert "Cache hit rate" in markup
-    assert "claude-sonnet-4-5" in markup
+    assert "gpt-5.6-luna" in markup
 
 
 def test_render_usage_dashboard_without_cache_activity_shows_na() -> None:
