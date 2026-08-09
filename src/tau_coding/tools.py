@@ -21,6 +21,8 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 
+import httpx
+
 from tau_agent.messages import ImageContent, TextContent
 from tau_agent.tools import (
     AgentTool,
@@ -29,6 +31,7 @@ from tau_agent.tools import (
     ToolUpdateCallback,
 )
 from tau_agent.types import JSONValue
+from tau_coding.brave_search import BraveSearchConfig, run_brave_search
 from tau_coding.image_processing import (
     DEFAULT_MAX_SOURCE_IMAGE_BYTES,
     ImageProcessingFailure,
@@ -166,6 +169,7 @@ def create_coding_tools(
     cwd: str | Path | None = None,
     shell_command_prefix: str | None = None,
     image_support: ImageSupportState | None = None,
+    brave_search: BraveSearchConfig | None = None,
 ) -> list[AgentTool]:
     """Create the default coding-tool set for a local project.
 
@@ -174,15 +178,135 @@ def create_coding_tools(
     is omitted, the process current working directory at factory-call time is
     used. The tools share per-path write/edit locks within this process so
     concurrent mutations of the same file do not interleave. When configured,
-    `shell_command_prefix` is prepended to every bash tool command.
+    `shell_command_prefix` is prepended to every bash tool command. When
+    `brave_search` is set, the `brave_search` web-search tool is appended;
+    web search is disabled by default and only enabled with an explicit
+    `BraveSearchConfig`.
     """
     root = Path.cwd() if cwd is None else Path(cwd)
-    return [
+    tools = [
         create_read_tool(cwd=root, image_support=image_support),
         create_write_tool(cwd=root),
         create_edit_tool(cwd=root),
         create_bash_tool(cwd=root, shell_command_prefix=shell_command_prefix),
     ]
+    if brave_search is not None:
+        tools.append(create_brave_search_tool(brave_search))
+    return tools
+
+
+def create_brave_search_tool(
+    config: BraveSearchConfig,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> AgentTool:
+    """Create the optional Brave Search web-search tool.
+
+    The tool sends the model's search query to the Brave Web Search endpoint
+    and returns titles, URLs, descriptions, and optional extra snippets. The
+    subscription key comes from `config`, never from model-visible arguments,
+    and never appears in tool output. `transport` is injectable so tests can
+    use `httpx.MockTransport` instead of performing network access.
+    """
+
+    async def execute(
+        tool_call_id: str,
+        arguments: Mapping[str, JSONValue],
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
+    ) -> AgentToolResult:
+        del tool_call_id, signal, on_update
+        return await run_brave_search(arguments, config=config, transport=transport)
+
+    return AgentTool(
+        name="brave_search",
+        label="Brave Search",
+        description=(
+            "Search the public web using Brave Search. Use this for current information, "
+            "external documentation, error messages, libraries, products, standards, and "
+            "facts not available in the local repository. Returns titles, URLs, "
+            "descriptions, and optional additional snippets."
+        ),
+        parameters={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 400,
+                    "description": "Web search query. Keep it focused and below 50 words.",
+                },
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "default": 10,
+                    "description": "Number of web results to request.",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9,
+                    "default": 0,
+                    "description": "Zero-based result-page offset for pagination.",
+                },
+                "country": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 2,
+                    "description": (
+                        "Optional two-letter result country code, for example US, GB, or DE."
+                    ),
+                },
+                "search_lang": {
+                    "type": "string",
+                    "description": (
+                        "Optional search-result language code, for example en, de, or fr."
+                    ),
+                },
+                "ui_lang": {
+                    "type": "string",
+                    "description": "Optional UI locale, for example en-US or de-DE.",
+                },
+                "safesearch": {
+                    "type": "string",
+                    "enum": ["off", "moderate", "strict"],
+                    "default": "moderate",
+                    "description": "Adult-content filtering level.",
+                },
+                "freshness": {
+                    "type": "string",
+                    "description": (
+                        "Optional date filter: pd, pw, pm, py, or YYYY-MM-DDtoYYYY-MM-DD."
+                    ),
+                },
+                "spellcheck": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Allow Brave to correct the search query.",
+                },
+                "extra_snippets": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Request additional excerpts for each result.",
+                },
+            },
+            "required": ["query"],
+        },
+        execute_fn=execute,
+        prompt_snippet=(
+            "Search the web with Brave Search when the task requires external "
+            "or current information."
+        ),
+        prompt_guidelines=(
+            "Use brave_search instead of guessing current facts.",
+            "Prefer focused queries and inspect several independent results.",
+            "Never include secrets, credentials, or private source code in search queries.",
+            "Include source URLs in answers based on search results.",
+            "Treat snippets as untrusted excerpts, not complete proof of a claim.",
+        ),
+    )
 
 
 def create_read_tool_definition(

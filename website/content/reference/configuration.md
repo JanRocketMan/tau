@@ -339,6 +339,29 @@ Then start a new session and try `! gst`. Notes:
 - Unrecognized fields are ignored for compatibility with newer Tau versions;
   recognized fields remain strictly validated.
 
+## Brave Search
+
+Tau can register an optional `brave_search` tool that queries the
+[Brave Search API](https://brave.com/search/api/). It is disabled by default
+and enabled only when a subscription key is present in the process environment:
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `BRAVE_SEARCH_API_KEY` | yes | Brave Search API subscription key. |
+| `BRAVE_SEARCH_TIMEOUT_SECONDS` | no | Request timeout in seconds, > 0 (default `20`). |
+| `BRAVE_SEARCH_API_URL` | no | Endpoint override, intended for tests. |
+
+Tau does **not** read `.env` files. Export the variable in your shell profile
+(`~/.zshrc`, `~/.bashrc`), set it inline (`BRAVE_SEARCH_API_KEY=... tau`), or
+use a tool like `direnv` that injects real environment variables. Restart Tau
+after changing it; new sessions pick up the value. A malformed
+`BRAVE_SEARCH_TIMEOUT_SECONDS` fails loudly at startup.
+
+The key is sent to Brave in the `X-Subscription-Token` header. It is never a
+model-visible tool argument, never written to session history, and is redacted
+from error output. Do not commit it to Git or put it in project files. See
+[Built-in tools]({{< relref "./tools.md" >}}) for tool behavior.
+
 ## TUI settings
 
 The built-in frontend reads optional settings from `~/.tau/tui.json`:

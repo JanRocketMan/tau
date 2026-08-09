@@ -5,7 +5,9 @@ description: The read, write, edit, and bash tools the agent uses to work in you
 
 Tools are the actions the agent can take in your working directory. The model
 decides when to call them; Tau executes them and streams the results back. Tau
-ships four built-in coding tools: `read`, `write`, `edit`, and `bash`.
+ships four built-in coding tools: `read`, `write`, `edit`, and `bash`, plus an
+optional `brave_search` tool that is enabled when you configure a Brave Search
+API key.
 
 All paths are resolved against the session's working directory (`--cwd`, or the
 directory you launched Tau from).
@@ -116,9 +118,45 @@ of large output (truncated to 2,000 lines / 50 KB; the full output is written to
 a temp `.log` file whose path is included in the result). On POSIX, a timeout
 kills the whole process group.
 
+## `brave_search` (optional)
+
+Searches the public web with the [Brave Search API](https://brave.com/search/api/).
+This tool is **disabled by default**; Tau registers it only when
+`BRAVE_SEARCH_API_KEY` is set in the environment at startup. See
+[Configuration & files]({{< relref "./configuration.md" >}}) for the
+environment variables.
+
+```json
+{ "query": "python asyncio TaskGroup documentation", "count": 5 }
+```
+
+| Argument | Required | Type | Description |
+| --- | --- | --- | --- |
+| `query` | yes | string | Search query (max 400 characters / 50 words). |
+| `count` | no | integer | Number of results, 1-20 (default 10). |
+| `offset` | no | integer | Result-page offset, 0-9 (default 0). |
+| `country` | no | string | Two-letter result country code, e.g. `US`, `DE`. |
+| `search_lang` | no | string | Result language code, e.g. `en`, `de`. |
+| `ui_lang` | no | string | UI locale, e.g. `en-US`. |
+| `safesearch` | no | string | `off`, `moderate` (default), or `strict`. |
+| `freshness` | no | string | `pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`. |
+| `spellcheck` | no | boolean | Let Brave correct the query (default `true`). |
+| `extra_snippets` | no | boolean | Request extra excerpts per result (default `true`). |
+
+Returns a numbered list of titles, URLs, snippets, and optional extra snippets,
+along with structured `details` for renderers. Invalid arguments fail before
+any network request; timeouts, HTTP errors (401/403/422/429/...), and malformed
+responses come back as clear tool error messages so the model can recover.
+
+Privacy: the query text is sent to Brave, and results enter the session as
+untrusted external content. The API key stays in the process environment: it is
+never a tool argument, never written to session history, and is redacted from
+error output.
+
 ## Choosing the right tool
 
 - **`read`** — inspect files (instead of `cat`/`sed`).
 - **`write`** — new files or complete rewrites.
 - **`edit`** — precise changes to an existing file.
 - **`bash`** — tests, linters, searches, project inspection.
+- **`brave_search`** — current facts, external docs, error messages (when configured).

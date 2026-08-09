@@ -170,7 +170,8 @@ no code changes required.
 ## What Tau can do
 
 - Interactive Textual TUI and non-interactive print mode.
-- Built-in coding tools: `read`, `write`, `edit`, and `bash`.
+- Built-in coding tools: `read`, `write`, `edit`, and `bash`, plus optional
+  web search via `brave_search` when `BRAVE_SEARCH_API_KEY` is set.
 - Durable JSONL sessions under `~/.tau/sessions/` with resume and branching.
 - Slash commands for login, model selection, sessions, compaction, export, theme,
   and more.

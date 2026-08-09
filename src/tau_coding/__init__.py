@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tau_coding.brave_search import BraveSearchConfig
 from tau_coding.commands import (
     CommandRegistry,
     CommandResult,
@@ -157,6 +158,7 @@ from tau_coding.tools import (
     ToolDefinition,
     create_bash_tool,
     create_bash_tool_definition,
+    create_brave_search_tool,
     create_coding_tools,
     create_edit_tool,
     create_edit_tool_definition,
@@ -181,6 +183,7 @@ __all__ = [
     "DEFAULT_THINKING_LEVEL",
     "BuildSystemPromptOptions",
     "BUILTIN_PROVIDER_CATALOG",
+    "BraveSearchConfig",
     "EventRenderer",
     "FinalTextRenderer",
     "JsonEventRenderer",
@@ -231,6 +234,7 @@ __all__ = [
     "expand_prompt_template_command",
     "create_bash_tool",
     "create_bash_tool_definition",
+    "create_brave_search_tool",
     "create_coding_tools",
     "create_edit_tool",
     "create_edit_tool_definition",
