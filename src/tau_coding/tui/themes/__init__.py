@@ -376,9 +376,11 @@ def _load_builtin_theme(filename: str) -> TuiTheme:
 TAU_DARK_THEME = _load_builtin_theme("tau-dark.json")
 TAU_LIGHT_THEME = _load_builtin_theme("tau-light.json")
 HIGH_CONTRAST_THEME = _load_builtin_theme("high-contrast.json")
+CODEYELLOW_THEME = _load_builtin_theme("codeyellow.json")
 
 _BUILTIN_THEMES: dict[str, TuiTheme] = {
-    theme.name: theme for theme in (TAU_DARK_THEME, TAU_LIGHT_THEME, HIGH_CONTRAST_THEME)
+    theme.name: theme
+    for theme in (TAU_DARK_THEME, TAU_LIGHT_THEME, HIGH_CONTRAST_THEME, CODEYELLOW_THEME)
 }
 BUILTIN_TUI_THEME_NAMES: tuple[TuiThemeName, ...] = tuple(_BUILTIN_THEMES)
 

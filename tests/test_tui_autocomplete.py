@@ -408,7 +408,7 @@ def test_theme_argument_completion_uses_theme_names() -> None:
         command_registry=create_default_command_registry(),
         skills=(),
         prompt_templates=(),
-        theme_names=("tau-dark", "tau-light", "high-contrast"),
+        theme_names=("tau-dark", "tau-light", "high-contrast", "codeyellow"),
     )
 
     assert [item.display for item in state.items] == ["tau-dark", "tau-light"]

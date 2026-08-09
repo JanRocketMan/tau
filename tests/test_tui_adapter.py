@@ -133,7 +133,7 @@ def test_tui_adapter_groups_nested_thinking_deltas() -> None:
     adapter.apply(_update(ThinkingDeltaEvent(content_index=0, delta="reasoning", partial=partial)))
 
     assert [(item.role, item.text) for item in state.items] == [("thinking", "hidden reasoning")]
-    assert state.show_thinking is False
+    assert state.show_thinking is True
 
 
 def test_tui_state_restores_persisted_assistant_blocks_in_order() -> None:

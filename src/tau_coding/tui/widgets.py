@@ -2024,7 +2024,7 @@ def _styled_cwd(cwd: Path, *, theme: TuiTheme) -> Text:
         text.append(name, style=theme.prompt_text)
     else:
         text.append(short_path, style=theme.prompt_text)
-    text.append(f" ({_git_branch(cwd)})", style=theme.completion_description)
+    text.append(_jj_branch(cwd, theme=theme))
     return text
 
 
@@ -2070,23 +2070,65 @@ def _thinking_level(session: SessionSummarySource) -> str:
     return str(thinking_level) if thinking_level else "--"
 
 
-def _git_branch(cwd: Path) -> str:
+def _jj_branch(cwd: Path, *, theme: TuiTheme) -> Text:
+    """Return jj-formatted branch info: (short_change_id, parent_branch).
+
+    Shows the jj working-copy change id (first char in accent color) and the
+    nearest ancestor branch name, matching jj st's visual style.
+    """
     try:
         result = run(
-            ["git", "-C", str(cwd), "branch", "--show-current"],
+            ["jj", "log", "-r", "@", "--no-graph", "-T", "change_id.shortest(8)"],
             capture_output=True,
             check=False,
             text=True,
             timeout=0.5,
+            cwd=str(cwd),
         )
     except OSError:
-        return "--"
+        return Text(" (--)", style=theme.completion_description)
     except TimeoutExpired:
-        return "--"
-    branch = result.stdout.strip()
-    if branch:
-        return branch
-    return "--"
+        return Text(" (--)", style=theme.completion_description)
+
+    change_id = result.stdout.strip()
+    if not change_id or result.returncode != 0:
+        return Text(" (--)", style=theme.completion_description)
+
+    # Find the nearest ancestor with a bookmark (branch)
+    parent_branch = _find_jj_nearest_branch(cwd)
+
+    text = Text(" (", style=theme.completion_description)
+    # First char of change_id in accent (purple-like) color
+    if change_id:
+        text.append(change_id[0], style=theme.accent)
+        text.append(change_id[1:], style=theme.completion_description)
+    if parent_branch:
+        text.append(", ", style=theme.completion_description)
+        text.append(parent_branch, style=theme.completion_description)
+    text.append(")", style=theme.completion_description)
+    return text
+
+
+def _find_jj_nearest_branch(cwd: Path) -> str:
+    """Find the nearest ancestor bookmark for the working copy parent."""
+    try:
+        result = run(
+            ["jj", "log", "--no-graph", "-r", "::@-", "-T", "bookmarks"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2.0,
+            cwd=str(cwd),
+        )
+    except (OSError, TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    for line in reversed(result.stdout.split("\n")):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
 
 
 def _has_unclosed_fence(text: str) -> bool:

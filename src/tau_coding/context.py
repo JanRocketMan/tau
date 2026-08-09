@@ -50,6 +50,16 @@ def _context_file_candidates(paths: TauResourcePaths) -> tuple[Path, ...]:
         cwd = paths.cwd.expanduser().resolve()
         project_root = _find_project_root(cwd)
         candidates.extend(_ancestor_agents_files(project_root, cwd))
+        # Also look for CLAUDE.md at project root and user home
+        candidates.append(project_root / "CLAUDE.md")
+        # Load the user's CLAUDE.md from ~/.claude/ when working inside the
+        # user's home directory tree (not a temp/test path)
+        claude_path = Path.home() / ".claude" / "CLAUDE.md"
+        try:
+            cwd.relative_to(Path.home())
+            candidates.append(claude_path)
+        except ValueError:
+            pass
         tau_paths = paths._paths()
         candidates.extend(
             [

@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 from tau_coding.paths import TauPaths
 from tau_coding.tui.themes import (
     BUILTIN_TUI_THEME_NAMES,
+    CODEYELLOW_THEME,
     HIGH_CONTRAST_THEME,
     TAU_DARK_THEME,
     TAU_LIGHT_THEME,
@@ -24,6 +25,7 @@ type TurnNotificationMode = Literal["off", "bell", "desktop"]
 
 __all__ = [
     "BUILTIN_TUI_THEME_NAMES",
+    "CODEYELLOW_THEME",
     "HIGH_CONTRAST_THEME",
     "TAU_DARK_THEME",
     "TAU_LIGHT_THEME",
@@ -88,7 +90,7 @@ class TuiSettings:
     """Tau TUI settings loaded from Tau home."""
 
     keybindings: TuiKeybindings = field(default_factory=TuiKeybindings)
-    theme: TuiThemeName = "tau-dark"
+    theme: TuiThemeName = "codeyellow"
     auto_copy_selection: bool = False
     sidebar_position: Literal["left", "right", "off"] = "right"
     turn_notification: TurnNotificationMode = "desktop"
@@ -105,11 +107,11 @@ class TuiSettings:
 
     @property
     def resolved_theme(self) -> TuiTheme:
-        """Return the selected theme, falling back to tau-dark when unknown."""
+        """Return the selected theme, falling back to codeyellow when unknown."""
         try:
             return get_tui_theme(self.theme)
         except KeyError:
-            return TAU_DARK_THEME
+            return CODEYELLOW_THEME
 
 
 def tui_settings_path(paths: TauPaths | None = None) -> Path:
@@ -156,7 +158,7 @@ def tui_settings_from_json(data: dict[str, Any]) -> TuiSettings:
         raise TuiConfigError("turn_notification must be 'off', 'bell', or 'desktop'")
     return TuiSettings(
         keybindings=_keybindings_from_json(keybindings_data),
-        theme=_theme_name(data.get("theme", "tau-dark")),
+        theme=_theme_name(data.get("theme", "codeyellow")),
         auto_copy_selection=_bool_setting(
             data.get("auto_copy_selection", False),
             "auto_copy_selection",

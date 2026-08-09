@@ -619,7 +619,9 @@ async def test_run_print_mode_prints_final_assistant_text(
         model="fake",
         cwd=tmp_path,
         provider=provider,
-        resource_paths=TauResourcePaths(root=tmp_path / "resources", agents_root=None),
+        resource_paths=TauResourcePaths(
+            root=tmp_path / "resources", agents_root=None, project_resources_enabled=False
+        ),
     )
 
     captured = capsys.readouterr()
@@ -627,7 +629,9 @@ async def test_run_print_mode_prints_final_assistant_text(
     assert captured.out == "Hello\n"
     assert captured.err == ""
     assert provider.calls[0][0] == "fake"
-    resource_paths = TauResourcePaths(root=tmp_path / "resources", agents_root=None)
+    resource_paths = TauResourcePaths(
+        root=tmp_path / "resources", agents_root=None, project_resources_enabled=False
+    )
     assert provider.calls[0][1] == build_system_prompt(
         BuildSystemPromptOptions(
             cwd=tmp_path,

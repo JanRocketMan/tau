@@ -244,7 +244,7 @@ def test_parse_theme_rejects_non_object_payload() -> None:
 
 
 def test_builtin_themes_are_loaded_from_packaged_json() -> None:
-    assert BUILTIN_TUI_THEME_NAMES == ("tau-dark", "tau-light", "high-contrast")
+    assert BUILTIN_TUI_THEME_NAMES == ("tau-dark", "tau-light", "high-contrast", "codeyellow")
     assert TAU_DARK_THEME.dark is True
     assert TAU_LIGHT_THEME.dark is False
     assert get_tui_theme("tau-dark").screen_background == "#000000"

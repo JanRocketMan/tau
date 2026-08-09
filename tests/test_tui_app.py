@@ -2984,7 +2984,7 @@ def test_tui_app_uses_light_theme_css_variables() -> None:
 def test_tui_app_registers_only_tau_themes_with_textual() -> None:
     app = TauTuiApp(FakeSession())
 
-    assert tuple(app.available_themes) == ("tau-dark", "tau-light", "high-contrast")
+    assert tuple(app.available_themes) == ("tau-dark", "tau-light", "high-contrast", "codeyellow")
 
 
 def test_textual_theme_mapping_uses_tau_theme_values() -> None:
@@ -3419,6 +3419,7 @@ async def test_tui_app_theme_command_opens_picker_and_persists_selection(
             "✓ tau-dark",
             "  tau-light",
             "  high-contrast",
+            "  codeyellow",
         ]
 
         theme_list = picker.query_one("#theme-picker-list", ListView)
@@ -7289,23 +7290,23 @@ async def test_tui_app_toggles_thinking_tokens_from_keybinding_while_running() -
         app._refresh()
         await pilot.pause()
 
-        assert app.state.show_thinking is False
-        assert "final answer" in transcript_text()
-        assert "Thinking… Press Ctrl+T to show thinking tokens." in transcript_text()
-        assert "internal plan" not in transcript_text()
-
-        await pilot.press("ctrl+t")
-        await pilot.pause()
         assert app.state.show_thinking is True
-        assert app.state.running is True
+        assert "final answer" in transcript_text()
         assert "internal plan" in transcript_text()
         assert "Thinking… Press Ctrl+T to show thinking tokens." not in transcript_text()
 
         await pilot.press("ctrl+t")
         await pilot.pause()
         assert app.state.show_thinking is False
-        assert "Thinking… Press Ctrl+T to show thinking tokens." in transcript_text()
+        assert app.state.running is True
         assert "internal plan" not in transcript_text()
+        assert "Thinking… Press Ctrl+T to show thinking tokens." in transcript_text()
+
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert app.state.show_thinking is True
+        assert "internal plan" in transcript_text()
+        assert "Thinking… Press Ctrl+T to show thinking tokens." not in transcript_text()
 
     assert notifications == []
 
@@ -7340,8 +7341,9 @@ async def test_tui_app_hidden_thinking_placeholder_stays_before_streamed_answer(
         await pilot.pause()
 
         transcript = app.query_one("#transcript", TranscriptView)
+        # Thinking is visible by default
         assert [line.text for line in transcript.lines] == [
-            "Thinking… Press Ctrl+T to show thinking tokens.",
+            "private plan",
             "public answer",
         ]
 
@@ -7367,16 +7369,7 @@ async def test_tui_app_restored_thinking_toggles_in_persisted_order() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         transcript = app.query_one("#transcript", TranscriptView)
-        assert [line.text for line in transcript.lines] == [
-            "prompt",
-            "Thinking… Press Ctrl+T to show thinking tokens.",
-            "first answer",
-            "Thinking… Press Ctrl+T to show thinking tokens.",
-            "second answer",
-        ]
-
-        await pilot.press("ctrl+t")
-        await pilot.pause()
+        # Thinking is visible by default
         assert [line.text for line in transcript.lines] == [
             "prompt",
             "first plan",
@@ -7392,6 +7385,16 @@ async def test_tui_app_restored_thinking_toggles_in_persisted_order() -> None:
             "Thinking… Press Ctrl+T to show thinking tokens.",
             "first answer",
             "Thinking… Press Ctrl+T to show thinking tokens.",
+            "second answer",
+        ]
+
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert [line.text for line in transcript.lines] == [
+            "prompt",
+            "first plan",
+            "first answer",
+            "second plan",
             "second answer",
         ]
 
@@ -7411,14 +7414,24 @@ async def test_tui_app_thinking_toggle_preserves_unrelated_items() -> None:
         await pilot.pause()
 
         transcript = app.query_one("#transcript", TranscriptView)
-        await pilot.press("ctrl+t")
-        await pilot.pause()
+        # Thinking is visible by default
         assert [line.text for line in transcript.lines] == [
             "first prompt",
             "plan one",
             "first answer",
             "second prompt",
             "plan two",
+            "second answer",
+        ]
+
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert [line.text for line in transcript.lines] == [
+            "first prompt",
+            "Thinking… Press Ctrl+T to show thinking tokens.",
+            "first answer",
+            "second prompt",
+            "Thinking… Press Ctrl+T to show thinking tokens.",
             "second answer",
         ]
 
@@ -7429,10 +7442,10 @@ async def test_tui_app_thinking_toggle_preserves_unrelated_items() -> None:
         await pilot.pause()
         assert [line.text for line in transcript.lines] == [
             "first prompt",
-            "Thinking… Press Ctrl+T to show thinking tokens.",
+            "plan one",
             "first answer",
             "second prompt",
-            "Thinking… Press Ctrl+T to show thinking tokens.",
+            "plan two",
             "second answer",
             "late status",
         ]
