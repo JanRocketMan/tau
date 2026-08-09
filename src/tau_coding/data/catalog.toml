@@ -39,6 +39,45 @@ cost = { input = 5, output = 30, cacheRead = 0.5, cacheWrite = 6.25 }
 thinking_level_map = { xhigh = "xhigh" }
 
 [[providers]]
+name = "opencode-go"
+display_name = "OpenCode Go"
+kind = "openai-compatible"
+base_url = "https://opencode.ai/zen/go/v1"
+api_key_env = "OPENCODE_API_KEY"
+credential_name = "opencode"
+models = ["gpt-5.6-luna", "deepseek-v4-flash", "kimi-k3"]
+default_model = "deepseek-v4-flash"
+docs_url = "https://opencode.ai/docs/go"
+api = "openai-completions"
+thinking_levels = ["low", "medium", "high", "xhigh"]
+thinking_default = "xhigh"
+thinking_parameter = "reasoning_effort"
+
+[providers.context_windows]
+"gpt-5.6-luna" = 1000000
+"deepseek-v4-flash" = 1000000
+"kimi-k3" = 1000000
+
+[providers.model_metadata."gpt-5.6-luna"]
+api = "openai-responses"
+input = ["text", "image"]
+context_window = 1000000
+max_tokens = 128000
+cost = { input = 0.2, output = 1.2, cacheRead = 0.02, cacheWrite = 0.25 }
+
+[providers.model_metadata."deepseek-v4-flash"]
+input = ["text"]
+context_window = 1000000
+max_tokens = 384000
+cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
+thinking_level_map = { xhigh = "high" }
+
+[providers.model_metadata."kimi-k3"]
+input = ["text", "image"]
+context_window = 1000000
+cost = { input = 3.0, output = 15.0, cacheRead = 0.3, cacheWrite = 0.0 }
+
+[[providers]]
 name = "opencode"
 display_name = "OpenCode Zen"
 kind = "openai-compatible"

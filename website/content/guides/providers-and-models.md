@@ -133,8 +133,8 @@ and then run:
 ```
 
 Both can also read `OPENCODE_API_KEY`. Tau stores their saved credentials under
-separate `opencode-go` and `opencode` names, allowing different keys when
-needed. Available models and plan limits change over time; consult the
+the shared `opencode` name since both tiers use the same API key; logging in
+once makes both OpenCode Go and OpenCode Zen available. Available models and plan limits change over time; consult the
 [OpenCode Go](https://opencode.ai/docs/go) and
 [OpenCode Zen](https://opencode.ai/docs/zen) pages for the current list.
 

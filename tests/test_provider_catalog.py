@@ -53,6 +53,7 @@ def _write_user_catalog(tau_home: Path, body: str) -> TauPaths:
 def test_builtin_catalog_matches_expected_providers() -> None:
     assert [entry.name for entry in BUILTIN_PROVIDER_CATALOG] == [
         "openai-codex",
+        "opencode-go",
         "opencode",
     ]
 
@@ -113,6 +114,11 @@ def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> No
         "openai-codex": {
             "gpt-5.6-sol": (1_000_000, 128_000),
             "gpt-5.6-luna": (1_000_000, 128_000),
+        },
+        "opencode-go": {
+            "deepseek-v4-flash": (1_000_000, 384_000),
+            "gpt-5.6-luna": (1_000_000, 128_000),
+            "kimi-k3": (1_000_000, None),
         },
         "opencode": {
             "deepseek-v4-flash": (1_000_000, 384_000),
