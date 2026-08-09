@@ -49,7 +49,7 @@ models = ["gpt-5.6-luna", "deepseek-v4-flash", "kimi-k3"]
 default_model = "deepseek-v4-flash"
 docs_url = "https://opencode.ai/docs/go"
 api = "openai-completions"
-thinking_levels = ["low", "medium", "high", "xhigh"]
+thinking_levels = ["low", "medium", "high", "xhigh", "max"]
 thinking_default = "xhigh"
 thinking_parameter = "reasoning_effort"
 
@@ -64,18 +64,23 @@ input = ["text", "image"]
 context_window = 1000000
 max_tokens = 128000
 cost = { input = 0.2, output = 1.2, cacheRead = 0.02, cacheWrite = 0.25 }
+thinking_default = "xhigh"
+thinking_level_map = { xhigh = "xhigh" }
 
 [providers.model_metadata."deepseek-v4-flash"]
 input = ["text"]
 context_window = 1000000
 max_tokens = 384000
 cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
+thinking_default = "high"
 thinking_level_map = { xhigh = "high" }
 
 [providers.model_metadata."kimi-k3"]
 input = ["text", "image"]
 context_window = 1000000
 cost = { input = 3.0, output = 15.0, cacheRead = 0.3, cacheWrite = 0.0 }
+thinking_default = "max"
+thinking_level_map = { xhigh = "max" }
 
 [[providers]]
 name = "opencode"
@@ -88,7 +93,7 @@ models = ["gpt-5.6-luna", "deepseek-v4-flash", "kimi-k3"]
 default_model = "gpt-5.6-luna"
 docs_url = "https://opencode.ai/docs/zen"
 api = "openai-completions"
-thinking_levels = ["low", "medium", "high", "xhigh"]
+thinking_levels = ["low", "medium", "high", "xhigh", "max"]
 thinking_default = "xhigh"
 thinking_parameter = "reasoning_effort"
 
@@ -103,15 +108,20 @@ input = ["text", "image"]
 context_window = 1000000
 max_tokens = 128000
 cost = { input = 0.2, output = 1.2, cacheRead = 0.02, cacheWrite = 0.25 }
+thinking_default = "xhigh"
+thinking_level_map = { xhigh = "xhigh" }
 
 [providers.model_metadata."deepseek-v4-flash"]
 input = ["text"]
 context_window = 1000000
 max_tokens = 384000
 cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
+thinking_default = "high"
 thinking_level_map = { xhigh = "high" }
 
 [providers.model_metadata."kimi-k3"]
 input = ["text", "image"]
 context_window = 1000000
 cost = { input = 3.0, output = 15.0, cacheRead = 0.3, cacheWrite = 0.0 }
+thinking_default = "max"
+thinking_level_map = { xhigh = "max" }

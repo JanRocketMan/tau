@@ -191,7 +191,9 @@ compat = { supportsLongCacheRetention = false }
 
 The thinking fields (`thinking_levels`, `thinking_models`,
 `thinking_default`, `thinking_parameter`) replace as a group when
-`thinking_levels` is present.
+`thinking_levels` is present. A model metadata entry may also set
+`thinking_default` for a model-specific startup choice, alongside
+`thinking_level_map` when the provider's wire value differs.
 
 `catalog.toml` does not store runtime request options such as custom HTTP
 headers, timeouts, or retry settings. Put those in `~/.tau/providers.json` on the

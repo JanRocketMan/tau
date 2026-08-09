@@ -95,10 +95,12 @@ Some models can spend extra effort reasoning before answering. Tau exposes a
 thinking level you can cycle:
 
 ```text
-off → minimal → low → medium → high → xhigh
+off → minimal → low → medium → high → xhigh → max
 ```
 
-- **Shift+Tab** cycles the thinking level (default is `medium`).
+- **Shift+Tab** cycles the thinking level.
+- **`/effort [level]`** shows the available levels or changes the effort for
+  future turns in the current session.
 - **Ctrl+T** toggles whether reasoning tokens are shown (hidden by default).
   Reasoning blocks are saved with the assistant response, so their original
   positions and visibility toggle are restored when you resume a session.
@@ -110,9 +112,8 @@ isn't listed). Custom providers can opt in via `thinking_levels` in their config
 — see [Configuration]({{< relref "../reference/configuration.md#providers" >}}).
 
 At startup Tau picks a valid level for the selected model automatically: a
-remembered per-model choice wins, then `medium`, then the provider's own
-default, then the first level the model supports. For example, `kimi-code:k3`
-supports `low`, `high`, and `xhigh`; because `medium` is unavailable, it opens
-at its `xhigh` catalog default instead of failing with "Thinking mode medium is
-not available". Picking an unsupported level explicitly (via `/think` or the
-thinking picker) still shows an error listing the available modes.
+remembered per-model choice wins, then the model's catalog default, then the
+provider's default, then the global default, then the first level the model
+supports. OpenCode Go and OpenCode start `kimi-k3` at `max` and
+`deepseek-v4-flash` at `high`. Picking an unsupported level explicitly via
+`/effort` still shows an error listing the available modes.

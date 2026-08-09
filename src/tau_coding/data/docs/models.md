@@ -28,9 +28,10 @@ For changes to a first-party provider or model, use this workflow:
    tests/test_provider_runtime.py
    ```
 
-Tau thinking levels are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Provider-level `thinking_levels` must include every level needed by its models. Use model metadata when the wire value differs or a model supports only a subset:
+Tau thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Provider-level `thinking_levels` must include every level needed by its models. Use model metadata when the wire value differs, a model has a different default, or a model supports only a subset:
 
 ```toml
+thinking_default = "max"
 thinking_level_map = { xhigh = "max" }
 unsupported_thinking_levels = ["off", "minimal", "low", "medium", "high"]
 ```

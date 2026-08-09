@@ -81,6 +81,7 @@ class _CatalogModelMetadata(BaseModel):
     cost_tiers: tuple[_CatalogCostTier, ...] = ()
     context_window: _PositiveInt | None = None
     max_tokens: _PositiveInt | None = None
+    thinking_default: ThinkingLevel | None = None
     headers: dict[_NonEmptyString, _NonEmptyString] = {}
     compat: dict[_NonEmptyString, Any] = {}
     thinking_level_map: dict[ThinkingLevel, _NonEmptyString] = {}
@@ -441,6 +442,7 @@ def _model_metadata_from_provider(metadata: _CatalogModelMetadata) -> ModelCatal
         ),
         context_window=metadata.context_window,
         max_tokens=metadata.max_tokens,
+        thinking_default=metadata.thinking_default,
         headers=dict(metadata.headers),
         compat=_json_object(metadata.compat, "model_metadata.compat"),
         thinking_level_map=thinking_level_map,
@@ -573,6 +575,8 @@ def _raw_model_metadata_from_entry(metadata: ModelCatalogMetadata) -> dict[str, 
         raw["context_window"] = metadata.context_window
     if metadata.max_tokens is not None:
         raw["max_tokens"] = metadata.max_tokens
+    if metadata.thinking_default is not None:
+        raw["thinking_default"] = metadata.thinking_default
     if metadata.headers:
         raw["headers"] = dict(metadata.headers)
     if metadata.compat:

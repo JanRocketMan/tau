@@ -2868,6 +2868,9 @@ def _preferred_thinking_level_for_model(
     preferred = provider.thinking_defaults.get(model)
     if preferred in levels:
         return preferred
+    metadata = provider.model_metadata.get(model)
+    if metadata is not None and metadata.thinking_default in levels:
+        return metadata.thinking_default
     if fallback in levels or not levels:
         return fallback
     default = provider_default_thinking_level(provider, model=model)

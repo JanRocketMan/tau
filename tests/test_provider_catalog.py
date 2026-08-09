@@ -60,12 +60,10 @@ def test_builtin_catalog_matches_expected_providers() -> None:
 
 def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
     codex = builtin_provider_entry("openai-codex")
-    copilot = builtin_provider_entry("github-copilot")
     opencode_go = builtin_provider_entry("opencode-go")
     opencode = builtin_provider_entry("opencode")
 
     assert codex is not None and codex.auth_methods == ("oauth",)
-    assert copilot is not None and copilot.auth_methods == ("oauth",)
     assert opencode_go is not None and opencode_go.auth_methods == ("api_key",)
     assert opencode is not None and opencode.auth_methods == ("api_key",)
     assert opencode_go.api_key_env == "OPENCODE_API_KEY"
@@ -113,8 +111,8 @@ def test_sparse_provider_catalogs_declare_model_input_modalities(
 def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> None:
     expected = {
         "openai-codex": {
-            "gpt-5.6-sol": (1_000_000, 128_000),
-            "gpt-5.6-luna": (1_000_000, 128_000),
+            "gpt-5.6-sol": (272_000, 128_000),
+            "gpt-5.6-luna": (272_000, 128_000),
         },
         "opencode-go": {
             "deepseek-v4-flash": (1_000_000, 384_000),
@@ -155,9 +153,11 @@ def test_builtin_catalog_declares_current_model_modalities() -> None:
 
 def test_builtin_catalog_auth_and_thinking_metadata() -> None:
     codex = builtin_provider_entry("openai-codex")
+    opencode_go = builtin_provider_entry("opencode-go")
     opencode = builtin_provider_entry("opencode")
 
     assert codex is not None
+    assert opencode_go is not None
     assert opencode is not None
     assert codex.auth_methods == ("oauth",)
     assert opencode.auth_methods == ("api_key",)
@@ -165,9 +165,12 @@ def test_builtin_catalog_auth_and_thinking_metadata() -> None:
     assert codex.thinking_levels == ("low", "medium", "high", "xhigh")
     assert codex.thinking_default == "xhigh"
     assert codex.thinking_parameter == "reasoning.effort"
-    assert opencode.thinking_levels == ("low", "medium", "high", "xhigh")
+    assert opencode.thinking_levels == ("low", "medium", "high", "xhigh", "max")
     assert opencode.thinking_default == "xhigh"
     assert opencode.thinking_parameter == "reasoning_effort"
+    for provider in (opencode_go, opencode):
+        assert provider.model_metadata["deepseek-v4-flash"].thinking_default == "high"
+        assert provider.model_metadata["kimi-k3"].thinking_default == "max"
     assert codex.model_metadata["gpt-5.6-sol"].thinking_level_map == {"xhigh": "xhigh"}
     assert codex.model_metadata["gpt-5.6-luna"].thinking_level_map == {"xhigh": "xhigh"}
 

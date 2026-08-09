@@ -463,6 +463,13 @@ def _command_argument_completions(
             ),
             sort=False,
         )
+    if command_name == "effort":
+        return _value_completions(
+            text=text,
+            start=token_end + 1,
+            options=_completion_options(thinking_levels, description="Set thinking effort"),
+            sort=False,
+        )
     if command_name == "theme":
         return _value_completions(
             text=text,

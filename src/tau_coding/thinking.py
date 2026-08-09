@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
-ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh"]
+ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 ThinkingParameter = Literal["reasoning_effort", "reasoning.effort", "anthropic.thinking"]
-ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 THINKING_LEVELS: tuple[ThinkingLevel, ...] = (
     "off",
@@ -16,8 +16,9 @@ THINKING_LEVELS: tuple[ThinkingLevel, ...] = (
     "medium",
     "high",
     "xhigh",
+    "max",
 )
-DEFAULT_THINKING_LEVEL: ThinkingLevel = "high"
+DEFAULT_THINKING_LEVEL: ThinkingLevel = "xhigh"
 
 THINKING_LEVEL_DESCRIPTIONS: dict[ThinkingLevel, str] = {
     "off": "No reasoning",
@@ -26,6 +27,7 @@ THINKING_LEVEL_DESCRIPTIONS: dict[ThinkingLevel, str] = {
     "medium": "Moderate reasoning",
     "high": "Deep reasoning",
     "xhigh": "Maximum reasoning",
+    "max": "Max reasoning",
 }
 
 

@@ -390,16 +390,16 @@ def test_logout_argument_completion_uses_available_providers() -> None:
     assert [item.display for item in state.items] == ["openai", "openrouter"]
 
 
-def test_thinking_argument_completion_uses_available_modes() -> None:
+def test_effort_argument_completion_uses_available_modes() -> None:
     state = build_completion_state(
-        "/thinking h",
+        "/effort h",
         command_registry=create_default_command_registry(),
         skills=(),
         prompt_templates=(),
         thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
     )
 
-    assert state.items == ()
+    assert [item.display for item in state.items] == ["high"]
 
 
 def test_theme_argument_completion_uses_theme_names() -> None:

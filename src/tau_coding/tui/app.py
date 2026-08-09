@@ -5665,10 +5665,12 @@ class TauTuiApp(App[None]):
         try:
             result = setter(level)
             if isawaitable(result):
-                await result
+                result = await result
         except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
             self._notify(f"Could not change thinking mode: {exc}", severity="error")
             return
+        if isinstance(result, str) and result:
+            self._notify(result)
         self._refresh_chrome()
 
     async def _cycle_thinking_level(self) -> None:

@@ -307,8 +307,8 @@ class FakeSession:
             return CommandResult(handled=True, tools_picker_requested=True)
         if text in {"/scoped-models", "/scoped models"}:
             return CommandResult(handled=True, scoped_models_picker_requested=True)
-        if text.startswith("/thinking "):
-            return CommandResult(handled=True, thinking_level=text.removeprefix("/thinking "))
+        if text.startswith("/effort "):
+            return CommandResult(handled=True, thinking_level=text.removeprefix("/effort "))
         if text == "/theme":
             return CommandResult(handled=True, theme_picker_requested=True)
         if text.startswith("/theme "):
@@ -7464,6 +7464,28 @@ async def test_tui_prompt_ctrl_c_clears_text() -> None:
         await pilot.pause()
 
         assert prompt.text == ""
+
+
+@pytest.mark.anyio
+async def test_tui_app_effort_command_changes_thinking_level() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+    notifications: list[str] = []
+
+    def fake_notify(message: str, **kwargs: object) -> None:
+        del kwargs
+        notifications.append(message)
+
+    app._notify = fake_notify  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/effort high"
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert session.thinking_level == "high"
+    assert "Thinking mode: high" in notifications
 
 
 @pytest.mark.anyio

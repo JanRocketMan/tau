@@ -124,6 +124,7 @@ def test_registered_commands_are_pi_aligned(tmp_path: Path) -> None:
 
     assert [command.name for command in commands] == [
         "compact",
+        "effort",
         "export",
         "hotkeys",
         "login",
@@ -300,6 +301,22 @@ def test_hotkeys_command_lists_common_tui_shortcuts(tmp_path: Path) -> None:
     assert "Ctrl+K: open slash-command completions" in result.message
     assert "Ctrl+R: open session picker" in result.message
     assert "Shift+Tab: cycle thinking mode" in result.message
+
+
+def test_effort_command_reports_and_changes_thinking_level(tmp_path: Path) -> None:
+    session = FakeSession(tmp_path)
+    registry = create_default_command_registry()
+
+    status = registry.execute(session, "/effort")
+    changed = registry.execute(session, "/effort high")
+    invalid = registry.execute(session, "/effort maximum")
+
+    assert status.message == (
+        "Thinking mode: medium\nAvailable modes: off, minimal, low, medium, high, xhigh"
+    )
+    assert changed.thinking_level == "high"
+    assert invalid.message is not None
+    assert "Unknown thinking mode: maximum" in invalid.message
 
 
 def test_model_command_requests_picker_and_switches_models(tmp_path: Path) -> None:

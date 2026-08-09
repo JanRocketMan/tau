@@ -70,6 +70,7 @@ class ProviderModelMetadata:
     cost_tiers: tuple[ModelCostTier, ...] = ()
     context_window: int | None = None
     max_tokens: int | None = None
+    thinking_default: ThinkingLevel | None = None
     headers: dict[str, str] = field(default_factory=dict)
     compat: dict[str, Any] = field(default_factory=dict)
     thinking_level_map: dict[ThinkingLevel, str | None] = field(default_factory=dict)
@@ -96,6 +97,7 @@ class ProviderModelMetadata:
             ],
             "context_window": self.context_window,
             "max_tokens": self.max_tokens,
+            "thinking_default": self.thinking_default,
             "headers": dict(self.headers),
             "compat": dict(self.compat),
             "thinking_level_map": dict(self.thinking_level_map),
@@ -378,6 +380,7 @@ def _provider_model_metadata_from_catalog(
             cost_tiers=metadata.cost_tiers,
             context_window=metadata.context_window,
             max_tokens=metadata.max_tokens,
+            thinking_default=metadata.thinking_default,
             headers=dict(metadata.headers),
             compat=dict(metadata.compat),
             thinking_level_map=dict(metadata.thinking_level_map),
@@ -857,6 +860,7 @@ def _merge_provider_model_metadata(
             cost_tiers=metadata.cost_tiers or base.cost_tiers,
             context_window=metadata.context_window or base.context_window,
             max_tokens=metadata.max_tokens or base.max_tokens,
+            thinking_default=metadata.thinking_default or base.thinking_default,
             headers={**base.headers, **metadata.headers},
             compat={**base.compat, **metadata.compat},
             thinking_level_map={**base.thinking_level_map, **metadata.thinking_level_map},
@@ -1004,6 +1008,7 @@ def _catalog_model_metadata_from_provider(
             cost_tiers=metadata.cost_tiers,
             context_window=metadata.context_window,
             max_tokens=metadata.max_tokens,
+            thinking_default=metadata.thinking_default,
             headers=dict(metadata.headers),
             compat=dict(metadata.compat),
             thinking_level_map=dict(metadata.thinking_level_map),
@@ -1318,7 +1323,7 @@ def provider_thinking_unavailable_reason(
 def _levels_from_thinking_map(
     thinking_level_map: dict[ThinkingLevel, str | None],
 ) -> tuple[ThinkingLevel, ...]:
-    levels: tuple[ThinkingLevel, ...] = ("off", "minimal", "low", "medium", "high", "xhigh")
+    levels: tuple[ThinkingLevel, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
     return tuple(
         level for level in levels if _thinking_level_map_supports(thinking_level_map, level)
     )
@@ -1445,9 +1450,13 @@ def provider_default_thinking_level(
     model: str | None = None,
 ) -> ThinkingLevel | None:
     """Return the preferred thinking level for a provider/model pair."""
-    levels = provider_thinking_levels(provider, model=model)
+    selected_model = model or provider.default_model
+    levels = provider_thinking_levels(provider, model=selected_model)
     if not levels:
         return None
+    metadata = _metadata_for_model(provider, selected_model)
+    if metadata is not None and metadata.thinking_default in levels:
+        return metadata.thinking_default
     if provider.thinking_default in levels:
         return provider.thinking_default
     if DEFAULT_THINKING_LEVEL in levels:
@@ -1464,10 +1473,11 @@ def resolve_startup_thinking_level(
     """Pick a valid startup thinking level for a provider/model pair.
 
     Startup (TUI and print mode) must never crash just because the remembered
-    default model does not support the global default level. The level is
-    resolved with the same precedence used when switching models mid-session:
-    the remembered per-model preference wins, then the global ``preferred``
-    level, then the provider/catalog default, then the first available level.
+    default model does not support the global default level. The level uses a
+    model-aware fallback policy:
+    the remembered per-model preference wins, then the model catalog default,
+    then the global ``preferred`` level, then the provider default, then the
+    first available level.
 
     Returns ``None`` when the model has no configurable thinking levels.
     """
@@ -1477,6 +1487,9 @@ def resolve_startup_thinking_level(
     remembered = provider.thinking_defaults.get(model)
     if remembered in levels:
         return remembered
+    metadata = _metadata_for_model(provider, model)
+    if metadata is not None and metadata.thinking_default in levels:
+        return metadata.thinking_default
     if preferred in levels:
         return preferred
     return provider_default_thinking_level(provider, model=model) or levels[0]
@@ -1803,6 +1816,8 @@ def _validate_model_metadata(
             raise ProviderConfigError("Provider model_metadata input must contain text or image")
         if any(value < 0 for value in metadata.cost.values()):
             raise ProviderConfigError("Provider model_metadata cost values must be non-negative")
+        if metadata.thinking_default is not None:
+            normalize_thinking_level(metadata.thinking_default)
         _validate_runtime_cost_tiers(metadata.cost_tiers)
         _validate_json_object(metadata.compat, "Provider model_metadata compat")
         _validate_string_dict(metadata.headers, "Provider model_metadata headers")
@@ -2102,6 +2117,9 @@ def _model_metadata_dict(
             ),
             max_tokens=_optional_positive_int(
                 item.get("max_tokens"), f"{field_name}.{model}.max_tokens"
+            ),
+            thinking_default=_optional_thinking_level(
+                item.get("thinking_default"), f"{field_name}.{model}.thinking_default"
             ),
             headers=_string_dict(item.get("headers", {}), f"{field_name}.{model}.headers"),
             compat=_json_dict(item.get("compat", {}), f"{field_name}.{model}.compat"),

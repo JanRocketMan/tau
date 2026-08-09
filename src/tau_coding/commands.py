@@ -351,6 +351,15 @@ def create_default_command_registry() -> CommandRegistry:
     )
     registry.register(
         SlashCommand(
+            name="effort",
+            usage="/effort [level]",
+            description="Show or set the model thinking effort.",
+            handler=_thinking_command,
+            search_terms=("reasoning", "thinking", "level"),
+        )
+    )
+    registry.register(
+        SlashCommand(
             name="tools",
             usage="/tools",
             description="Browse tools available to the active session.",

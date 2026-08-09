@@ -102,7 +102,18 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
         "medium",
         "high",
         "xhigh",
+        "max",
     )
+    assert provider_default_thinking_level(opencode_go, model="deepseek-v4-flash") == "high"
+    assert provider_default_thinking_level(opencode_go, model="kimi-k3") == "max"
+
+    opencode = settings.get_provider("opencode")
+    assert provider_default_thinking_level(opencode, model="deepseek-v4-flash") == "high"
+    assert provider_default_thinking_level(opencode, model="kimi-k3") == "max"
+    assert resolve_startup_thinking_level(opencode_go, "deepseek-v4-flash") == "high"
+    assert resolve_startup_thinking_level(opencode_go, "kimi-k3") == "max"
+    assert resolve_startup_thinking_level(opencode, "deepseek-v4-flash") == "high"
+    assert resolve_startup_thinking_level(opencode, "kimi-k3") == "max"
 
 
 def test_load_provider_settings_accepts_provider_preferences_with_user_catalog(
@@ -606,8 +617,8 @@ def _kimi_code_like_provider() -> OpenAICompatibleProviderConfig:
 def test_resolve_startup_thinking_level_uses_k3_max_default() -> None:
     provider = _kimi_code_like_provider()
 
-    # The current global startup preference is high, which K3 supports.
-    assert resolve_startup_thinking_level(provider, "k3") == "high"
+    # The current global startup preference is xhigh, which K3 supports.
+    assert resolve_startup_thinking_level(provider, "k3") == "xhigh"
 
 
 def test_resolve_startup_thinking_level_prefers_remembered_model_default() -> None:
@@ -819,7 +830,7 @@ def test_openai_compatible_config_from_provider_sets_reasoning_effort(
 
 @pytest.mark.parametrize(
     ("level", "expected_effort"),
-    [("low", "low"), ("high", "high"), ("xhigh", "xhigh")],
+    [("low", "low"), ("high", "high"), ("xhigh", "max"), ("max", "max")],
 )
 def test_kimi_k3_maps_thinking_levels_to_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch,
@@ -841,6 +852,7 @@ def test_kimi_k3_maps_thinking_levels_to_reasoning_effort(
         "medium",
         "high",
         "xhigh",
+        "max",
     )
     assert config.reasoning_effort == expected_effort
 

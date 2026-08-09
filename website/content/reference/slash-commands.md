@@ -18,6 +18,7 @@ command palette with **Ctrl+K**.
 | `/tree` | Branch from an earlier point in the session tree |
 | `/name <new name>` | Rename the current session and, in supported terminals, the terminal tab title |
 | `/model` | Open the model picker |
+| `/effort [level]` | Show available efforts, or switch effort for future turns |
 | `/tools` | Browse active tools and open their full descriptions |
 | `/scoped-models` | Choose favorite models for the Ctrl+P quick-cycle |
 | `/theme [name]` | Show or set the TUI theme |
@@ -49,6 +50,6 @@ prompt.
 
 Related:
 
-- **Thinking mode** is keyboard-driven, not a slash command — see
+- **Thinking effort** can be changed with `/effort [level]` or the keyboard shortcut — see
   [Keyboard shortcuts]({{< relref "./keybindings.md" >}}) and [Managing context]({{< relref "../guides/context.md#thinking-modes" >}}).
 - **Prompt templates** use slash invocations (for example, `/wt …`). Use `/prompts` to search loaded templates and insert an invocation without submitting it.
