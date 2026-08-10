@@ -148,8 +148,9 @@ class ProjectTrustScreen(ModalScreen[TrustChoice | None]):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         choice = event.item.name
-        if choice is not None:
-            self.dismiss(choice)  # type: ignore[arg-type]
+        valid_choices = {choice for choice, _label in _LABELS}
+        if choice is not None and choice in valid_choices:
+            self.dismiss(choice)
 
     def action_cursor_up(self) -> None:
         self.query_one("#project-trust-list", ListView).action_cursor_up()

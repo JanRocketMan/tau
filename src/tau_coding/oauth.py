@@ -481,7 +481,7 @@ async def _start_local_oauth_server(
             except Exception:
                 self._finish(500, _oauth_html("Internal error while processing OAuth callback."))
 
-        def log_message(self, _format: str, *_args: Any) -> None:
+        def log_message(self, format: str, *_args: Any) -> None:
             return
 
         def _finish(self, status: int, body: str) -> None:

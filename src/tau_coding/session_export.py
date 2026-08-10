@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import TypeGuard
 
 from pygments import highlight
-from pygments.formatters import HtmlFormatter
-from pygments.lexers import JsonLexer
+from pygments.formatters.html import HtmlFormatter
+from pygments.lexers.data import JsonLexer
 
 from tau_agent.messages import (
     AssistantMessage,

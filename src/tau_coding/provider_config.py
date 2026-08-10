@@ -2028,7 +2028,7 @@ def _optional_thinking_levels(
     if not isinstance(value, list):
         raise ProviderConfigError(f"Provider field must be a thinking mode list: {field_name}")
     try:
-        return normalize_thinking_levels(value)
+        return normalize_thinking_levels(cast(list[str], value))
     except ValueError as exc:
         raise ProviderConfigError(str(exc)) from exc
 

@@ -3511,7 +3511,6 @@ class TauTuiApp(App[None]):
         )
         self._app_has_focus = True
         self._active_notification_keys: set[tuple[str, str]] = set()
-        self._supports_pyperclip: bool | None = None
         self._sync_session_title()
 
     async def prompt_project_trust(self, request: ProjectTrustRequest) -> TrustChoice | None:
@@ -3540,22 +3539,6 @@ class TauTuiApp(App[None]):
         if self.state.running and self.screen_stack:
             with suppress(Exception):
                 self.screen.clear_selection()
-
-    def copy_to_clipboard(self, text: str) -> None:
-        """Copy text using pyperclip when available, then Textual's fallback."""
-        if self._supports_pyperclip is None:
-            try:
-                import pyperclip  # type: ignore[import-untyped]
-            except ImportError:
-                self._supports_pyperclip = False
-            else:
-                self._supports_pyperclip = True
-        if self._supports_pyperclip:
-            import pyperclip
-
-            with suppress(Exception):
-                pyperclip.copy(text)
-        super().copy_to_clipboard(text)
 
     def _register_tau_textual_themes(self) -> None:
         """Register Tau themes with Textual's theme system.
@@ -4267,7 +4250,7 @@ class TauTuiApp(App[None]):
         elif callable(content):
             # Check callable() first: a Sequence[str] test must never swallow a
             # factory (and a factory is not a Sequence).
-            factory = content
+            factory = cast(SlotWidgetFactory, content)
         else:
             # A plain list of display lines: build the widget host-side so the
             # extension needs no Textual import. A bare str is treated as one

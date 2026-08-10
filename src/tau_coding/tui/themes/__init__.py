@@ -13,7 +13,7 @@ from functools import cache
 from importlib.resources import files
 from json import JSONDecodeError, loads
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Literal, cast, get_args
 
 from rich.color import Color, ColorParseError
 from rich.errors import StyleSyntaxError
@@ -158,6 +158,7 @@ def parse_tui_theme_json(data: object) -> TuiTheme:
     """Parse a theme from JSON-compatible data, reporting all problems at once."""
     if not isinstance(data, dict):
         raise TuiThemeError("Theme must be a JSON object")
+    data = cast(dict[str, object], data)
 
     problems: list[str] = []
     for key in sorted(set(data) - _TOP_LEVEL_FIELDS):
@@ -196,6 +197,7 @@ def _parse_vars(value: object, problems: list[str]) -> dict[str, str]:
     if not isinstance(value, dict):
         problems.append("vars must be an object")
         return {}
+    value = cast(dict[str, object], value)
     variables: dict[str, str] = {}
     for var_name, var_value in value.items():
         name_allowed = isinstance(var_name, str) and var_name
@@ -227,6 +229,7 @@ def _parse_colors(
     if not isinstance(value, dict):
         problems.append("colors must be an object")
         return {}
+    value = cast(dict[str, object], value)
     missing = [field_name for field_name in THEME_COLOR_FIELDS if field_name not in value]
     if missing:
         problems.append("colors missing: " + ", ".join(missing))
@@ -263,6 +266,7 @@ def _parse_roles(
     if not isinstance(value, dict):
         problems.append("roles must be an object")
         return {}
+    value = cast(dict[str, object], value)
     missing = [role for role in TRANSCRIPT_ROLES if role not in value]
     if missing:
         problems.append("roles missing: " + ", ".join(missing))
@@ -277,6 +281,7 @@ def _parse_roles(
         if not isinstance(raw, dict) or set(raw) != {"border", "body"}:
             problems.append(f"roles.{role} must be an object with 'border' and 'body'")
             continue
+        raw = cast(dict[str, object], raw)
         border, body = raw["border"], raw["body"]
         if not isinstance(border, str) or not isinstance(body, str):
             problems.append(f"roles.{role} border and body must be strings")

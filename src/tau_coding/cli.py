@@ -83,8 +83,10 @@ def _force_utf8_streams() -> None:
     for stream in (sys.stdout, sys.stderr):
         if _is_utf8_encoding(getattr(stream, "encoding", None)):
             continue
-        with contextlib.suppress(AttributeError, ValueError):
-            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            with contextlib.suppress(AttributeError, ValueError):
+                reconfigure(encoding="utf-8", errors="replace")
 
 
 _force_utf8_streams()

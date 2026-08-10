@@ -323,7 +323,7 @@ class CodingSession:
         self._resource_paths = resource_paths_with_cwd(config.resource_paths, config.cwd)
         self._auto_compact_token_threshold = config.auto_compact_token_threshold
         self._auto_compact_enabled = config.auto_compact_enabled
-        self._thinking_level = _state_thinking_level(
+        self._thinking_level: ThinkingLevel = _state_thinking_level(
             state,
             default=_default_thinking_level_for_active_model(self),
         )
@@ -343,7 +343,7 @@ class CodingSession:
     @classmethod
     async def load(cls, config: CodingSessionConfig) -> CodingSession:
         """Load a coding session from append-only storage."""
-        entries = await config.storage.read_all()
+        entries: list[SessionEntry] = await config.storage.read_all()
         pending_initial_entries: tuple[SessionEntry, ...] = ()
         if not entries:
             info = SessionInfoEntry(cwd=str(config.cwd))

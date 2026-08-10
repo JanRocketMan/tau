@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from json import dumps, loads
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from tau_agent.types import JSONValue
 from tau_coding.paths import TauPaths
@@ -181,6 +181,7 @@ def _credential_from_json(value: object) -> StoredCredential:
     credential_type = value.get("type")
     if credential_type not in {"api_key", "oauth"}:
         raise CredentialStoreError("Tau credential object type must be api_key or oauth")
+    credential_type = cast(StoredCredentialKind, credential_type)
     if credential_type == "api_key":
         key = _string_field(value, "key", credential_type)
         return ApiKeyCredential(key=key)
@@ -200,7 +201,7 @@ def _credential_from_json(value: object) -> StoredCredential:
         refresh=_string_field(value, "refresh", credential_type),
         expires=expires,
         account_id=account_id,
-        metadata=dict(metadata),
+        metadata=dict(cast(dict[str, JSONValue], metadata)),
     )
 
 
