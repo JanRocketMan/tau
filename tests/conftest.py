@@ -14,6 +14,18 @@ def prevent_browser_open(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(webbrowser, "open", fail_browser_open)
 
 
+@pytest.fixture(autouse=True)
+def isolate_external_service_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep developer credentials from changing offline test behavior."""
+
+    for variable in (
+        "BRAVE_SEARCH_API_KEY",
+        "BRAVE_SEARCH_API_URL",
+        "BRAVE_SEARCH_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+
+
 def isolate_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point home-directory lookups at the pytest temp directory."""
     monkeypatch.setenv("HOME", str(tmp_path))
