@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import suppress
 from json import JSONDecodeError, dumps, loads
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
@@ -489,7 +489,7 @@ class _ChatStreamParser:
         # level and often has empty choices.
         chunk_usage = chunk.get("usage")
         if isinstance(chunk_usage, Mapping):
-            self._usage = _parse_chunk_usage(chunk_usage)
+            self._usage = _parse_chunk_usage(cast(Mapping[str, Any], chunk_usage))
 
         choice = _first_choice(chunk)
         if choice is None:
@@ -500,7 +500,7 @@ class _ChatStreamParser:
         # fallback applies whenever this chunk lacks top-level usage.
         choice_usage = choice.get("usage")
         if not isinstance(chunk_usage, Mapping) and isinstance(choice_usage, Mapping):
-            self._usage = _parse_chunk_usage(choice_usage)
+            self._usage = _parse_chunk_usage(cast(Mapping[str, Any], choice_usage))
 
         self._finish_reason = choice.get("finish_reason") or self._finish_reason
         delta = choice.get("delta")
@@ -1008,7 +1008,7 @@ def _register_reasoning_item(
         return
     item_id = item.get("id")
     if isinstance(item_id, str):
-        items[item_id] = dict(item)
+        items[item_id] = dict(cast(Mapping[str, Any], item))
 
 
 def _register_responses_item(

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from json import JSONDecodeError, dumps, loads
 from platform import machine, release, system
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -543,10 +543,10 @@ async def _codex_provider_events(
             if isinstance(item, Mapping) and item.get("type") == "reasoning":
                 item_id = item.get("id")
                 if isinstance(item_id, str):
-                    reasoning_items[item_id] = dict(item)
+                    reasoning_items[item_id] = dict(cast(Mapping[str, Any], item))
             elif isinstance(item, Mapping) and item.get("type") == "function_call":
                 _track_tool_builder(
-                    _tool_builder_from_item(item),
+                    _tool_builder_from_item(cast(Mapping[str, Any], item)),
                     event,
                     active_tools=active_tools,
                     by_item_id=tools_by_item_id,
@@ -602,7 +602,7 @@ async def _codex_provider_events(
             if isinstance(item, Mapping) and item.get("type") == "reasoning":
                 item_id = item.get("id")
                 if isinstance(item_id, str):
-                    reasoning_items[item_id] = dict(item)
+                    reasoning_items[item_id] = dict(cast(Mapping[str, Any], item))
             elif isinstance(item, Mapping) and item.get("type") == "function_call":
                 tool_builder = _tool_builder_for_event(
                     event,
@@ -612,7 +612,7 @@ async def _codex_provider_events(
                     by_output_index=tools_by_output_index,
                 )
                 if tool_builder is None:
-                    tool_builder = _tool_builder_from_item(item)
+                    tool_builder = _tool_builder_from_item(cast(Mapping[str, Any], item))
                     _track_tool_builder(
                         tool_builder,
                         event,
@@ -622,7 +622,7 @@ async def _codex_provider_events(
                         by_output_index=tools_by_output_index,
                     )
                 else:
-                    tool_builder.update_from_item(item)
+                    tool_builder.update_from_item(cast(Mapping[str, Any], item))
                 arguments = item.get("arguments")
                 if isinstance(arguments, str):
                     tool_builder.set_arguments(arguments)
@@ -637,7 +637,7 @@ async def _codex_provider_events(
                 )
                 yield ProviderToolCallEvent(tool_call=tool_call)
             elif isinstance(item, Mapping) and item.get("type") == "message" and not content_parts:
-                text = _text_from_done_message(item)
+                text = _text_from_done_message(cast(Mapping[str, Any], item))
                 if text:
                     content_parts.append(text)
                     yield ProviderTextDeltaEvent(delta=text)

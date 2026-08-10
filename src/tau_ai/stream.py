@@ -26,6 +26,7 @@ from tau_ai.events import (
     AssistantErrorEvent,
     AssistantMessageEvent,
     AssistantStartEvent,
+    DoneReason,
     TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
@@ -77,7 +78,7 @@ def _copy_replay_metadata(target: AssistantMessage, source: AssistantMessage) ->
         target_text_block.text_signature = source_text_block.text_signature
 
 
-def _finish_reason(value: str | None, *, has_tools: bool) -> str:
+def _finish_reason(value: str | None, *, has_tools: bool) -> DoneReason:
     if has_tools or value in {"tool_calls", "tool_use", "toolUse"}:
         return "toolUse"
     if value in {"length", "max_tokens", "MAX_TOKENS", "incomplete"}:
@@ -185,11 +186,12 @@ async def canonicalize_provider_stream(
             if not final.content and event.message.content:
                 final.content = [block.model_copy(deep=True) for block in event.message.content]
             _copy_replay_metadata(final, event.message)
-            final.stop_reason = _finish_reason(
+            reason = _finish_reason(
                 event.finish_reason,
                 has_tools=bool(final.tool_calls),
-            )  # type: ignore[assignment]
-            yield AssistantDoneEvent(reason=final.stop_reason, message=final)  # type: ignore[arg-type]
+            )
+            final.stop_reason = reason
+            yield AssistantDoneEvent(reason=reason, message=final)
             terminal = True
         elif isinstance(event, ProviderErrorEvent):
             error = partial.model_copy(deep=True)
