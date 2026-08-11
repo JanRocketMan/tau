@@ -31,6 +31,7 @@ from tau_agent.messages import (
 )
 from tau_agent.tools import AgentTool, ToolCall
 from tau_agent.types import JSONValue
+from tau_ai._openai_responses import ReasoningSummaryBoundaryTracker
 from tau_ai._provider_events import (
     ProviderErrorEvent,
     ProviderEvent,
@@ -566,6 +567,7 @@ class _ResponsesStreamParser:
         self.fatal = False
         self._content_parts: list[str] = []
         self._thinking_parts: list[str] = []
+        self._reasoning_summary_boundaries = ReasoningSummaryBoundaryTracker()
         self._reasoning_items: dict[str, dict[str, JSONValue]] = {}
         self._tool_call_builders: dict[str, _ResponsesToolCallBuilder] = {}
         self._status: str | None = None
@@ -598,6 +600,8 @@ class _ResponsesStreamParser:
         ):
             delta = chunk.get("delta")
             if isinstance(delta, str) and delta:
+                if chunk_type == "response.reasoning_summary_text.delta":
+                    delta = self._reasoning_summary_boundaries.separate(chunk, delta)
                 self.emitted_content = True
                 self._thinking_parts.append(delta)
                 return [ProviderThinkingDeltaEvent(delta=delta)], False

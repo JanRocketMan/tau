@@ -23,6 +23,7 @@ from tau_agent.messages import (
 )
 from tau_agent.tools import AgentTool, ToolCall
 from tau_agent.types import JSONValue
+from tau_ai._openai_responses import ReasoningSummaryBoundaryTracker
 from tau_ai._provider_events import (
     ProviderErrorEvent,
     ProviderEvent,
@@ -508,6 +509,7 @@ async def _codex_provider_events(
 ) -> AsyncIterator[ProviderEvent]:
     content_parts: list[str] = []
     thinking_parts: list[str] = []
+    reasoning_summary_boundaries = ReasoningSummaryBoundaryTracker()
     reasoning_items: dict[str, dict[str, JSONValue]] = {}
     tool_calls: list[ToolCall] = []
     active_tools: list[_ToolCallBuilder] = []
@@ -591,6 +593,8 @@ async def _codex_provider_events(
         }:
             delta = event.get("delta")
             if isinstance(delta, str) and delta:
+                if event_type == "response.reasoning_summary_text.delta":
+                    delta = reasoning_summary_boundaries.separate(event, delta)
                 thinking_parts.append(delta)
                 yield ProviderThinkingDeltaEvent(delta=delta)
 

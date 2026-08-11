@@ -154,10 +154,10 @@ list.
 The compact status block below the prompt uses two aligned rows on a large
 enough terminal. The first row shows the session name on the left and
 `provider:model (thinking)` on the right. The second row shows the working
-directory and Jujutsu change or bookmark on the left, with provider-anchored
-active context as `used/limit` on the right. The directory name and model are
-emphasized. Parent paths, Jujutsu details, and the provider use the quieter
-metadata color.
+directory and the short Jujutsu change ID, shown as `@ <change-id>`, on the
+left, with provider-anchored active context as `used/limit` on the right. The
+directory name and model are emphasized. Parent paths, Jujutsu details, and the
+provider use the quieter metadata color.
 
 When no valid provider usage exists yet, such as immediately after compaction,
 the context value is `?/limit` until a fresh response reports usage. This active

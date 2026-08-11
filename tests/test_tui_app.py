@@ -72,6 +72,7 @@ from tau_coding.skills import Skill, format_skill_invocation
 from tau_coding.system_prompt import ProjectContextFile
 from tau_coding.tools import create_coding_tools
 from tau_coding.tui import app as tui_app
+from tau_coding.tui import widgets as tui_widgets
 from tau_coding.tui.app import (
     COMPLETION_MAX_VISIBLE_LINES,
     PASTE_DISPLAY_THRESHOLD,
@@ -470,7 +471,7 @@ def test_compact_session_info_renders_session_title_and_status() -> None:
     provider_line = next(index for index, line in enumerate(lines) if "openai:fake-model" in line)
     context_line = next(index for index, line in enumerate(lines) if "12k/200k" in line)
     assert "Untitled session" in output
-    assert "/workspace/project (--)" in output
+    assert "/workspace/project @ --" in output
     assert "context 12k/200k" not in output
     assert "openai:fake-model" in lines[provider_line]
     assert "(medium)" in lines[provider_line]
@@ -486,7 +487,7 @@ def test_compact_session_info_omits_title_in_small_layout() -> None:
 
     output = console.export_text()
     assert "Customer bugfix" not in output
-    assert "/workspace/project (--)" in output
+    assert "/workspace/project @ --" in output
     assert "openai:fake-model" in output
     assert "12k/200k" in output
 
@@ -536,10 +537,21 @@ def test_compact_session_info_styles_provider_as_metadata() -> None:
 def test_compact_session_info_styles_parent_path_as_metadata() -> None:
     cwd = _styled_cwd(Path("/workspace/project"), theme=TAU_DARK_THEME)
 
-    assert cwd.plain == "/workspace/project (--)"
+    assert cwd.plain == "/workspace/project @ --"
     assert str(cwd.spans[0].style) == TAU_DARK_THEME.completion_description
     assert str(cwd.spans[1].style) == TAU_DARK_THEME.prompt_text
     assert str(cwd.spans[2].style) == TAU_DARK_THEME.completion_description
+
+
+def test_styled_cwd_shows_jj_change_id_without_bookmark(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="nsnsoxyo\n")
+
+    monkeypatch.setattr(tui_widgets, "run", fake_run)
+
+    cwd = _styled_cwd(Path("/workspace/project"), theme=TAU_DARK_THEME)
+
+    assert cwd.plain == "/workspace/project @ nsnsoxyo"
 
 
 def test_compact_token_count_uses_thousands_suffix() -> None:
@@ -2394,7 +2406,7 @@ async def test_tui_status_shows_session_title_on_large_windows() -> None:
 
         output = console.export_text()
         assert "Customer bugfix" in output
-        assert "/workspace/project (--)" in output
+        assert "/workspace/project @ --" in output
         assert "openai:fake-model (medium)" in output
         assert "12k/200k" in output
 
@@ -2415,7 +2427,7 @@ async def test_tui_status_hides_session_title_on_small_windows(
 
         output = console.export_text()
         assert "Customer bugfix" not in output
-        assert "/workspace/project (--)" in output
+        assert "/workspace/project @ --" in output
         assert "openai:fake-model" in output
         assert "12k/200k" in output
 

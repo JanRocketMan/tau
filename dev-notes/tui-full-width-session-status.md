@@ -10,7 +10,7 @@ full terminal width at every screen size.
 The two-line status block below the prompt now shows:
 
 - the session name and active provider, model, and thinking level on the first row
-- the working directory, Jujutsu change or bookmark, and active context usage on
+- the working directory, short Jujutsu change ID, and active context usage on
   the second row
 
 The status block omits the session name when the terminal is narrower than 80

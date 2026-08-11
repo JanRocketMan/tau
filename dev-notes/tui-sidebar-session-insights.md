@@ -84,8 +84,8 @@ redundant `session` section heading, so it stands apart from other values.
 
 The compact status block below the prompt places `provider:model (thinking)` on
 its first line and context consumption as only `used/limit` on its second. It
-styles the parent portion of the working-directory path and Git branch as metadata
-while keeping the directory basename prominent.
+styles the parent portion of the working-directory path and Jujutsu details as
+metadata while keeping the directory basename prominent.
 The prompt editor keeps only its left border; focus, shell-mode, and activity
 colors update that edge without surrounding the input on all four sides. Vertical
 padding replaces the removed top and bottom border space, preserving the original
