@@ -73,8 +73,8 @@ Requests remain stateless: Tau keeps provider storage disabled and resends the
 complete transcript. The key improves cache affinity but cannot preserve a hit if
 the prefix changes or the provider cache expires. OpenAI-compatible gateways do
 not receive these fields unless their catalog compatibility settings explicitly
-opt in. The TUI sidebar's latest-request cache rate shows whether the most recent
-request actually hit.
+opt in. Provider-reported cache usage appears in the **Cache** tab of an HTML
+session export.
 
 #### Anthropic prompt caching
 
@@ -90,10 +90,9 @@ reprocessed. Which retention Tau asks for depends on how you authenticated:
   writes cost more per token and that should be a deliberate choice.
 
 Providers that speak the Anthropic protocol through a gateway rather than being
-Anthropic itself — `minimax`, `minimax-cn`, `fireworks`, and `vercel-ai-gateway` —
-send no cache breakpoints, since not every gateway accepts them. Watch the
-sidebar's cache hit rate to see caching working; see
-[The interactive session]({{< relref "./tui.md" >}}) for how to read it.
+Anthropic itself (`minimax`, `minimax-cn`, `fireworks`, and `vercel-ai-gateway`)
+send no cache breakpoints, since not every gateway accepts them. Provider-reported
+cache usage appears in the **Cache** tab of an HTML session export.
 
 #### Codex subscription context limits
 

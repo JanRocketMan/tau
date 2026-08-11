@@ -63,8 +63,9 @@ If a summary request fails, Tau falls back to a deterministic summary.
 New sessions are automatically given a short name from the first message when
 Tau can generate one. Tau shows the confirmed message first—including the
 expanded text from a prompt-template slash command—then performs naming without
-holding up that transcript update. The name appears anywhere session names are
-already shown, including the `/resume` picker and id completions.
+holding up that transcript update. On a large enough terminal, the name appears
+in the status block below the prompt. It also appears in the terminal tab title,
+the `/resume` picker, and id completions.
 
 Auto-naming makes one high-level provider request. The provider adapter may retry
 transient failures according to its configured `max_retries`. If those attempts

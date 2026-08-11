@@ -114,8 +114,8 @@ also animates during a run without adding a second spinner to each tool row.
 Tool results (like long `read` or `bash` output) render as compact previews so
 the transcript stays readable. Toggle full tool output with **Ctrl+O**. Markdown
 link hover styling underlines only the linked text, never the rest of its row. User
-message blocks use the same theme background as the prompt field and sidebar,
-with light vertical padding so they read as blocks rather than highlighted lines.
+message blocks use the same theme background as the prompt field, with light
+vertical padding so they read as blocks rather than highlighted lines.
 This visually ties submitted prompts to the composer.
 
 ## Long sessions
@@ -144,58 +144,29 @@ when you want to reduce what is sent to the model.
   teal accent for headings and list markers against its white background. See
   [Themes]({{< relref "./themes.md" >}}).
 
-## The sidebar
+## Session status
 
-On wide-enough terminals Tau shows the session name prominently without a
-redundant section label, followed by active-branch
-turn and tool-call totals, provider-reported token usage, latest-request and
-session prompt-cache hit rates, estimated cost, automatic-compaction threshold,
-and loaded tools, skills, prompt templates, extensions, and context files such as
-`AGENTS.md`. Tool, prompt, and extension
-names use compact comma-separated lists limited to three rendered lines. Skills
-and context files use bullet lists, with one item or path per line, limited to
-five entries. Truncated sections end with `...(X more)` showing how many entries
-are hidden. Project context paths are relative to the working directory; context
-loaded from the home directory starts with `~/`, while other context loaded from
-outside the project uses its full path.
+Tau uses the full terminal width for the transcript and does not show a sidebar,
+top header, or shortcut footer. Run `/session` when you need detailed model,
+resource, and context information. Run `/hotkeys` when you need the shortcut
+list.
 
-The wider, borderless sidebar uses the prompt field's background color, bright
-section headings, quieter gray values, and keeps Tau's versioned `τ = 2π` mark
-pinned to its bottom edge. Tau does not render separate
-top-header or shortcut-footer rows. Named sessions remain visible in the sidebar
-and terminal tab title; `/hotkeys` lists shortcuts when needed. The sidebar hides
-automatically when the terminal is small, while the tab title continues to
-identify the session.
+The compact status block below the prompt uses two aligned rows on a large
+enough terminal. The first row shows the session name on the left and
+`provider:model (thinking)` on the right. The second row shows the working
+directory and Jujutsu change or bookmark on the left, with provider-anchored
+active context as `used/limit` on the right. The directory name and model are
+emphasized. Parent paths, Jujutsu details, and the provider use the quieter
+metadata color.
 
-Cumulative usage and cost cover the active branch, including history replaced by
-compaction. Input usage counts tokens processed on every
-provider request, so it can be much larger than the context used by the next
-request. Cost is an estimate based on provider-reported usage and configured
-catalog rates; the sidebar shows `$N/A` when Tau lacks complete pricing data.
+When no valid provider usage exists yet, such as immediately after compaction,
+the context value is `?/limit` until a fresh response reports usage. This active
+count describes the system prompt, tools, and active messages that Tau expects
+to send on the next request. It can decrease after compaction.
 
-The cache line separates the latest model request from the cumulative session.
-Both rates are the share of prompt tokens the provider served from its cache
-instead of processing again. The latest rate makes a cache miss immediately visible and,
-after tool use, describes the most recent model continuation. The session rate
-includes every request on the active branch, including the initial cold request.
-A low latest rate usually means something early in the request changed, such as
-a reloaded tool list or thinking level, or that a pause outlived the provider's
-cache.
-Tau hides both figures for providers that do not report cache usage.
-
-The compact status block below the prompt puts `provider:model (thinking)` on its
-first line and provider-anchored active context as `used/limit` on the second. When
-no valid provider usage exists yet, such as immediately after compaction, it shows
-`?/limit` until a fresh response reports usage. Unlike cumulative usage, this
-active count describes the system prompt, tools,
-and active messages Tau expects to send on the next request. It can decrease
-after compaction while cumulative usage continues to increase. The
-working-directory name and model are emphasized while the parent path, Git
-branch, and provider use the quieter metadata color.
-
-The sidebar appears on the **right** by default. It can be moved to the **left**
-or turned **off** entirely by setting `sidebar_position` in `~/.tau/tui.json` —
-see [Configuration]({{< relref "../reference/configuration.md#tui-settings" >}}).
+Tau omits the session name from this block when the terminal is too narrow or
+too short. The remaining directory, model, thinking, and context information
+stays visible. A named session also remains in the terminal tab title.
 
 ## Next
 

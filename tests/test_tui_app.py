@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
-from rich.panel import Panel
 from textual import events
 from textual.color import Color
 from textual.containers import Container, VerticalScroll
@@ -69,7 +68,6 @@ from tau_coding.session import (
     TerminalCommandResult,
 )
 from tau_coding.session_manager import CodingSessionRecord
-from tau_coding.session_stats import SessionStats
 from tau_coding.skills import Skill, format_skill_invocation
 from tau_coding.system_prompt import ProjectContextFile
 from tau_coding.tools import create_coding_tools
@@ -131,16 +129,13 @@ from tau_coding.tui.widgets import (
     TranscriptMessageWidget,
     TranscriptView,
     TranscriptWindowBoundary,
-    _comma_list,
     _compact_token_count,
-    _sidebar_brand,
     _split_rich_style_colors,
     _styled_cwd,
     _syntax_language,
     _transcript_plain_body_text,
     render_chat_item,
     render_compact_session_info,
-    render_session_sidebar,
     transcript_item_selection_text,
 )
 
@@ -198,16 +193,6 @@ class FakeSession:
         self.state = FakeSessionState()
         self.resource_diagnostics = ()
         self.extension_names = ("permission-gate", "subagents")
-        self.session_stats = SessionStats(
-            turn_count=14,
-            tool_call_count=23,
-            input_tokens=1_200_000,
-            output_tokens=48_000,
-            cached_input_tokens=1_140_000,
-            latest_prompt_tokens=1_200_000,
-            latest_cached_input_tokens=1_188_000,
-            estimated_cost=1.24,
-        )
         self.system_prompt = "You are Tau."
         self.session_manager = None
         self._session_title: str | None = None
@@ -475,254 +460,7 @@ def _visible_footer_bindings(app: TauTuiApp) -> dict[str, str]:
     }
 
 
-def test_session_sidebar_renders_session_metadata() -> None:
-    console = Console(record=True, width=80)
-
-    console.print(render_session_sidebar(FakeSession()))
-
-    output = console.export_text()
-    assert "████████" not in output
-    assert "τ = 2π" not in output
-    assert "session" in output
-    assert "context" in output
-    assert "AGENTS.md" in output
-    assert "12k" not in output
-    assert "Untitled session" in output
-    assert "provider" not in output
-    assert "openai" not in output
-    assert "fake-model" not in output
-    assert "thinking" not in output
-    assert "location" not in output
-    assert "branch" not in output
-    assert "14 turns, 23 tool calls" in output
-    assert "usage" in output
-    assert "cumulative usage" not in output
-    assert "1.2m in, 48k out · ~$1.24" in output
-    assert "cache: 99% latest · 95% session" in output
-    assert "auto at 200k" in output
-    assert "read, write, edit, bash" in output
-    assert "• review" in output
-    assert "permission-gate, subagents" in output
-
-
-@pytest.mark.parametrize(("skill_count", "hidden_label"), [(5, None), (7, "...(2 more)")])
-def test_session_sidebar_limits_skills_to_five(
-    skill_count: int,
-    hidden_label: str | None,
-) -> None:
-    session = FakeSession()
-    session.skills = tuple(
-        Skill(name=f"skill-{index}", path=session.cwd / f"skill-{index}.md", content="Skill")
-        for index in range(1, skill_count + 1)
-    )
-    console = Console(record=True, width=80)
-
-    console.print(render_session_sidebar(session))
-
-    output = console.export_text()
-    for index in range(1, 6):
-        assert f"• skill-{index}" in output
-    assert "skill-6" not in output
-    assert "skill-7" not in output
-    if hidden_label is None:
-        assert "more)" not in output
-    else:
-        assert hidden_label in output
-
-
-def test_session_sidebar_limits_context_files_to_five() -> None:
-    session = FakeSession()
-    session.context_files = tuple(
-        ProjectContextFile(path=str(session.cwd / f"context-{index}.md"), content="Rules")
-        for index in range(1, 8)
-    )
-    console = Console(record=True, width=80)
-
-    console.print(render_session_sidebar(session))
-
-    output = console.export_text()
-    for index in range(1, 6):
-        assert f"• context-{index}.md" in output
-    assert "context-6.md" not in output
-    assert "context-7.md" not in output
-    assert "...(2 more)" in output
-
-
-def test_comma_list_limits_by_rendered_lines_instead_of_item_count() -> None:
-    items = [f"i{index}" for index in range(1, 16)]
-
-    narrow_console = Console(record=True, width=12)
-    narrow_console.print(_comma_list(items, empty="Empty", theme=TAU_DARK_THEME))
-    narrow_output = narrow_console.export_text()
-    assert "i9" in narrow_output
-    assert "i10" not in narrow_output
-    assert "...(6 more)" in narrow_output
-    assert len(narrow_output.splitlines()) == 4
-
-    wide_console = Console(record=True, width=30)
-    wide_console.print(_comma_list(items, empty="Empty", theme=TAU_DARK_THEME))
-    wide_output = wide_console.export_text()
-    assert "i15" in wide_output
-    assert "more)" not in wide_output
-    assert len(wide_output.splitlines()) == 3
-
-
-@pytest.mark.parametrize(("item_count", "hidden_label"), [(1, None), (2, "...(1 more)")])
-def test_comma_list_represents_an_oversized_first_item(
-    item_count: int,
-    hidden_label: str | None,
-) -> None:
-    oversized_name = "x" * 40
-    console = Console(record=True, width=12)
-
-    console.print(
-        _comma_list(
-            [oversized_name, "second-item"][:item_count],
-            empty="Empty",
-            theme=TAU_DARK_THEME,
-        )
-    )
-
-    output = console.export_text()
-    assert output.startswith("x" * 12)
-    assert "…" in output
-    if hidden_label is None:
-        assert len(output.splitlines()) == 3
-        assert "more)" not in output
-    else:
-        assert len(output.splitlines()) == 4
-        assert hidden_label in output
-
-
-@pytest.mark.parametrize(
-    ("attribute", "prefix"),
-    [("tools", "tool"), ("prompt_templates", "prompt"), ("extension_names", "extension")],
-)
-def test_session_sidebar_limits_comma_separated_sections_to_three_lines(
-    attribute: str,
-    prefix: str,
-) -> None:
-    session = FakeSession()
-    names = tuple(f"{prefix}-item-{index}" for index in range(1, 20))
-    values: tuple[object, ...] = names
-    if attribute != "extension_names":
-        values = tuple(SimpleNamespace(name=name) for name in names)
-    setattr(session, attribute, values)
-    console = Console(record=True, width=40)
-
-    console.print(render_session_sidebar(session))
-
-    output = console.export_text()
-    assert names[0] in output
-    assert names[-1] not in output
-    assert "...(" in output
-
-
-def test_session_sidebar_uses_na_when_cost_is_unavailable() -> None:
-    session = FakeSession()
-    session.session_stats = SessionStats(input_tokens=1200, output_tokens=300)
-    console = Console(record=True, width=80)
-
-    console.print(render_session_sidebar(session))
-
-    output = console.export_text()
-    assert "$N/A" in output
-    assert "cost unavailable" not in output
-
-
-def test_session_sidebar_omits_cache_rate_for_providers_without_caching() -> None:
-    session = FakeSession()
-    session.session_stats = SessionStats(input_tokens=1200, output_tokens=300)
-    console = Console(record=True, width=80)
-
-    console.print(render_session_sidebar(session))
-
-    output = console.export_text()
-    assert "cached" not in output
-    assert "1.2k in, 300 out" in output
-
-
-def test_session_sidebar_shows_latest_cache_miss_with_session_rate() -> None:
-    session = FakeSession()
-    session.session_stats = SessionStats(
-        input_tokens=2_000,
-        output_tokens=300,
-        cached_input_tokens=500,
-        cache_write_tokens=500,
-        latest_prompt_tokens=1_000,
-    )
-    console = Console(record=True, width=80)
-
-    console.print(render_session_sidebar(session))
-
-    output = console.export_text()
-    assert "cache: 0% latest · 25% session" in output
-
-
-def test_session_sidebar_brand_includes_current_version() -> None:
-    console = Console(record=True, width=80)
-
-    console.print(_sidebar_brand(theme=TAU_DARK_THEME))
-
-    assert "τ = 2π  0.3.8" in console.export_text()
-
-
-def test_session_sidebar_uses_prominent_title_and_accented_section_headers() -> None:
-    console = Console(record=True, width=80)
-    session = FakeSession()
-    session._session_title = "Customer bugfix"
-    sidebar = render_session_sidebar(session)
-    panels = [renderable for renderable in sidebar.renderables if isinstance(renderable, Panel)]
-    session_name = sidebar.renderables[0]
-    activity_section = sidebar.renderables[2]
-    activity_header = activity_section.renderables[0]
-    activity_content = activity_section.renderables[1]
-
-    console.print(sidebar)
-
-    output = console.export_text()
-    assert panels == []
-    assert session_name.left == 1
-    assert str(session_name.renderable.style) == f"bold {TAU_DARK_THEME.accent}"
-    assert activity_header.left == 1
-    assert str(activity_header.renderable.style) == f"bold {TAU_DARK_THEME.prompt_text}"
-    assert str(activity_content.renderable.style) == TAU_DARK_THEME.completion_description
-    assert " context" in output
-    assert " tools" in output
-    assert "─" in output
-    assert "┌" not in output
-    assert "│" not in output
-
-
-def test_session_sidebar_lists_multiple_context_files() -> None:
-    session = FakeSession()
-    session.context_files = (
-        ProjectContextFile(path=str(session.cwd / "AGENTS.md"), content="Root rules."),
-        ProjectContextFile(
-            path=str(session.cwd / ".agents" / "AGENTS.md"),
-            content="Agent rules.",
-        ),
-        ProjectContextFile(path="docs/AGENTS.md", content="Docs rules."),
-        ProjectContextFile(
-            path=str(Path.home() / ".agents" / "AGENTS.md"),
-            content="User rules.",
-        ),
-        ProjectContextFile(path="/Users/alex/.agents/AGENTS.md", content="External rules."),
-    )
-    console = Console(record=True, width=100)
-
-    console.print(render_session_sidebar(session))
-
-    output = console.export_text()
-    assert "AGENTS.md" in output
-    assert ".agents/AGENTS.md" in output
-    assert "docs/AGENTS.md" in output
-    assert "~/.agents/AGENTS.md" in output
-    assert str(Path.home() / ".agents" / "AGENTS.md") not in output
-    assert "/Users/alex/.agents/AGENTS.md" in output
-
-
-def test_compact_session_info_renders_sidebar_facts() -> None:
+def test_compact_session_info_renders_session_title_and_status() -> None:
     console = Console(record=True, width=120)
 
     console.print(render_compact_session_info(FakeSession()))
@@ -731,11 +469,26 @@ def test_compact_session_info_renders_sidebar_facts() -> None:
     lines = output.splitlines()
     provider_line = next(index for index, line in enumerate(lines) if "openai:fake-model" in line)
     context_line = next(index for index, line in enumerate(lines) if "12k/200k" in line)
+    assert "Untitled session" in output
     assert "/workspace/project (--)" in output
     assert "context 12k/200k" not in output
     assert "openai:fake-model" in lines[provider_line]
     assert "(medium)" in lines[provider_line]
     assert context_line == provider_line + 1
+
+
+def test_compact_session_info_omits_title_in_small_layout() -> None:
+    session = FakeSession()
+    session._session_title = "Customer bugfix"
+    console = Console(record=True, width=79)
+
+    console.print(render_compact_session_info(session, show_session_title=False))
+
+    output = console.export_text()
+    assert "Customer bugfix" not in output
+    assert "/workspace/project (--)" in output
+    assert "openai:fake-model" in output
+    assert "12k/200k" in output
 
 
 def test_compact_session_info_shows_unknown_without_provider_usage() -> None:
@@ -2399,11 +2152,12 @@ async def test_tui_submit_multiple_large_pastes_sends_all_full_content() -> None
 
 
 @pytest.mark.anyio
-async def test_tui_app_mounts_sidebar_and_transcript() -> None:
+async def test_tui_app_mounts_status_and_transcript_without_sidebar() -> None:
     app = TauTuiApp(FakeSession())
 
     async with app.run_test(size=(120, 30)):
-        assert app.query_one("#sidebar") is not None
+        assert not app.query("#sidebar")
+        assert app.query_one("#compact-session-info") is not None
         transcript = app.query_one("#transcript")
         assert transcript is not None
         assert transcript.min_width == 1
@@ -2628,141 +2382,71 @@ async def test_tui_prompt_grows_to_six_lines_then_scrolls() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_sidebar_is_visible_on_medium_windows() -> None:
-    app = TauTuiApp(FakeSession())
-
-    async with app.run_test(size=(120, 40)):
-        sidebar = app.query_one("#sidebar")
-        sidebar_brand = app.query_one("#sidebar-brand", Static)
-        compact_info = app.query_one("#compact-session-info")
-        assert sidebar.display is True
-        assert sidebar.region.width == 40
-        assert sidebar.styles.padding.left == 2
-        assert sidebar.styles.border_left[0] == ""
-        assert sidebar.styles.border_right[0] == ""
-        assert sidebar.styles.border_top[0] == ""
-        assert sidebar.styles.border_bottom[0] == ""
-        assert sidebar_brand.region.bottom == sidebar.content_region.bottom
-        assert sidebar.styles.background == Color.parse(CODEYELLOW_THEME.prompt_background)
-        assert compact_info.display is True
-        assert not app.has_class("-hide-sidebar")
-
-
-@pytest.mark.anyio
-async def test_tui_sidebar_fills_workspace_height() -> None:
-    app = TauTuiApp(FakeSession())
-
-    async with app.run_test(size=(120, 40)):
-        workspace = app.query_one("#workspace")
-        sidebar = app.query_one("#sidebar")
-
-        assert sidebar.region.height == workspace.region.height
-        assert sidebar.outer_size.height == workspace.size.height
-
-
-@pytest.mark.anyio
-async def test_tui_sidebar_hides_on_narrow_windows() -> None:
-    app = TauTuiApp(FakeSession())
-
-    async with app.run_test(size=(80, 30)):
-        sidebar = app.query_one("#sidebar")
-        compact_info = app.query_one("#compact-session-info")
-        assert sidebar.display is False
-        assert compact_info.display is True
-        assert app.has_class("-hide-sidebar")
-
-
-@pytest.mark.anyio
-async def test_tui_sidebar_hides_on_short_windows() -> None:
-    app = TauTuiApp(FakeSession())
+async def test_tui_status_shows_session_title_on_large_windows() -> None:
+    session = FakeSession()
+    session._session_title = "Customer bugfix"
+    app = TauTuiApp(session)
 
     async with app.run_test(size=(120, 30)):
-        sidebar = app.query_one("#sidebar")
-        compact_info = app.query_one("#compact-session-info")
-        assert sidebar.display is False
-        assert compact_info.display is True
-        assert app.has_class("-hide-sidebar")
+        compact_info = app.query_one("#compact-session-info", Static)
+        console = Console(record=True, width=120, file=StringIO())
+        console.print(compact_info.content)
+
+        output = console.export_text()
+        assert "Customer bugfix" in output
+        assert "/workspace/project (--)" in output
+        assert "openai:fake-model (medium)" in output
+        assert "12k/200k" in output
 
 
 @pytest.mark.anyio
-async def test_tui_sidebar_visibility_updates_on_resize() -> None:
-    app = TauTuiApp(FakeSession())
+@pytest.mark.parametrize("size", [(79, 30), (120, 19)])
+async def test_tui_status_hides_session_title_on_small_windows(
+    size: tuple[int, int],
+) -> None:
+    session = FakeSession()
+    session._session_title = "Customer bugfix"
+    app = TauTuiApp(session)
 
-    async with app.run_test(size=(120, 40)) as pilot:
-        sidebar = app.query_one("#sidebar")
-        compact_info = app.query_one("#compact-session-info")
-        assert sidebar.display is True
-        assert compact_info.display is True
+    async with app.run_test(size=size):
+        compact_info = app.query_one("#compact-session-info", Static)
+        console = Console(record=True, width=size[0], file=StringIO())
+        console.print(compact_info.content)
 
-        await pilot.resize_terminal(width=80, height=40)
+        output = console.export_text()
+        assert "Customer bugfix" not in output
+        assert "/workspace/project (--)" in output
+        assert "openai:fake-model" in output
+        assert "12k/200k" in output
+
+
+@pytest.mark.anyio
+async def test_tui_status_session_title_visibility_updates_on_resize() -> None:
+    session = FakeSession()
+    session._session_title = "Customer bugfix"
+    app = TauTuiApp(session)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        compact_info = app.query_one("#compact-session-info", Static)
+
+        def status_text(width: int) -> str:
+            console = Console(record=True, width=width, file=StringIO())
+            console.print(compact_info.content)
+            return console.export_text()
+
+        assert "Customer bugfix" in status_text(120)
+
+        await pilot.resize_terminal(width=79, height=30)
         await pilot.pause()
-        assert sidebar.display is False
-        assert compact_info.display is True
+        assert "Customer bugfix" not in status_text(79)
+
+        await pilot.resize_terminal(width=120, height=19)
+        await pilot.pause()
+        assert "Customer bugfix" not in status_text(120)
 
         await pilot.resize_terminal(width=120, height=30)
         await pilot.pause()
-        assert sidebar.display is False
-        assert compact_info.display is True
-
-        await pilot.resize_terminal(width=120, height=40)
-        await pilot.pause()
-        assert sidebar.display is True
-        assert compact_info.display is True
-
-
-@pytest.mark.anyio
-async def test_tui_sidebar_shows_on_right_by_default() -> None:
-    app = TauTuiApp(FakeSession())
-
-    async with app.run_test(size=(120, 40)):
-        sidebar = app.query_one("#sidebar")
-        assert sidebar.display is True
-        assert app.has_class("-sidebar-right")
-        assert not app.has_class("-sidebar-off")
-
-
-@pytest.mark.anyio
-async def test_tui_sidebar_shows_on_left_when_configured() -> None:
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(sidebar_position="left"))
-
-    async with app.run_test(size=(120, 40)):
-        sidebar = app.query_one("#sidebar")
-        assert sidebar.display is True
-        assert not app.has_class("-sidebar-right")
-        assert not app.has_class("-sidebar-off")
-
-
-@pytest.mark.anyio
-async def test_tui_sidebar_is_hidden_when_off() -> None:
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(sidebar_position="off"))
-
-    async with app.run_test(size=(120, 30)):
-        sidebar = app.query_one("#sidebar")
-        assert sidebar.display is False
-        assert app.has_class("-hide-sidebar")
-        assert not app.has_class("-sidebar-right")
-
-
-@pytest.mark.anyio
-async def test_tui_sidebar_right_still_hides_on_small_windows() -> None:
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(sidebar_position="right"))
-
-    async with app.run_test(size=(80, 30)):
-        sidebar = app.query_one("#sidebar")
-        assert sidebar.display is False
-        assert app.has_class("-hide-sidebar")
-        assert app.has_class("-sidebar-right")
-
-
-@pytest.mark.anyio
-async def test_tui_sidebar_off_ignores_responsive_toggle() -> None:
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(sidebar_position="off"))
-
-    async with app.run_test(size=(120, 30)):
-        sidebar = app.query_one("#sidebar")
-        assert sidebar.display is False
-        assert app.has_class("-hide-sidebar")
-        assert not app.has_class("-sidebar-right")
+        assert "Customer bugfix" in status_text(120)
 
 
 @pytest.mark.anyio
@@ -3210,9 +2894,9 @@ async def test_tui_app_updates_terminal_title_after_auto_session_naming() -> Non
         await app._run_prompt("debug the login flow")
 
         assert "\x1b]0;τ | Debug login\x07" in writes
-        sidebar_content = app.query_one("#sidebar-content", Static)
+        compact_info = app.query_one("#compact-session-info", Static)
         console = Console(record=True, width=80, file=StringIO())
-        console.print(sidebar_content.content)
+        console.print(compact_info.content)
         assert "Debug login" in console.export_text()
         assert writes[-1] == "\x1b]0;τ | Debug login\x07"
 
@@ -5846,7 +5530,7 @@ async def test_tui_app_omits_textual_header() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_name_updates_sidebar() -> None:
+async def test_tui_app_name_updates_status() -> None:
     app = TauTuiApp(FakeSession())
 
     async with app.run_test() as pilot:
@@ -5855,9 +5539,9 @@ async def test_tui_app_name_updates_sidebar() -> None:
         await pilot.press("enter")
         await pilot.pause()
 
-        sidebar_content = app.query_one("#sidebar-content", Static)
+        compact_info = app.query_one("#compact-session-info", Static)
         console = Console(record=True, width=80, file=StringIO())
-        console.print(sidebar_content.content)
+        console.print(compact_info.content)
         assert "Customer bugfix" in console.export_text()
 
 

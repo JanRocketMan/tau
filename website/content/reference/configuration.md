@@ -16,7 +16,7 @@ those locations and file formats.
 ├── credentials.json    # saved API keys / OAuth tokens (0600, atomic writes)
 ├── settings.json       # general settings (trust default, shell prefix)
 ├── trust.json          # versioned project-input trust decisions
-├── tui.json            # TUI theme, keybindings, and layout
+├── tui.json            # TUI theme, keybindings, and notifications
 ├── sessions/           # saved sessions, per project
 ├── skills/             # user-level skills
 ├── prompts/            # user-level prompt templates
@@ -369,7 +369,6 @@ The built-in frontend reads optional settings from `~/.tau/tui.json`:
 ```json
 {
   "theme": "high-contrast",
-  "sidebar_position": "right",
   "turn_notification": "desktop",
   "keybindings": {
     "cancel": "escape",
@@ -400,9 +399,6 @@ settings and keybinding names so a `tui.json` written by a newer Tau version doe
 not prevent an older version from starting. Recognized settings remain strict:
 Tau rejects invalid values, empty keys, and duplicate assignments.
 
-- `sidebar_position`: `"right"` (default), `"left"`, or `"off"`. Controls
-  placement of the session metadata sidebar. `"off"` hides the sidebar entirely;
-  the compact session info row below the prompt still works.
 - `turn_notification`: `"desktop"` (default), `"bell"`, or `"off"`. When Tau's
   terminal surface is unfocused and the agent becomes fully idle, `"desktop"`
   selects OSC 9 for Ghostty, iTerm2, and MinTTY, or Kitty's OSC 99 protocol for

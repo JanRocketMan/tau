@@ -215,21 +215,8 @@ def test_tui_turn_notification_rejects_invalid_value() -> None:
         tui_settings_from_json({"turn_notification": True})
 
 
-def test_tui_sidebar_position_defaults_to_right() -> None:
-    assert TuiSettings().sidebar_position == "right"
-    assert tui_settings_from_json({}).sidebar_position == "right"
+def test_tui_settings_ignore_removed_sidebar_position() -> None:
+    settings = tui_settings_from_json({"sidebar_position": "left"})
 
-
-def test_tui_sidebar_position_roundtrips() -> None:
-    for value in ("left", "right", "off"):
-        settings = tui_settings_from_json({"sidebar_position": value})
-        assert settings.sidebar_position == value
-        assert settings.to_json()["sidebar_position"] == value
-
-
-def test_tui_sidebar_position_rejects_invalid() -> None:
-    with pytest.raises(TuiConfigError, match="sidebar_position"):
-        tui_settings_from_json({"sidebar_position": "top"})
-
-    with pytest.raises(TuiConfigError, match="sidebar_position"):
-        tui_settings_from_json({"sidebar_position": 123})
+    assert settings == TuiSettings()
+    assert "sidebar_position" not in settings.to_json()

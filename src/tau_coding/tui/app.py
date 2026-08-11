@@ -164,7 +164,6 @@ from tau_coding.tui.themes import (
 )
 from tau_coding.tui.widgets import (
     CompactSessionInfo,
-    SessionSidebar,
     TranscriptView,
     _custom_markup_to_text,
     render_completion_suggestions,
@@ -174,8 +173,8 @@ _textual_theme_for_tau_theme = textual_theme_for_tui_theme
 _theme_css_variables = theme_css_variables
 
 type BindingEntry = Binding | tuple[str, str] | tuple[str, str, str]
-SIDEBAR_MIN_WIDTH = 96
-SIDEBAR_MIN_HEIGHT = 38
+SESSION_TITLE_MIN_WIDTH = 80
+SESSION_TITLE_MIN_HEIGHT = 20
 ACTIVITY_TICK_SECONDS = 0.15
 ACTIVITY_COLOR_FADE_STEPS = 24
 ACTIVITY_INDICATOR_HEIGHT = 3
@@ -2906,42 +2905,9 @@ class TauTuiApp(App[None]):
         color: $tau-accent;
     }
 
-    #workspace {
-        height: 1fr;
-    }
-
-    #sidebar {
-        width: 40;
-        min-width: 36;
-        height: 1fr;
-        padding: 1 1 1 2;
-        background: $tau-prompt-background;
-        border: none;
-    }
-
-    #sidebar-content {
-        height: 1fr;
-    }
-
-    #sidebar-brand {
-        height: auto;
-        color: $tau-prompt-text;
-    }
-
-    TauTuiApp.-hide-sidebar #sidebar {
-        display: none;
-    }
-
-    TauTuiApp.-hide-sidebar #main-pane {
-        padding-left: 1;
-    }
-
-    TauTuiApp.-sidebar-right #sidebar {
-        dock: right;
-    }
-
     #main-pane {
         width: 1fr;
+        height: 1fr;
         padding: 1 1 0 1;
     }
 
@@ -3612,31 +3578,29 @@ class TauTuiApp(App[None]):
 
     def compose(self) -> ComposeResult:
         """Compose the TUI widgets."""
-        with Horizontal(id="workspace"):
-            yield SessionSidebar(id="sidebar")
-            with Vertical(id="main-pane"):
-                yield TranscriptView(
-                    id="transcript",
-                    min_width=1,
-                    wrap=True,
-                    highlight=True,
-                    markup=False,
+        with Vertical(id="main-pane"):
+            yield TranscriptView(
+                id="transcript",
+                min_width=1,
+                wrap=True,
+                highlight=True,
+                markup=False,
+            )
+            # Component seam: host-managed mount points for
+            # extension widgets. Empty until an extension mounts into them.
+            yield Container(id="main-slot")
+            yield Container(id="above-prompt-slot")
+            yield Static("", id="queued-messages")
+            with Horizontal(id="prompt-row"):
+                yield Static("τ", id="prompt-prefix")
+                yield PromptInput(
+                    placeholder=PROMPT_PLACEHOLDER,
+                    id="prompt",
+                    tui_keybindings=self.tui_settings.keybindings,
                 )
-                # Component seam: host-managed mount points for
-                # extension widgets. Empty until an extension mounts into them.
-                yield Container(id="main-slot")
-                yield Container(id="above-prompt-slot")
-                yield Static("", id="queued-messages")
-                with Horizontal(id="prompt-row"):
-                    yield Static("τ", id="prompt-prefix")
-                    yield PromptInput(
-                        placeholder=PROMPT_PLACEHOLDER,
-                        id="prompt",
-                        tui_keybindings=self.tui_settings.keybindings,
-                    )
-                yield CompactSessionInfo(id="compact-session-info")
-                yield Static("", id="autocomplete")
-                yield Container(id="below-prompt-slot")
+            yield CompactSessionInfo(id="compact-session-info")
+            yield Static("", id="autocomplete")
+            yield Container(id="below-prompt-slot")
 
     async def on_mount(self) -> None:
         """Focus the prompt when the app starts."""
@@ -3645,7 +3609,6 @@ class TauTuiApp(App[None]):
         self._sync_prompt_shell_mode(prompt.text)
         prompt.focus()
         self._update_responsive_layout(self.size.width, self.size.height)
-        self._apply_sidebar_position()
         self._refresh()
         self._sync_text_selection_state()
         self._refresh_completions()
@@ -4642,7 +4605,6 @@ class TauTuiApp(App[None]):
             keybindings=self.tui_settings.keybindings,
             theme=theme,
             auto_copy_selection=self.tui_settings.auto_copy_selection,
-            sidebar_position=self.tui_settings.sidebar_position,
             turn_notification=self.tui_settings.turn_notification,
         )
 
@@ -5714,8 +5676,6 @@ class TauTuiApp(App[None]):
         self._sync_session_title()
         self._sync_text_selection_state()
         self._sync_queue_state()
-        sidebar = self.query_one("#sidebar", SessionSidebar)
-        sidebar.update_from_session(self.session, theme=theme)
         compact_info = self.query_one("#compact-session-info", CompactSessionInfo)
         compact_info.update_from_session(self.session, theme=theme)
         queued_messages = self.query_one("#queued-messages", Static)
@@ -5908,17 +5868,15 @@ class TauTuiApp(App[None]):
         )
 
     def _update_responsive_layout(self, width: int, height: int) -> None:
-        if self.tui_settings.sidebar_position == "off":
-            return
-        show_sidebar = width >= SIDEBAR_MIN_WIDTH and height >= SIDEBAR_MIN_HEIGHT
-        self.set_class(not show_sidebar, "-hide-sidebar")
-
-    def _apply_sidebar_position(self) -> None:
-        """Apply CSS classes for the configured sidebar position."""
-        pos = self.tui_settings.sidebar_position
-        self.set_class(pos == "right", "-sidebar-right")
-        if pos == "off":
-            self.add_class("-hide-sidebar")
+        """Hide the session title when it would crowd a small terminal."""
+        compact_info = self.query_one("#compact-session-info", CompactSessionInfo)
+        compact_info.set_session_title_visible(
+            width >= SESSION_TITLE_MIN_WIDTH and height >= SESSION_TITLE_MIN_HEIGHT
+        )
+        compact_info.update_from_session(
+            self.session,
+            theme=self.tui_settings.resolved_theme,
+        )
 
     def _build_completion_state(self, text: str) -> CompletionState:
         registry = _session_command_registry(self.session)
