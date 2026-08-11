@@ -11,6 +11,7 @@ from tau_agent import (
     ThinkingContent,
     ToolResultMessage,
     UserMessage,
+    message_text,
 )
 from tau_agent.session import (
     BranchSummaryEntry,
@@ -21,6 +22,7 @@ from tau_agent.session import (
     LeafEntry,
     MessageEntry,
     ModelChangeEntry,
+    SessionEntry,
     SessionJsonlError,
     SessionState,
     SessionTreeError,
@@ -67,13 +69,13 @@ def test_custom_message_round_trips_with_pi_role_and_metadata() -> None:
 
 
 def test_assistant_and_tool_result_round_trip_canonical_blocks() -> None:
-    assistant = MessageEntry(id="a", message=AssistantMessage(content="Hi"))
+    assistant = MessageEntry(id="a", message=AssistantMessage(content=[TextContent(text="Hi")]))
     result = MessageEntry(
         id="r",
         message=ToolResultMessage(
             tool_call_id="call-1",
             tool_name="edit",
-            content="Successfully replaced 1 block.",
+            content=[TextContent(text="Successfully replaced 1 block.")],
             details={"patch": "--- a.py\n+++ a.py"},
         ),
     )
@@ -289,8 +291,8 @@ async def test_jsonl_storage_reads_existing_file_with_unicode_line_separator(
 
 def test_session_state_replays_linear_entries() -> None:
     user = UserMessage(content="Hi", timestamp=1)
-    assistant = AssistantMessage(content="Hello", timestamp=2)
-    entries = [
+    assistant = AssistantMessage(content=[TextContent(text="Hello")], timestamp=2)
+    entries: list[SessionEntry] = [
         MessageEntry(id="user", message=user),
         ModelChangeEntry(id="model", model="fake-model"),
         MessageEntry(id="assistant", message=assistant),
@@ -308,9 +310,12 @@ def test_session_state_replays_linear_entries() -> None:
 
 
 def test_session_state_applies_compaction_and_branch_summary() -> None:
-    entries = [
+    entries: list[SessionEntry] = [
         MessageEntry(id="user", message=UserMessage(content="Explain sessions.")),
-        MessageEntry(id="assistant", message=AssistantMessage(content="They are trees.")),
+        MessageEntry(
+            id="assistant",
+            message=AssistantMessage(content=[TextContent(text="They are trees.")]),
+        ),
         CompactionEntry(
             id="compact",
             summary="The user asked about sessions.",
@@ -322,13 +327,17 @@ def test_session_state_applies_compaction_and_branch_summary() -> None:
     state = SessionState.from_entries(entries)
 
     assert [message.role for message in state.messages] == ["user", "user"]
-    assert "The user asked about sessions." in state.messages[0].text
-    assert "A side branch explored storage." in state.messages[1].text
+    assert "The user asked about sessions." in message_text(state.messages[0])
+    assert "A side branch explored storage." in message_text(state.messages[1])
 
 
 def test_path_to_entry_follows_parent_chain() -> None:
     root = MessageEntry(id="root", message=UserMessage(content="Hi"))
-    child = MessageEntry(id="child", parent_id="root", message=AssistantMessage(content="Hello"))
+    child = MessageEntry(
+        id="child",
+        parent_id="root",
+        message=AssistantMessage(content=[TextContent(text="Hello")]),
+    )
     leaf = LeafEntry(id="leaf", parent_id="child", entry_id="child")
 
     assert [entry.id for entry in path_to_entry([root, child, leaf], "child")] == [

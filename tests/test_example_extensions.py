@@ -7,12 +7,19 @@ mocking the extension API, these load the real files through the real
 for how extension authors can test their own extensions.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 from tau_agent.messages import TextContent
-from tau_agent.tools import AgentTool, AgentToolResult
+from tau_agent.tools import (
+    AgentTool,
+    AgentToolResult,
+    ToolCancellationToken,
+    ToolUpdateCallback,
+)
+from tau_agent.types import JSONValue
 from tau_coding import TauResourcePaths
 from tau_coding.extensions import ExtensionRuntime
 
@@ -44,7 +51,12 @@ def _runtime_with_examples(tmp_path: Path, *names: str) -> ExtensionRuntime:
 def _fake_tool(name: str) -> tuple[AgentTool, list[dict[str, object]]]:
     executed: list[dict[str, object]] = []
 
-    async def executor(tool_call_id, arguments, signal=None, on_update=None):  # noqa: ANN001, ANN202
+    async def executor(
+        tool_call_id: str,
+        arguments: Mapping[str, JSONValue],
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
+    ) -> AgentToolResult:
         del tool_call_id, signal, on_update
         executed.append(dict(arguments))
         return AgentToolResult(content=[TextContent(text="ran")])

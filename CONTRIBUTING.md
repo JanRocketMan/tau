@@ -63,6 +63,7 @@ Run the relevant focused tests while developing, then run the full checks before
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
+uv run ty check
 uv run mypy
 ```
 

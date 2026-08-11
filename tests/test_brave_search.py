@@ -151,7 +151,9 @@ async def test_success_sends_auth_header_and_formats_results() -> None:
     assert details["count"] == 1
     results = details["results"]
     assert isinstance(results, list)
-    assert results[0]["url"] == "https://example.test/tau"
+    first_result = results[0]
+    assert isinstance(first_result, dict)
+    assert first_result["url"] == "https://example.test/tau"
     assert TEST_API_KEY not in str(details)
 
 

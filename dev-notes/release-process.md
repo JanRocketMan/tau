@@ -33,6 +33,7 @@ A production release starts by intentionally changing that value.
    ```bash
    uv run pytest
    uv run ruff check .
+   uv run ty check
    uv run mypy
    ```
 

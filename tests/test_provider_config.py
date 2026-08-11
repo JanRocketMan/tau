@@ -30,7 +30,7 @@ from tau_coding.provider_config import (
     set_provider_thinking_level,
     upsert_openai_compatible_provider,
 )
-from tau_coding.thinking import ThinkingLevel
+from tau_coding.thinking import ThinkingLevel, ThinkingParameter
 
 
 def test_stale_preferences_cannot_restore_removed_codex_alias(tmp_path: Path) -> None:
@@ -281,6 +281,21 @@ def test_save_and_load_provider_settings_round_trip(
 
 
 def test_legacy_provider_model_cost_tiers_round_trip() -> None:
+    expected_cost_tiers = [
+        {
+            "max_input_tokens": 512000,
+            "input": 0.3,
+            "output": 1.2,
+            "cacheRead": 0.06,
+            "cacheWrite": 0,
+        },
+        {
+            "input": 0.6,
+            "output": 2.4,
+            "cacheRead": 0.12,
+            "cacheWrite": 0,
+        },
+    ]
     raw = {
         "default_provider": "local",
         "providers": [
@@ -299,21 +314,7 @@ def test_legacy_provider_model_cost_tiers_round_trip() -> None:
                             "cacheRead": 0.06,
                             "cacheWrite": 0,
                         },
-                        "cost_tiers": [
-                            {
-                                "max_input_tokens": 512000,
-                                "input": 0.3,
-                                "output": 1.2,
-                                "cacheRead": 0.06,
-                                "cacheWrite": 0,
-                            },
-                            {
-                                "input": 0.6,
-                                "output": 2.4,
-                                "cacheRead": 0.12,
-                                "cacheWrite": 0,
-                            },
-                        ],
+                        "cost_tiers": expected_cost_tiers,
                     }
                 },
             }
@@ -324,13 +325,26 @@ def test_legacy_provider_model_cost_tiers_round_trip() -> None:
     settings = provider_settings_from_json(raw)
     provider = settings.get_provider("local")
     assert isinstance(provider, OpenAICompatibleProviderConfig)
-    assert (
-        provider.model_metadata["qwen"].to_json()["cost_tiers"]
-        == raw["providers"][0]["model_metadata"]["qwen"]["cost_tiers"]
-    )
+    assert provider.model_metadata["qwen"].to_json()["cost_tiers"] == expected_cost_tiers
 
 
 def test_legacy_provider_cost_tier_accepts_one_hour_cache_write_rate() -> None:
+    expected_cost_tiers = [
+        {
+            "max_input_tokens": 512000,
+            "input": 0.3,
+            "output": 1.2,
+            "cacheRead": 0.06,
+            "cacheWrite": 0.375,
+            "cacheWrite1h": 0.6,
+        },
+        {
+            "input": 0.6,
+            "output": 2.4,
+            "cacheRead": 0.12,
+            "cacheWrite": 0.75,
+        },
+    ]
     raw = {
         "default_provider": "local",
         "providers": [
@@ -343,22 +357,7 @@ def test_legacy_provider_cost_tier_accepts_one_hour_cache_write_rate() -> None:
                 "default_model": "qwen",
                 "model_metadata": {
                     "qwen": {
-                        "cost_tiers": [
-                            {
-                                "max_input_tokens": 512000,
-                                "input": 0.3,
-                                "output": 1.2,
-                                "cacheRead": 0.06,
-                                "cacheWrite": 0.375,
-                                "cacheWrite1h": 0.6,
-                            },
-                            {
-                                "input": 0.6,
-                                "output": 2.4,
-                                "cacheRead": 0.12,
-                                "cacheWrite": 0.75,
-                            },
-                        ],
+                        "cost_tiers": expected_cost_tiers,
                     }
                 },
             }
@@ -369,14 +368,11 @@ def test_legacy_provider_cost_tier_accepts_one_hour_cache_write_rate() -> None:
     settings = provider_settings_from_json(raw)
     provider = settings.get_provider("local")
     assert isinstance(provider, OpenAICompatibleProviderConfig)
-    tiers = provider.model_metadata["qwen"].cost_tiers
+    tiers = tuple(provider.model_metadata["qwen"].cost_tiers)
     assert tiers[0].cost["cacheWrite1h"] == 0.6
     # Tiers without the key omit it, so billing can fall back to cacheWrite.
     assert "cacheWrite1h" not in tiers[1].cost
-    assert (
-        provider.model_metadata["qwen"].to_json()["cost_tiers"]
-        == raw["providers"][0]["model_metadata"]["qwen"]["cost_tiers"]
-    )
+    assert provider.model_metadata["qwen"].to_json()["cost_tiers"] == expected_cost_tiers
 
 
 @pytest.mark.parametrize(
@@ -840,6 +836,7 @@ def test_kimi_k3_maps_thinking_levels_to_reasoning_effort(
     monkeypatch.setenv("OPENCODE_API_KEY", "test-key")
     settings = load_provider_settings(TauPaths(home=Path("/missing")))
     provider = settings.get_provider("opencode-go")
+    assert isinstance(provider, OpenAICompatibleProviderConfig)
 
     config = openai_compatible_config_from_provider(
         provider,
@@ -961,7 +958,7 @@ def test_provider_has_usable_credentials_checks_stored_key_and_env(
 )
 def test_openai_compatible_config_from_provider_sets_reasoning_parameter(
     monkeypatch: pytest.MonkeyPatch,
-    parameter: str,
+    parameter: ThinkingParameter,
     expected: str,
 ) -> None:
     monkeypatch.setenv("LOCAL_API_KEY", "test-key")
@@ -972,7 +969,7 @@ def test_openai_compatible_config_from_provider_sets_reasoning_parameter(
         models=("reasoner",),
         default_model="reasoner",
         thinking_levels=("low", "high"),
-        thinking_parameter=parameter,  # type: ignore[arg-type]
+        thinking_parameter=parameter,
     )
 
     config = openai_compatible_config_from_provider(

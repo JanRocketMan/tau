@@ -22,15 +22,19 @@ from tau_agent import (
     SimpleCancellationToken,
     TextContent,
     ToolCall,
+    ToolCancellationToken,
     ToolExecutionEndEvent,
     ToolExecutionUpdateEvent,
+    ToolExecutor,
     ToolResultMessage,
+    ToolUpdateCallback,
     UserMessage,
+    message_text,
 )
 from tau_agent.loop import run_agent_loop
-from tau_agent.provider_events import ThinkingDeltaEvent
+from tau_agent.provider_events import TextDeltaEvent, ThinkingDeltaEvent
 from tau_agent.types import JSONValue
-from tau_ai import CancellationToken, FakeProvider
+from tau_ai import FakeProvider
 
 
 async def _collect(stream: AsyncIterator[AgentEvent]) -> list[AgentEvent]:
@@ -39,8 +43,8 @@ async def _collect(stream: AsyncIterator[AgentEvent]) -> list[AgentEvent]:
 
 def _tool(
     name: str,
-    execute_fn,
-) -> AgentTool:  # noqa: ANN001
+    execute_fn: ToolExecutor,
+) -> AgentTool:
     return AgentTool(
         name=name,
         label=name.title(),
@@ -53,7 +57,7 @@ def _tool(
 @pytest.mark.anyio
 async def test_agent_loop_streams_canonical_nested_events() -> None:
     messages: list[AgentMessage] = [UserMessage(content="Say hello")]
-    assistant = AssistantMessage(content="Hello", model="fake")
+    assistant = AssistantMessage(content=[TextContent(text="Hello")], model="fake")
     provider = FakeProvider(
         [[assistant_start(), text_delta("Hel"), text_delta("lo"), assistant_done(assistant)]]
     )
@@ -78,15 +82,20 @@ async def test_agent_loop_streams_canonical_nested_events() -> None:
         "turn_end",
         "agent_end",
     ]
-    updates = [event for event in events if isinstance(event, MessageUpdateEvent)]
-    assert [event.assistant_message_event.delta for event in updates] == ["Hel", "lo"]  # type: ignore[union-attr]
+    updates = [
+        event.assistant_message_event
+        for event in events
+        if isinstance(event, MessageUpdateEvent)
+        and isinstance(event.assistant_message_event, TextDeltaEvent)
+    ]
+    assert [event.delta for event in updates] == ["Hel", "lo"]
     assert messages == [messages[0], assistant]
 
 
 @pytest.mark.anyio
 async def test_agent_loop_nests_thinking_events_without_losing_final_message() -> None:
     messages: list[AgentMessage] = [UserMessage(content="Think briefly")]
-    assistant = AssistantMessage(content="Done", model="fake")
+    assistant = AssistantMessage(content=[TextContent(text="Done")], model="fake")
     provider = FakeProvider(
         [
             [
@@ -126,8 +135,8 @@ async def test_agent_loop_executes_tool_and_emits_tool_result_message_lifecycle(
     async def execute(
         tool_call_id: str,
         arguments: Mapping[str, JSONValue],
-        signal: CancellationToken | None = None,
-        on_update=None,  # noqa: ANN001
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
         del tool_call_id, signal, on_update
         return AgentToolResult(
@@ -137,7 +146,7 @@ async def test_agent_loop_executes_tool_and_emits_tool_result_message_lifecycle(
 
     tool_call = ToolCall(id="call-1", name="read", arguments={"path": "README.md"})
     first = AssistantMessage(content=[TextContent(text="Reading."), tool_call], model="fake")
-    final = AssistantMessage(content="Done.", model="fake")
+    final = AssistantMessage(content=[TextContent(text="Done.")], model="fake")
     provider = FakeProvider(
         [
             [assistant_start(), tool_call_end(tool_call), assistant_done(first, "toolUse")],
@@ -173,24 +182,24 @@ async def test_agent_loop_executes_tool_and_emits_tool_result_message_lifecycle(
 
 @pytest.mark.anyio
 async def test_agent_loop_passes_call_id_signal_and_progress_to_tool() -> None:
-    observed: list[tuple[str, CancellationToken | None]] = []
+    observed: list[tuple[str, ToolCancellationToken | None]] = []
 
     async def execute(
         tool_call_id: str,
         arguments: Mapping[str, JSONValue],
-        signal: CancellationToken | None = None,
-        on_update=None,  # noqa: ANN001
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
         del arguments
         observed.append((tool_call_id, signal))
         assert on_update is not None
-        on_update(AgentToolResult(content="working"))
+        on_update(AgentToolResult(content=[TextContent(text="working")]))
         await asyncio.sleep(0)
-        return AgentToolResult(content="done")
+        return AgentToolResult(content=[TextContent(text="done")])
 
     call = ToolCall(id="call-1", name="work", arguments={})
     first = AssistantMessage(content=[call], model="fake")
-    final = AssistantMessage(content="finished", model="fake")
+    final = AssistantMessage(content=[TextContent(text="finished")], model="fake")
     provider = FakeProvider(
         [
             [assistant_start(), tool_call_end(call), assistant_done(first, "toolUse")],
@@ -275,7 +284,7 @@ async def test_agent_loop_converts_provider_error_to_assistant_error_message() -
 @pytest.mark.anyio
 async def test_agent_loop_excludes_empty_failed_assistant_from_next_provider_call() -> None:
     messages: list[AgentMessage] = []
-    recovered = AssistantMessage(content="recovered", model="fake")
+    recovered = AssistantMessage(content=[TextContent(text="recovered")], model="fake")
     provider = FakeProvider(
         [
             [assistant_error("provider failed")],
@@ -310,7 +319,7 @@ async def test_agent_loop_excludes_empty_failed_assistant_from_next_provider_cal
 
     assert failed in messages
     replayed = provider.calls[1][2]
-    assert [message.text for message in replayed] == ["hello", "continue"]
+    assert [message_text(message) for message in replayed] == ["hello", "continue"]
     assert failed not in replayed
     assert messages[-1] is recovered
 
@@ -322,15 +331,15 @@ async def test_agent_loop_injects_steering_and_follow_up_messages() -> None:
     async def execute(
         tool_call_id: str,
         arguments: Mapping[str, JSONValue],
-        signal=None,  # noqa: ANN001
-        on_update=None,  # noqa: ANN001
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
         del tool_call_id, arguments, signal, on_update
-        return AgentToolResult(content="ok")
+        return AgentToolResult(content=[TextContent(text="ok")])
 
     first = AssistantMessage(content=[call], model="fake")
-    second = AssistantMessage(content="second", model="fake")
-    third = AssistantMessage(content="third", model="fake")
+    second = AssistantMessage(content=[TextContent(text="second")], model="fake")
+    third = AssistantMessage(content=[TextContent(text="third")], model="fake")
     provider = FakeProvider(
         [
             [assistant_start(), tool_call_end(call), assistant_done(first, "toolUse")],

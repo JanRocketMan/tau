@@ -145,12 +145,24 @@ def test_windows_handoff_reports_staging_write_failure_and_removes_owned_directo
 
     original_write_text = Path.write_text
 
-    def fail_script_write(path: Path, *args: object, **kwargs: object) -> int:
+    def fail_script_write(
+        path: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
         if path == update_dir / "update.ps1":
             raise OSError("disk is full")
-        return original_write_text(path, *args, **kwargs)
+        return original_write_text(
+            path,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
 
-    monkeypatch.setattr(updater.tempfile, "mkdtemp", make_update_dir)
+    monkeypatch.setattr("tau_coding.updater.tempfile.mkdtemp", make_update_dir)
     monkeypatch.setattr(Path, "write_text", fail_script_write)
 
     result = updater._handoff_windows_update(

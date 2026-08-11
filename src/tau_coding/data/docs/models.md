@@ -43,4 +43,4 @@ combination while leaving the same model ID available on other providers.
 
 Test both the exposed levels and the actual API value produced by provider configuration. Update `website/content/guides/providers-and-models.md` and add a beginner-friendly development note for substantial user-facing changes. Inspect `src/tau_coding/data/release-notes/releases.json`, but update it only when appropriate.
 
-Run focused provider tests followed by the repository's full pytest, Ruff, formatting, and mypy checks. Build the website when published provider documentation changes.
+Run focused provider tests followed by the repository's full pytest, Ruff, and formatting checks. Then run `uv run ty check` and `uv run mypy`. Build the website when published provider documentation changes.

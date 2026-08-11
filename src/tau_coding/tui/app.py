@@ -4213,7 +4213,7 @@ class TauTuiApp(App[None]):
         elif callable(content):
             # Check callable() first: a Sequence[str] test must never swallow a
             # factory (and a factory is not a Sequence).
-            factory = cast(SlotWidgetFactory, content)
+            factory = cast(SlotWidgetFactory, cast(object, content))
         else:
             # A plain list of display lines: build the widget host-side so the
             # extension needs no Textual import. A bare str is treated as one

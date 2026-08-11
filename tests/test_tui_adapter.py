@@ -30,7 +30,7 @@ from tau_coding.tui import TuiEventAdapter, TuiState
 from tau_coding.tui.state import format_tool_call_block, format_tool_result_block
 
 
-def _update(event) -> MessageUpdateEvent:  # noqa: ANN001
+def _update(event: TextDeltaEvent | ThinkingDeltaEvent) -> MessageUpdateEvent:
     return MessageUpdateEvent(message=event.partial, assistant_message_event=event)
 
 
@@ -96,7 +96,7 @@ def test_tui_adapter_builds_assistant_item_from_nested_stream_events() -> None:
     adapter.apply(_update(TextDeltaEvent(content_index=0, delta="lo", partial=partial)))
     assert state.assistant_buffer == "Hello"
 
-    adapter.apply(MessageEndEvent(message=AssistantMessage(content="Hello")))
+    adapter.apply(MessageEndEvent(message=AssistantMessage(content=[TextContent(text="Hello")])))
 
     assert state.assistant_buffer == ""
     assert [(item.role, item.text) for item in state.items] == [("assistant", "Hello")]
@@ -173,14 +173,14 @@ def test_tui_adapter_records_tool_progress_and_result() -> None:
             tool_call_id="call-1",
             tool_name="read",
             args={"path": "notes.md"},
-            partial_result=AgentToolResult(content="reading"),
+            partial_result=AgentToolResult(content=[TextContent(text="reading")]),
         )
     )
     adapter.apply(
         ToolExecutionEndEvent(
             tool_call_id="call-1",
             tool_name="read",
-            result=AgentToolResult(content="done"),
+            result=AgentToolResult(content=[TextContent(text="done")]),
             is_error=False,
         )
     )
@@ -211,7 +211,7 @@ def test_tui_adapter_renders_skill_file_reads_with_skill_style() -> None:
         ToolExecutionEndEvent(
             tool_call_id="call-1",
             tool_name="read",
-            result=AgentToolResult(content="# Review\nFull instructions."),
+            result=AgentToolResult(content=[TextContent(text="# Review\nFull instructions.")]),
             is_error=False,
         )
     )
@@ -263,7 +263,7 @@ def test_tui_state_restores_partial_assistant_response_and_error() -> None:
     state.load_messages(
         [
             AssistantMessage(
-                content="partial response",
+                content=[TextContent(text="partial response")],
                 stop_reason="error",
                 error_message="provider failed",
             )

@@ -116,5 +116,6 @@ async def test_tool_result_gets_execution_and_message_lifecycle_events() -> None
         for event in events
         if isinstance(event, MessageEndEvent) and isinstance(event.message, ToolResultMessage)
     )
+    assert isinstance(result_end.message, ToolResultMessage)
     assert start.tool_call_id == end.tool_call_id == result_end.message.tool_call_id
     assert end.is_error is True

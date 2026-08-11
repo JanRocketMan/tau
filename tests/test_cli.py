@@ -1,12 +1,13 @@
 import re
 from pathlib import Path
+from typing import cast
 
 import pytest
 from typer.testing import CliRunner
 
 from conftest import isolate_home
 from pi_event_helpers import assistant_done, assistant_error, assistant_start, text_delta
-from tau_agent import AssistantMessage, UserMessage
+from tau_agent import AssistantMessage, TextContent, UserMessage
 from tau_agent.session import JsonlSessionStorage, MessageEntry
 from tau_ai import (
     FakeProvider,
@@ -76,8 +77,8 @@ def test_force_utf8_streams_reconfigures_non_utf8_streams() -> None:
     fake_stderr = UnreconfigurableStream()
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(cli.sys, "stdout", fake_stdout)
-        mp.setattr(cli.sys, "stderr", fake_stderr)
+        mp.setattr("tau_coding.cli.sys.stdout", fake_stdout)
+        mp.setattr("tau_coding.cli.sys.stderr", fake_stderr)
         cli._force_utf8_streams()
 
     assert calls == [("utf-8", "replace")]
@@ -96,8 +97,8 @@ def test_force_utf8_streams_leaves_utf8_streams_alone() -> None:
     fake_stderr = FakeStream()
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(cli.sys, "stdout", fake_stdout)
-        mp.setattr(cli.sys, "stderr", fake_stderr)
+        mp.setattr("tau_coding.cli.sys.stdout", fake_stdout)
+        mp.setattr("tau_coding.cli.sys.stderr", fake_stderr)
         cli._force_utf8_streams()
 
     assert calls == []
@@ -159,7 +160,7 @@ def test_unknown_user_prompt_path_is_forwarded_as_literal(
         return original_expanduser(path)
 
     async def fake_run_openai_tui(*args: object) -> None:
-        calls.append((args[-2], args[-1]))  # type: ignore[arg-type]
+        calls.append((cast(str | None, args[-2]), cast(str | None, args[-1])))
 
     monkeypatch.setattr(Path, "expanduser", fail_for_unknown_user)
     monkeypatch.setattr(cli, "_startup_update_notice", lambda: None)
@@ -200,7 +201,13 @@ def test_system_prompt_flags_are_parsed_before_positional_prompt(
     calls: list[tuple[str, str | None, str | None]] = []
 
     async def fake_run_openai_print_mode(*args: object) -> bool:
-        calls.append((str(args[0]), args[-2], args[-1]))  # type: ignore[arg-type]
+        calls.append(
+            (
+                str(args[0]),
+                cast(str | None, args[-2]),
+                cast(str | None, args[-1]),
+            )
+        )
         return True
 
     monkeypatch.setattr(cli, "_startup_update_notice", lambda: None)
@@ -280,7 +287,13 @@ def test_system_prompt_flags_forward_to_resumed_tui(
     calls: list[tuple[str | None, str | None, str | None]] = []
 
     async def fake_run_openai_tui(*args: object) -> None:
-        calls.append((args[2], args[-2], args[-1]))  # type: ignore[arg-type]
+        calls.append(
+            (
+                cast(str | None, args[2]),
+                cast(str | None, args[-2]),
+                cast(str | None, args[-1]),
+            )
+        )
 
     monkeypatch.setattr(cli, "_startup_update_notice", lambda: None)
     monkeypatch.setattr(cli, "run_openai_tui", fake_run_openai_tui)
@@ -428,7 +441,10 @@ def test_utility_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPa
         "_startup_update_notice",
         lambda: (_ for _ in ()).throw(AssertionError("no update check")),
     )
-    monkeypatch.setattr(cli.SessionManager, "list_sessions", lambda self: [])
+    monkeypatch.setattr(
+        "tau_coding.cli.SessionManager.list_sessions",
+        lambda self: [],
+    )
 
     result = CliRunner().invoke(app, ["sessions"])
 
@@ -554,12 +570,12 @@ async def test_run_openai_tui_combines_release_notes_and_update_notice(
     calls: list[tuple[str | None, tuple[str, ...], str | None, str | None]] = []
 
     async def fake_run_tui_app(**kwargs: object) -> None:
-        calls.append(  # type: ignore[arg-type]
+        calls.append(
             (
-                kwargs["startup_update_notice"],
-                kwargs["startup_notices"],
-                kwargs["custom_system_prompt"],
-                kwargs["append_system_prompt"],
+                cast(str | None, kwargs["startup_update_notice"]),
+                cast(tuple[str, ...], kwargs["startup_notices"]),
+                cast(str | None, kwargs["custom_system_prompt"]),
+                cast(str | None, kwargs["append_system_prompt"]),
             )
         )
 
@@ -609,7 +625,7 @@ async def test_run_print_mode_prints_final_assistant_text(
                 assistant_start(model="fake"),
                 text_delta(delta="Hel"),
                 text_delta(delta="lo"),
-                assistant_done(message=AssistantMessage(content="Hello")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Hello")])),
             ]
         ]
     )
@@ -655,7 +671,12 @@ async def test_run_print_mode_uses_custom_and_appended_system_prompt(
     )
     (tmp_path / "AGENTS.md").write_text("Follow project rules.", encoding="utf-8")
     provider = FakeProvider(
-        [[assistant_start(model="fake"), assistant_done(message=AssistantMessage(content="Done"))]]
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Done")])),
+            ]
+        ]
     )
 
     ok = await run_print_mode(
@@ -741,7 +762,7 @@ async def test_run_print_mode_includes_discovered_context(
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Done")])),
             ]
         ]
     )
@@ -770,7 +791,7 @@ async def test_run_print_mode_persists_session_entries(
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Done")])),
             ]
         ]
     )
@@ -789,7 +810,9 @@ async def test_run_print_mode_persists_session_entries(
 
     assert ok is True
     assert [message.role for message in messages] == ["user", "assistant"]
+    assert isinstance(messages[0], UserMessage)
     assert messages[0].content == "Say hello"
+    assert isinstance(messages[1], AssistantMessage)
     assert messages[1].text == "Done"
     assert any(entry.type == "leaf" for entry in entries)
 
@@ -818,6 +841,8 @@ async def test_run_print_mode_terminal_command_adds_context(
     assert "[added to context]" in captured.out
     assert "hello" in captured.out
     assert len(messages) == 1
+    assert isinstance(messages[0], UserMessage)
+    assert isinstance(messages[0].content, str)
     assert "Terminal command executed by the user." in messages[0].content
     assert provider.calls == []
 
@@ -860,7 +885,7 @@ async def test_run_print_mode_expands_skill_commands(
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Done")])),
             ]
         ]
     )
@@ -876,9 +901,12 @@ async def test_run_print_mode_expands_skill_commands(
     _captured = capsys.readouterr()
 
     assert ok is True
-    assert '<skill name="testing" location="' in provider.calls[0][2][0].content
-    assert "References are relative to" in provider.calls[0][2][0].content
-    assert provider.calls[0][2][0].content.endswith("</skill>\n\nadd tests")
+    prompt_message = provider.calls[0][2][0]
+    assert isinstance(prompt_message, UserMessage)
+    assert isinstance(prompt_message.content, str)
+    assert '<skill name="testing" location="' in prompt_message.content
+    assert "References are relative to" in prompt_message.content
+    assert prompt_message.content.endswith("</skill>\n\nadd tests")
 
 
 @pytest.mark.anyio
@@ -890,7 +918,7 @@ async def test_run_print_mode_can_emit_json_events(
             [
                 assistant_start(model="fake"),
                 text_delta(delta="Hello"),
-                assistant_done(message=AssistantMessage(content="Hello")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Hello")])),
             ]
         ]
     )
@@ -921,7 +949,7 @@ async def test_run_print_mode_can_emit_live_transcript(
                 assistant_start(model="fake"),
                 text_delta(delta="Hel"),
                 text_delta(delta="lo"),
-                assistant_done(message=AssistantMessage(content="Hello")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Hello")])),
             ]
         ]
     )
@@ -1674,7 +1702,12 @@ async def test_headless_ask_declines_without_corrupting_structured_stdout(
 ) -> None:
     (tmp_path / "AGENTS.md").write_text("PROTECTED-STRUCTURED-SECRET", encoding="utf-8")
     provider = FakeProvider(
-        [[assistant_start(model="fake"), assistant_done(message=AssistantMessage(content="Done"))]]
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Done")])),
+            ]
+        ]
     )
 
     ok = await run_print_mode(

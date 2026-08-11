@@ -19,7 +19,7 @@ from tau_coding.events import AutoRetryStartEvent, QueueUpdateEvent
 from tau_coding.rendering import FinalTextRenderer, JsonEventRenderer, TranscriptRenderer
 
 
-def _assistant_update(event) -> MessageUpdateEvent:  # noqa: ANN001
+def _assistant_update(event: TextDeltaEvent | ThinkingDeltaEvent) -> MessageUpdateEvent:
     return MessageUpdateEvent(message=event.partial, assistant_message_event=event)
 
 
@@ -31,7 +31,7 @@ def test_transcript_renderer_streams_text_and_tool_events(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     renderer = TranscriptRenderer()
-    partial = AssistantMessage(content="")
+    partial = AssistantMessage(content=[])
 
     renderer.render(MessageStartEvent(message=partial))
     renderer.render(
@@ -59,14 +59,14 @@ def test_transcript_renderer_streams_text_and_tool_events(
             tool_call_id="call-1",
             tool_name="read",
             args={"path": "a.py"},
-            partial_result=AgentToolResult(content="reading"),
+            partial_result=AgentToolResult(content=[TextContent(text="reading")]),
         )
     )
     renderer.render(
         ToolExecutionEndEvent(
             tool_call_id="call-1",
             tool_name="read",
-            result=AgentToolResult(content="done"),
+            result=AgentToolResult(content=[TextContent(text="done")]),
             is_error=False,
         )
     )
@@ -123,7 +123,7 @@ def test_final_text_renderer_prints_only_final_message(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     renderer = FinalTextRenderer()
-    partial = AssistantMessage(content="ignored")
+    partial = AssistantMessage(content=[TextContent(text="ignored")])
 
     renderer.render(
         _assistant_update(TextDeltaEvent(content_index=0, delta="ignored", partial=partial))
@@ -131,7 +131,9 @@ def test_final_text_renderer_prints_only_final_message(
     assert renderer.finish() is True
     assert capsys.readouterr().out == ""
 
-    renderer.render(MessageEndEvent(message=AssistantMessage(content="Final answer")))
+    renderer.render(
+        MessageEndEvent(message=AssistantMessage(content=[TextContent(text="Final answer")]))
+    )
     assert renderer.finish() is True
     assert capsys.readouterr().out == "Final answer\n"
 

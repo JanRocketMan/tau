@@ -1,9 +1,10 @@
 import asyncio
 import json
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
 from io import BytesIO
 from pathlib import Path
+from typing import cast
 
 import pytest
 from PIL import Image
@@ -11,6 +12,7 @@ from PIL import Image
 from conftest import isolate_home
 from pi_event_helpers import assistant_done, assistant_error, assistant_start
 from tau_agent import (
+    AgentHarness,
     AgentMessage,
     AgentTool,
     AssistantMessage,
@@ -22,8 +24,9 @@ from tau_agent import (
     ToolResultMessage,
     Usage,
     UserMessage,
+    message_text,
 )
-from tau_agent.messages import AssistantMessageDiagnostic, assistant_content
+from tau_agent.messages import AssistantContent, AssistantMessageDiagnostic, assistant_content
 from tau_agent.provider_events import AssistantErrorEvent
 from tau_agent.session import (
     CompactionEntry,
@@ -31,7 +34,9 @@ from tau_agent.session import (
     LeafEntry,
     MessageEntry,
     ModelChangeEntry,
+    SessionEntry,
     SessionInfoEntry,
+    SessionState,
     ThinkingLevelChangeEntry,
 )
 from tau_ai import CancellationToken, FakeProvider, ModelProvider, RuntimeModelLimits
@@ -43,6 +48,7 @@ from tau_coding import (
     ModelChoice,
     OpenAICodexProviderConfig,
     OpenAICompatibleProviderConfig,
+    ProviderConfig,
     ProviderConfigError,
     ProviderSettings,
     ResourceError,
@@ -55,24 +61,33 @@ from tau_coding import (
     save_provider_settings,
 )
 from tau_coding import session as coding_session_module
+from tau_coding.context_window import ContextUsageEstimate, estimate_context_usage
 from tau_coding.events import QueueUpdateEvent
 from tau_coding.prompt_templates import PromptTemplate
 from tau_coding.provider_config import ProviderModelMetadata
 from tau_coding.session import _ordered_tree_entries, parse_terminal_command
+from tau_coding.skills import Skill
+from tau_coding.system_prompt import ProjectContextFile
 
 
-async def _collect_session_events(session_stream: object) -> list[object]:
-    return [event async for event in session_stream]  # type: ignore[attr-defined]
+async def _collect_session_events(session_stream: AsyncIterator[object]) -> list[object]:
+    return [event async for event in session_stream]
 
 
-def _assert_messages(actual: object, expected: object) -> None:
+def _assistant(content: str | list[AssistantContent]) -> AssistantMessage:
+    if isinstance(content, str):
+        content = [TextContent(text=content)]
+    return AssistantMessage(content=content)
+
+
+def _assert_messages(actual: Iterable[object], expected: Iterable[object]) -> None:
     def dump(message: object) -> object:
         model_dump = getattr(message, "model_dump", None)
         if callable(model_dump):
             return model_dump(exclude={"timestamp"})
         return message
 
-    assert [dump(message) for message in actual] == [dump(message) for message in expected]  # type: ignore[union-attr]
+    assert [dump(message) for message in actual] == [dump(message) for message in expected]
 
 
 def _config(
@@ -139,7 +154,7 @@ class RaisingProvider:
             if should_fail:
                 raise RuntimeError("provider exploded")
             yield assistant_start(model="fake")
-            yield assistant_done(message=AssistantMessage(content="Generated title"))
+            yield assistant_done(message=_assistant("Generated title"))
 
         return iterator()
 
@@ -171,10 +186,10 @@ class WaitingProvider:
                 yield assistant_start(model="fake")
                 self.started.set()
                 await self.release.wait()
-                yield assistant_done(message=AssistantMessage(content="First"))
+                yield assistant_done(message=_assistant("First"))
                 return
             yield assistant_start(model="fake")
-            yield assistant_done(message=AssistantMessage(content="Second"))
+            yield assistant_done(message=_assistant("Second"))
 
         return iterator()
 
@@ -205,7 +220,7 @@ class CancellableWaitingProvider:
                 if signal is not None and signal.is_cancelled():
                     return
                 await asyncio.sleep(0)
-            yield assistant_done(message=AssistantMessage(content="Finished"))
+            yield assistant_done(message=_assistant("Finished"))
 
         return iterator()
 
@@ -416,7 +431,7 @@ async def test_load_persists_repair_for_session_with_interrupted_tail_tool_call(
     tool_call = ToolCall(id="call-1", name="read", arguments={"path": "README.md"})
     assistant_entry = MessageEntry(
         parent_id=user_entry.id,
-        message=AssistantMessage(content=assistant_content("I'll read it.", [tool_call])),
+        message=_assistant(assistant_content("I'll read it.", [tool_call])),
     )
     await storage.append(assistant_entry)
     await storage.append(LeafEntry(parent_id=assistant_entry.id, entry_id=assistant_entry.id))
@@ -425,7 +440,7 @@ async def test_load_persists_repair_for_session_with_interrupted_tail_tool_call(
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Recovered.")),
+                assistant_done(message=_assistant("Recovered.")),
             ]
         ]
     )
@@ -450,7 +465,7 @@ async def test_load_persists_repair_for_session_with_interrupted_tail_tool_call(
         session.messages,
         (
             UserMessage(content="Read README.md"),
-            AssistantMessage(content=assistant_content("I'll read it.", [tool_call])),
+            _assistant(assistant_content("I'll read it.", [tool_call])),
             expected_repair,
         ),
     )
@@ -461,7 +476,7 @@ async def test_load_persists_repair_for_session_with_interrupted_tail_tool_call(
         [entry.message for entry in message_entries],
         [
             UserMessage(content="Read README.md"),
-            AssistantMessage(content=assistant_content("I'll read it.", [tool_call])),
+            _assistant(assistant_content("I'll read it.", [tool_call])),
             expected_repair,
         ],
     )
@@ -477,7 +492,7 @@ async def test_load_persists_repair_for_historical_interrupted_tool_call(
     tool_call = ToolCall(id="call-1", name="read", arguments={"path": "README.md"})
     assistant_entry = MessageEntry(
         parent_id=user_entry.id,
-        message=AssistantMessage(content=assistant_content("I'll read it.", [tool_call])),
+        message=_assistant(assistant_content("I'll read it.", [tool_call])),
     )
     await storage.append(assistant_entry)
     continued_entry = MessageEntry(
@@ -509,7 +524,7 @@ async def test_load_persists_repair_for_historical_interrupted_tool_call(
         session.messages,
         (
             UserMessage(content="Read README.md"),
-            AssistantMessage(content=assistant_content("I'll read it.", [tool_call])),
+            _assistant(assistant_content("I'll read it.", [tool_call])),
             expected_repair,
             UserMessage(content="continue"),
         ),
@@ -544,7 +559,7 @@ async def test_prompt_persists_user_assistant_and_leaf_entries(tmp_path: Path) -
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Hi")),
+                assistant_done(message=_assistant("Hi")),
             ]
         ]
     )
@@ -571,15 +586,13 @@ async def test_prompt_persists_user_assistant_and_leaf_entries(tmp_path: Path) -
         [entry.message for entry in message_entries],
         [
             UserMessage(content="Hello"),
-            AssistantMessage(content="Hi"),
+            _assistant("Hi"),
         ],
     )
     assert [entry.entry_id for entry in leaf_entries] == [entry.id for entry in message_entries]
     assert entries[-1].type == "leaf"
     assert entries[-1].entry_id == message_entries[-1].id
-    _assert_messages(
-        session.messages, (UserMessage(content="Hello"), AssistantMessage(content="Hi"))
-    )
+    _assert_messages(session.messages, (UserMessage(content="Hello"), _assistant("Hi")))
 
 
 @pytest.mark.anyio
@@ -715,9 +728,9 @@ async def test_prompt_queues_steering_while_session_is_running(tmp_path: Path) -
         session.messages,
         (
             UserMessage(content="Hello"),
-            AssistantMessage(content="First"),
+            _assistant("First"),
             UserMessage(content="Queued steering"),
-            AssistantMessage(content="Second"),
+            _assistant("Second"),
         ),
     )
     assert provider.calls[1] == list(session.messages[:3])
@@ -760,7 +773,7 @@ async def test_tree_can_branch_from_first_user_message_before_assistant_response
         input_prefill="Start here",
     )
     assert session.messages == ()
-    assert message_entries[0].message.text == "Start here"
+    assert message_text(message_entries[0].message) == "Start here"
     assert isinstance(message_entries[1].message, AssistantMessage)
     assert message_entries[1].message.stop_reason == "error"
     assert isinstance(entries[-1], LeafEntry)
@@ -824,7 +837,7 @@ async def test_tree_choices_handles_deep_session_without_recursion_error(
 def test_ordered_tree_entries_preserves_branch_order() -> None:
     # Locks the traversal contract the iterative walk must preserve: emit a
     # node's direct children before descending, then depth-first into each child.
-    entries = [
+    entries: list[SessionEntry] = [
         MessageEntry(id="A", parent_id=None, message=UserMessage(content="A")),
         MessageEntry(id="B", parent_id=None, message=UserMessage(content="B")),
         MessageEntry(id="C", parent_id="A", message=UserMessage(content="C")),
@@ -841,7 +854,7 @@ def test_ordered_tree_entries_preserves_branch_order() -> None:
 def test_ordered_tree_entries_terminates_on_parent_cycle() -> None:
     # A malformed parent cycle must terminate (not hang or overflow) and still
     # emit each entry exactly once. Guards the iterative walk's cycle safety.
-    entries = [
+    entries: list[SessionEntry] = [
         MessageEntry(id="a", parent_id="b", message=UserMessage(content="a")),
         MessageEntry(id="b", parent_id="a", message=UserMessage(content="b")),
     ]
@@ -861,7 +874,7 @@ async def test_tree_branching_preserves_active_model(tmp_path: Path) -> None:
         MessageEntry(
             id="assistant",
             parent_id="historical-model",
-            message=AssistantMessage(content="Old answer"),
+            message=_assistant("Old answer"),
         )
     )
     await storage.append(ModelChangeEntry(id="current-model", parent_id="assistant", model="new"))
@@ -884,7 +897,7 @@ async def test_tree_branching_preserves_active_model(tmp_path: Path) -> None:
         session.messages,
         (
             UserMessage(content="Earlier"),
-            AssistantMessage(content="Old answer"),
+            _assistant("Old answer"),
         ),
     )
 
@@ -896,12 +909,17 @@ async def test_context_usage_is_cached_until_session_context_changes(
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
     calls = 0
-    original_estimate = coding_session_module.estimate_context_usage
+    original_estimate = estimate_context_usage
 
-    def wrapped_estimate(*args: object, **kwargs: object):
+    def wrapped_estimate(
+        *,
+        system: str,
+        messages: tuple[AgentMessage, ...],
+        tools: tuple[AgentTool, ...],
+    ) -> ContextUsageEstimate:
         nonlocal calls
         calls += 1
-        return original_estimate(*args, **kwargs)  # type: ignore[arg-type]
+        return original_estimate(system=system, messages=messages, tools=tools)
 
     monkeypatch.setattr(coding_session_module, "estimate_context_usage", wrapped_estimate)
 
@@ -920,12 +938,12 @@ async def test_context_usage_recalculates_after_prompt_and_compaction(tmp_path: 
             [
                 assistant_start(model="fake"),
                 assistant_done(
-                    message=AssistantMessage(content="Long answer " * 80),
+                    message=_assistant("Long answer " * 80),
                 ),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Short summary")),
+                assistant_done(message=_assistant("Short summary")),
             ],
         ]
     )
@@ -1056,7 +1074,7 @@ async def test_session_uses_active_model_thinking_capabilities(
 
     session.set_model("plain")
 
-    assert session.available_thinking_levels == ()
+    assert not session.available_thinking_levels
     assert session.thinking_unavailable_reason == "openai:plain is not declared in thinking_models"
     with pytest.raises(ValueError, match="openai:plain is not declared in thinking_models"):
         await session.cycle_thinking_level()
@@ -1064,7 +1082,7 @@ async def test_session_uses_active_model_thinking_capabilities(
     session.set_model("reasoner")
 
     assert session.available_thinking_levels == ("off", "low", "high")
-    assert session.thinking_level == "high"
+    assert str(session.thinking_level) == "high"
     assert session.thinking_unavailable_reason is None
 
 
@@ -1199,7 +1217,7 @@ async def test_session_refreshes_runtime_provider_for_thinking_level(
     created: list[tuple[str | None, str | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
@@ -1248,7 +1266,7 @@ async def test_load_restores_existing_transcript(tmp_path: Path) -> None:
     assistant_entry = MessageEntry(
         id="assistant",
         parent_id="user",
-        message=AssistantMessage(content="Restored"),
+        message=_assistant("Restored"),
     )
     await storage.append(user_entry)
     await storage.append(assistant_entry)
@@ -1259,7 +1277,7 @@ async def test_load_restores_existing_transcript(tmp_path: Path) -> None:
         session.messages,
         (
             UserMessage(content="Earlier"),
-            AssistantMessage(content="Restored"),
+            _assistant("Restored"),
         ),
     )
 
@@ -1275,7 +1293,7 @@ async def test_load_detaches_missing_root_parent_from_imported_branch(tmp_path: 
     assistant = MessageEntry(
         id="assistant",
         parent_id="root",
-        message=AssistantMessage(content="Restored"),
+        message=_assistant("Restored"),
     )
     await storage.append(root)
     await storage.append(assistant)
@@ -1287,7 +1305,7 @@ async def test_load_detaches_missing_root_parent_from_imported_branch(tmp_path: 
         session.messages,
         (
             UserMessage(content="Root"),
-            AssistantMessage(content="Restored"),
+            _assistant("Restored"),
         ),
     )
     assert session.state.active_leaf_id == "assistant"
@@ -1306,7 +1324,7 @@ async def test_tree_branching_detaches_missing_root_parent_from_imported_branch(
     assistant = MessageEntry(
         id="assistant",
         parent_id="root",
-        message=AssistantMessage(content="Restored"),
+        message=_assistant("Restored"),
     )
     await storage.append(root)
     await storage.append(assistant)
@@ -1351,12 +1369,12 @@ async def test_load_restores_active_leaf_branch(tmp_path: Path) -> None:
     left = MessageEntry(
         id="left",
         parent_id="root",
-        message=AssistantMessage(content="Inactive branch"),
+        message=_assistant("Inactive branch"),
     )
     right = MessageEntry(
         id="right",
         parent_id="root",
-        message=AssistantMessage(content="Active branch"),
+        message=_assistant("Active branch"),
     )
     await storage.append(root)
     await storage.append(left)
@@ -1369,7 +1387,7 @@ async def test_load_restores_active_leaf_branch(tmp_path: Path) -> None:
         session.messages,
         (
             UserMessage(content="Root"),
-            AssistantMessage(content="Active branch"),
+            _assistant("Active branch"),
         ),
     )
     assert session.state.active_leaf_id == "right"
@@ -1379,11 +1397,11 @@ async def test_load_restores_active_leaf_branch(tmp_path: Path) -> None:
 async def test_session_tree_choices_indent_only_diverged_branches(tmp_path: Path) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     root = MessageEntry(id="root", message=UserMessage(content="Root"))
-    main = MessageEntry(id="main", parent_id="root", message=AssistantMessage(content="Main"))
+    main = MessageEntry(id="main", parent_id="root", message=_assistant("Main"))
     first_branch = MessageEntry(
         id="first-branch",
         parent_id="root",
-        message=AssistantMessage(content="First branch"),
+        message=_assistant("First branch"),
     )
     first_branch_child = MessageEntry(
         id="first-branch-child",
@@ -1398,7 +1416,7 @@ async def test_session_tree_choices_indent_only_diverged_branches(tmp_path: Path
     second_branch = MessageEntry(
         id="second-branch",
         parent_id="root",
-        message=AssistantMessage(content="Second branch"),
+        message=_assistant("Second branch"),
     )
     await storage.append(root)
     await storage.append(main)
@@ -1427,8 +1445,8 @@ async def test_session_branches_to_previous_entry_without_destroying_history(
 ) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     root = MessageEntry(id="root", message=UserMessage(content="Root"))
-    left = MessageEntry(id="left", parent_id="root", message=AssistantMessage(content="Left"))
-    right = MessageEntry(id="right", parent_id="root", message=AssistantMessage(content="Right"))
+    left = MessageEntry(id="left", parent_id="root", message=_assistant("Left"))
+    right = MessageEntry(id="right", parent_id="root", message=_assistant("Right"))
     await storage.append(root)
     await storage.append(left)
     await storage.append(right)
@@ -1439,9 +1457,7 @@ async def test_session_branches_to_previous_entry_without_destroying_history(
 
     entries = await storage.read_all()
     assert result == SessionTreeBranchResult(message="Branched session at left.")
-    _assert_messages(
-        session.messages, (UserMessage(content="Root"), AssistantMessage(content="Left"))
-    )
+    _assert_messages(session.messages, (UserMessage(content="Root"), _assistant("Left")))
     assert [entry.id for entry in entries if entry.type == "message"] == ["root", "left", "right"]
     assert isinstance(entries[-1], LeafEntry)
     assert entries[-1].entry_id == "left"
@@ -1454,16 +1470,16 @@ async def test_persist_after_branch_keeps_state_on_active_branch(tmp_path: Path)
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="New answer")),
+                assistant_done(message=_assistant("New answer")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Branch summary")),
+                assistant_done(message=_assistant("Branch summary")),
             ],
         ]
     )
     root = MessageEntry(id="root", message=UserMessage(content="Root"))
-    answer = MessageEntry(id="answer", parent_id="root", message=AssistantMessage(content="Answer"))
+    answer = MessageEntry(id="answer", parent_id="root", message=_assistant("Answer"))
     abandoned = MessageEntry(
         id="abandoned",
         parent_id="answer",
@@ -1472,7 +1488,7 @@ async def test_persist_after_branch_keeps_state_on_active_branch(tmp_path: Path)
     abandoned_answer = MessageEntry(
         id="abandoned-answer",
         parent_id="abandoned",
-        message=AssistantMessage(content="Abandoned answer"),
+        message=_assistant("Abandoned answer"),
     )
     await storage.append(root)
     await storage.append(answer)
@@ -1488,9 +1504,9 @@ async def test_persist_after_branch_keeps_state_on_active_branch(tmp_path: Path)
         session.state.messages,
         (
             UserMessage(content="Root"),
-            AssistantMessage(content="Answer"),
+            _assistant("Answer"),
             UserMessage(content="New follow-up"),
-            AssistantMessage(content="New answer"),
+            _assistant("New answer"),
         ),
     )
     assert "abandoned" not in session.state.context_entry_ids
@@ -1501,7 +1517,7 @@ async def test_persist_after_branch_keeps_state_on_active_branch(tmp_path: Path)
     assert len(compactions) == 1
     assert "abandoned" not in compactions[0].replaces_entry_ids
     assert "abandoned-answer" not in compactions[0].replaces_entry_ids
-    assert "Abandoned" not in provider.calls[1][2][0].content
+    assert "Abandoned" not in message_text(provider.calls[1][2][0])
 
 
 @pytest.mark.anyio
@@ -1513,7 +1529,7 @@ async def test_session_branches_to_before_selected_user_message_with_prefill(
     assistant = MessageEntry(
         id="assistant",
         parent_id="root",
-        message=AssistantMessage(content="Answer"),
+        message=_assistant("Answer"),
     )
     followup = MessageEntry(
         id="followup",
@@ -1533,9 +1549,7 @@ async def test_session_branches_to_before_selected_user_message_with_prefill(
         message="Branched session before followup.",
         input_prefill="Try this again",
     )
-    _assert_messages(
-        session.messages, (UserMessage(content="Root"), AssistantMessage(content="Answer"))
-    )
+    _assert_messages(session.messages, (UserMessage(content="Root"), _assistant("Answer")))
     assert [entry.id for entry in entries if entry.type == "message"] == [
         "root",
         "assistant",
@@ -1562,7 +1576,7 @@ async def test_session_branch_preserves_active_model(tmp_path: Path) -> None:
     right = MessageEntry(
         id="right",
         parent_id="model-b",
-        message=AssistantMessage(content="After switch"),
+        message=_assistant("After switch"),
     )
     await storage.append(first_model)
     await storage.append(left)
@@ -1598,7 +1612,7 @@ async def test_session_branch_with_summary_keeps_pre_branch_model_and_messages(
     right = MessageEntry(
         id="right",
         parent_id="model-b",
-        message=AssistantMessage(content="After switch"),
+        message=_assistant("After switch"),
     )
     await storage.append(first_model)
     await storage.append(left)
@@ -1614,8 +1628,8 @@ async def test_session_branch_with_summary_keeps_pre_branch_model_and_messages(
     assert session.state.model == "first-model"
     assert session.model == "second-model"
     assert len(session.messages) == 2
-    assert session.messages[0].text == "Before switch"
-    assert session.messages[1].content.startswith(
+    assert message_text(session.messages[0]) == "Before switch"
+    assert message_text(session.messages[1]).startswith(
         "The following is a summary of a branch that this conversation came back from:"
     )
 
@@ -1627,12 +1641,12 @@ async def test_session_branch_with_summary_rebuilds_context(tmp_path: Path) -> N
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="The abandoned branch went left.")),
+                assistant_done(message=_assistant("The abandoned branch went left.")),
             ]
         ]
     )
     root = MessageEntry(id="root", message=UserMessage(content="Root"))
-    left = MessageEntry(id="left", parent_id="root", message=AssistantMessage(content="Left"))
+    left = MessageEntry(id="left", parent_id="root", message=_assistant("Left"))
     right = MessageEntry(
         id="right",
         parent_id="left",
@@ -1657,11 +1671,12 @@ async def test_session_branch_with_summary_rebuilds_context(tmp_path: Path) -> N
     )
     assert "The abandoned branch went left." in summary.summary
     assert provider.calls[0][3] == []
-    assert "<conversation>" in provider.calls[0][2][0].content
-    assert "Use this EXACT format:" in provider.calls[0][2][0].content
-    assert "Abandoned follow-up" in provider.calls[0][2][0].content
+    summary_prompt = message_text(provider.calls[0][2][0])
+    assert "<conversation>" in summary_prompt
+    assert "Use this EXACT format:" in summary_prompt
+    assert "Abandoned follow-up" in summary_prompt
     assert len(session.messages) == 2
-    assert session.messages[0].text == "Root"
+    assert message_text(session.messages[0]) == "Root"
     assert session.messages[1].role == "user"
     assert isinstance(session.messages[1].content, str)
     assert session.messages[1].content.startswith(
@@ -1677,12 +1692,12 @@ async def test_session_branch_with_summary_accepts_custom_instructions(tmp_path:
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Custom branch summary.")),
+                assistant_done(message=_assistant("Custom branch summary.")),
             ]
         ]
     )
     root = MessageEntry(id="root", message=UserMessage(content="Root"))
-    left = MessageEntry(id="left", parent_id="root", message=AssistantMessage(content="Left"))
+    left = MessageEntry(id="left", parent_id="root", message=_assistant("Left"))
     right = MessageEntry(
         id="right",
         parent_id="left",
@@ -1700,7 +1715,7 @@ async def test_session_branch_with_summary_accepts_custom_instructions(tmp_path:
         custom_instructions="Focus on failing commands.",
     )
 
-    prompt = provider.calls[0][2][0].content
+    prompt = message_text(provider.calls[0][2][0])
     assert "Use this EXACT format:" in prompt
     assert "Additional focus: Focus on failing commands." in prompt
 
@@ -1712,7 +1727,7 @@ async def test_session_branch_with_summary_tracks_file_operations(tmp_path: Path
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="File work summary.")),
+                assistant_done(message=_assistant("File work summary.")),
             ]
         ]
     )
@@ -1722,7 +1737,7 @@ async def test_session_branch_with_summary_tracks_file_operations(tmp_path: Path
     assistant = MessageEntry(
         id="assistant",
         parent_id="root",
-        message=AssistantMessage(content=assistant_content("Using tools", [read_call, edit_call])),
+        message=_assistant(assistant_content("Using tools", [read_call, edit_call])),
     )
     await storage.append(root)
     await storage.append(assistant)
@@ -1744,7 +1759,7 @@ async def test_session_branch_with_summary_falls_back_when_model_summary_is_unav
 ) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     root = MessageEntry(id="root", message=UserMessage(content="Root"))
-    left = MessageEntry(id="left", parent_id="root", message=AssistantMessage(content="Left"))
+    left = MessageEntry(id="left", parent_id="root", message=_assistant("Left"))
     right = MessageEntry(
         id="right",
         parent_id="left",
@@ -1765,8 +1780,8 @@ async def test_session_branch_with_summary_falls_back_when_model_summary_is_unav
     assert "Automatically compacted 2 prior message(s)." in summary.summary
     assert "Abandoned follow-up" in summary.summary
     assert len(session.messages) == 2
-    assert session.messages[0].text == "Root"
-    assert "Abandoned follow-up" in session.messages[1].content
+    assert message_text(session.messages[0]) == "Root"
+    assert "Abandoned follow-up" in message_text(session.messages[1])
 
 
 @pytest.mark.anyio
@@ -1777,7 +1792,7 @@ async def test_continue_persists_only_new_messages(tmp_path: Path) -> None:
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Continued")),
+                assistant_done(message=_assistant("Continued")),
             ]
         ]
     )
@@ -1791,7 +1806,7 @@ async def test_continue_persists_only_new_messages(tmp_path: Path) -> None:
         [entry.message for entry in message_entries],
         [
             UserMessage(content="Continue me"),
-            AssistantMessage(content="Continued"),
+            _assistant("Continued"),
         ],
     )
 
@@ -1805,13 +1820,13 @@ async def test_tool_results_are_persisted(tmp_path: Path) -> None:
             [
                 assistant_start(model="fake"),
                 assistant_done(
-                    message=AssistantMessage(content=assistant_content("Using tool", [tool_call])),
+                    message=_assistant(assistant_content("Using tool", [tool_call])),
                     finish_reason="tool_calls",
                 ),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ],
         ]
     )
@@ -1830,7 +1845,7 @@ async def test_session_preserves_explicit_empty_system_prompt(tmp_path: Path) ->
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ]
         ]
     )
@@ -1864,7 +1879,7 @@ async def test_session_builds_system_prompt_when_system_is_omitted(tmp_path: Pat
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ]
         ]
     )
@@ -1897,11 +1912,11 @@ async def test_session_touches_session_manager_after_persisting_messages(tmp_pat
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Greeting")),
+                assistant_done(message=_assistant("Greeting")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ],
         ]
     )
@@ -1933,11 +1948,11 @@ async def test_session_auto_names_first_unnamed_managed_session(tmp_path: Path) 
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content='"Fix broken CLI output now"')),
+                assistant_done(message=_assistant('"Fix broken CLI output now"')),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ],
         ]
     )
@@ -1960,7 +1975,7 @@ async def test_session_auto_names_first_unnamed_managed_session(tmp_path: Path) 
     assert renamed.title == "Fix broken CLI output"
     assert provider.calls[0][0] == "fake"
     assert provider.calls[0][3] == []
-    assert "Please fix the broken CLI output." in provider.calls[0][2][0].content
+    assert "Please fix the broken CLI output." in message_text(provider.calls[0][2][0])
     _assert_messages(
         provider.calls[1][2], [UserMessage(content="Please fix the broken CLI output.")]
     )
@@ -1979,11 +1994,11 @@ async def test_session_yields_expanded_custom_prompt_before_auto_naming(tmp_path
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Review target")),
+                assistant_done(message=_assistant("Review target")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ],
         ]
     )
@@ -2028,7 +2043,7 @@ async def test_session_auto_name_falls_back_when_provider_fails(tmp_path: Path) 
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ],
         ]
     )
@@ -2053,7 +2068,7 @@ async def test_session_auto_name_falls_back_when_provider_fails(tmp_path: Path) 
         session.messages,
         (
             UserMessage(content="Investigate flaky session restore tests"),
-            AssistantMessage(content="Done"),
+            _assistant("Done"),
         ),
     )
 
@@ -2069,11 +2084,11 @@ async def test_session_auto_name_falls_back_when_provider_returns_unusable_title
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="!!!")),
+                assistant_done(message=_assistant("!!!")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ],
         ]
     )
@@ -2105,7 +2120,7 @@ async def test_session_auto_name_does_not_overwrite_manual_name(tmp_path: Path) 
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ],
         ]
     )
@@ -2140,11 +2155,11 @@ async def test_session_auto_name_does_not_index_new_session_before_first_persist
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Generated title")),
+                assistant_done(message=_assistant("Generated title")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ],
         ]
     )
@@ -2162,6 +2177,7 @@ async def test_session_auto_name_does_not_index_new_session_before_first_persist
     )
 
     stream = session.prompt("Stop before the first persisted message")
+    assert isinstance(stream, AsyncGenerator)
     _first_event = await anext(stream)
     await stream.aclose()
 
@@ -2180,7 +2196,7 @@ async def test_session_loads_and_expands_skills(tmp_path: Path) -> None:
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ]
         ]
     )
@@ -2197,9 +2213,10 @@ async def test_session_loads_and_expands_skills(tmp_path: Path) -> None:
     _events = await _collect_session_events(session.prompt("/skill:testing\n\nadd tests"))
 
     assert {skill.name for skill in session.skills} == {"testing"}
-    assert '<skill name="testing" location="' in provider.calls[0][2][0].content
-    assert "References are relative to" in provider.calls[0][2][0].content
-    assert provider.calls[0][2][0].content.endswith("</skill>\n\nadd tests")
+    prompt = message_text(provider.calls[0][2][0])
+    assert '<skill name="testing" location="' in prompt
+    assert "References are relative to" in prompt
+    assert prompt.endswith("</skill>\n\nadd tests")
     assert session.handle_command("/skill:testing").handled is False
 
 
@@ -2218,7 +2235,7 @@ async def test_session_skills_disabled_suppresses_skill_index(tmp_path: Path) ->
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ]
         ]
     )
@@ -2317,7 +2334,7 @@ async def test_session_expands_prompt_templates_as_slash_commands(tmp_path: Path
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ]
         ]
     )
@@ -2336,7 +2353,7 @@ async def test_session_expands_prompt_templates_as_slash_commands(tmp_path: Path
 
     _events = await _collect_session_events(session.prompt("/example src/app.py"))
 
-    assert provider.calls[0][2][0].content == "Custom prompt for src/app.py."
+    assert message_text(provider.calls[0][2][0]) == "Custom prompt for src/app.py."
 
 
 @pytest.mark.anyio
@@ -2423,7 +2440,7 @@ async def test_session_skill_index_lets_agent_read_relevant_skill_file(tmp_path:
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Skill applied.")),
+                assistant_done(message=_assistant("Skill applied.")),
             ],
         ]
     )
@@ -2661,7 +2678,7 @@ async def test_session_reload_refreshes_resources_and_system_prompt(tmp_path: Pa
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Done")),
+                assistant_done(message=_assistant("Done")),
             ]
         ]
     )
@@ -2675,8 +2692,8 @@ async def test_session_reload_refreshes_resources_and_system_prompt(tmp_path: Pa
             resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
         )
     )
-    assert session.skills == ()
-    assert session.context_files == ()
+    assert len(session.skills) == 0
+    assert len(session.context_files) == 0
 
     skills_dir = resource_root / "skills" / "testing"
     skills_dir.mkdir(parents=True)
@@ -2697,8 +2714,12 @@ async def test_session_reload_refreshes_resources_and_system_prompt(tmp_path: Pa
     assert summary.context_files.after == 1
     assert summary.system_prompt_rebuilt is True
     assert entries_after == entries_before
-    assert {skill.name for skill in session.skills} == {"testing"}
-    assert [Path(context_file.path).name for context_file in session.context_files] == ["AGENTS.md"]
+    reloaded_skills = cast(tuple[Skill, ...], session.skills)
+    reloaded_context_files = cast(tuple[ProjectContextFile, ...], session.context_files)
+    assert {skill.name for skill in reloaded_skills} == {"testing"}
+    assert [Path(context_file.path).name for context_file in reloaded_context_files] == [
+        "AGENTS.md"
+    ]
     assert "Reloaded project rules." in provider.calls[0][1]
     assert "<name>testing</name>" in provider.calls[0][1]
 
@@ -2805,15 +2826,15 @@ async def test_session_compact_persists_summary_and_rebuilds_context(tmp_path: P
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Session answer")),
+                assistant_done(message=_assistant("Session answer")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Generated session summary")),
+                assistant_done(message=_assistant("Generated session summary")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Next answer")),
+                assistant_done(message=_assistant("Next answer")),
             ],
         ]
     )
@@ -2839,7 +2860,9 @@ async def test_session_compact_persists_summary_and_rebuilds_context(tmp_path: P
     assert compactions[0].replaces_entry_ids == message_entries_before
     assert leaves[-1].entry_id == compactions[0].id
     assert provider.calls[1][1].startswith("You are a context summarization assistant.")
-    assert "Additional focus: Focus on session persistence." in provider.calls[1][2][0].content
+    assert "Additional focus: Focus on session persistence." in message_text(
+        provider.calls[1][2][0]
+    )
     _assert_messages(
         provider.calls[2][2],
         [
@@ -2859,19 +2882,19 @@ async def test_session_auto_compacts_after_response_when_threshold_is_exceeded(
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="First answer")),
+                assistant_done(message=_assistant("First answer")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Second answer")),
+                assistant_done(message=_assistant("Second answer")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Generated automatic summary")),
+                assistant_done(message=_assistant("Generated automatic summary")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Third answer")),
+                assistant_done(message=_assistant("Third answer")),
             ],
         ]
     )
@@ -2895,13 +2918,13 @@ async def test_session_auto_compacts_after_response_when_threshold_is_exceeded(
 
     assert len(compactions) == 1
     assert compactions[0].summary == "Generated automatic summary"
-    assert "Explain sessions." in provider.calls[2][2][0].content
+    assert "Explain sessions." in message_text(provider.calls[2][2][0])
     _assert_messages(
         provider.calls[3][2],
         [
             UserMessage(content=f"Previous conversation summary:\n{compactions[0].summary}"),
             UserMessage(content="Continue."),
-            AssistantMessage(content="Second answer"),
+            _assistant("Second answer"),
             UserMessage(content="Next."),
         ],
     )
@@ -2918,7 +2941,7 @@ async def test_session_auto_compacts_from_provider_reported_usage(
                 assistant_start(model="fake"),
                 assistant_done(
                     message=AssistantMessage(
-                        content="First answer",
+                        content=[TextContent(text="First answer")],
                         usage=Usage(total_tokens=1_000),
                         timestamp=2_000_000_000_000,
                     )
@@ -2928,7 +2951,7 @@ async def test_session_auto_compacts_from_provider_reported_usage(
                 assistant_start(model="fake"),
                 assistant_done(
                     message=AssistantMessage(
-                        content="Second answer",
+                        content=[TextContent(text="Second answer")],
                         usage=Usage(total_tokens=60_000),
                         timestamp=2_000_000_000_001,
                     )
@@ -2936,7 +2959,7 @@ async def test_session_auto_compacts_from_provider_reported_usage(
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Provider-usage summary")),
+                assistant_done(message=_assistant("Provider-usage summary")),
             ],
         ]
     )
@@ -2973,15 +2996,15 @@ async def test_session_auto_compacts_with_pi_style_default_threshold(
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="First answer")),
+                assistant_done(message=_assistant("First answer")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Second answer")),
+                assistant_done(message=_assistant("Second answer")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Default threshold summary")),
+                assistant_done(message=_assistant("Default threshold summary")),
             ],
         ]
     )
@@ -3106,20 +3129,20 @@ async def test_session_compacts_and_retries_once_after_context_overflow(
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="First answer")),
+                assistant_done(message=_assistant("First answer")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Second answer")),
+                assistant_done(message=_assistant("Second answer")),
             ],
             [assistant_error(message="This model's maximum context length was exceeded.")],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Overflow recovery summary")),
+                assistant_done(message=_assistant("Overflow recovery summary")),
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Recovered answer")),
+                assistant_done(message=_assistant("Recovered answer")),
             ],
         ]
     )
@@ -3138,7 +3161,7 @@ async def test_session_compacts_and_retries_once_after_context_overflow(
         and getattr(getattr(event, "message", None), "text", None) == "Recovered answer"
         for event in retry_events
     )
-    assert [message.text for message in provider.calls[4][2][:4]] == [
+    assert [message_text(message) for message in provider.calls[4][2][:4]] == [
         "Previous conversation summary:\nOverflow recovery summary",
         "Keep this recent turn.",
         "Second answer",
@@ -3159,16 +3182,16 @@ async def test_session_compacts_and_retries_once_after_context_overflow(
 async def test_huggingface_session_pins_successful_automatic_route(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    created: list[tuple[str | None, object | None]] = []
+    created: list[tuple[str | None, Callable[[Mapping[str, str]], None] | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
         thinking_level: str | None = None,
         inference_provider: str | None = None,
-        response_headers_observer: object | None = None,
+        response_headers_observer: Callable[[Mapping[str, str]], None] | None = None,
     ) -> SwitchableFakeProvider:
         del credential_store, thinking_level
         created.append((inference_provider, response_headers_observer))
@@ -3222,7 +3245,9 @@ async def test_huggingface_session_pins_successful_automatic_route(
 
     assert session.inference_provider == "deepinfra"
     assert created[-1][0] == "deepinfra"
-    assert manager.get_session(record.id).inference_provider == "deepinfra"  # type: ignore[union-attr]
+    updated_record = manager.get_session(record.id)
+    assert updated_record is not None
+    assert updated_record.inference_provider == "deepinfra"
 
 
 @pytest.mark.anyio
@@ -3232,7 +3257,7 @@ async def test_huggingface_session_re_resolves_pin_on_model_switch(
     created: list[tuple[str | None, str | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
@@ -3289,7 +3314,9 @@ async def test_huggingface_session_re_resolves_pin_on_model_switch(
     ]
     assert session.model == "deepseek-ai/DeepSeek-V4-Flash"
     assert session.inference_provider == "fireworks-ai"
-    assert manager.get_session(record.id).inference_provider == "fireworks-ai"  # type: ignore[union-attr]
+    updated_record = manager.get_session(record.id)
+    assert updated_record is not None
+    assert updated_record.inference_provider == "fireworks-ai"
 
 
 @pytest.mark.anyio
@@ -3299,7 +3326,7 @@ async def test_session_switches_configured_provider(
     created_providers: list[SwitchableFakeProvider] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
@@ -3370,7 +3397,7 @@ async def test_session_switch_uses_session_credential_store(
     credential_store_paths: list[Path] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
@@ -3553,7 +3580,7 @@ async def test_session_resumes_indexed_session(tmp_path: Path) -> None:
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Second answer")),
+                assistant_done(message=_assistant("Second answer")),
             ]
         ]
     )
@@ -3571,7 +3598,7 @@ async def test_session_resumes_indexed_session(tmp_path: Path) -> None:
     await second_storage.append(SessionInfoEntry(cwd=str(second_record.cwd)))
     await second_storage.append(ModelChangeEntry(model="fake"))
     await second_storage.append(MessageEntry(message=UserMessage(content="Earlier")))
-    await second_storage.append(MessageEntry(message=AssistantMessage(content="Restored")))
+    await second_storage.append(MessageEntry(message=_assistant("Restored")))
 
     message = await session.resume(second_record.id)
     _events = await _collect_session_events(session.prompt("Continue."))
@@ -3579,12 +3606,12 @@ async def test_session_resumes_indexed_session(tmp_path: Path) -> None:
     assert message == f"Resumed session: {second_record.id}"
     assert session.session_id == second_record.id
     assert session.cwd == second_record.cwd
-    assert [item.text for item in session.messages[:2]] == ["Earlier", "Restored"]
+    assert [message_text(item) for item in session.messages[:2]] == ["Earlier", "Restored"]
     _assert_messages(
         provider.calls[0][2],
         [
             UserMessage(content="Earlier"),
-            AssistantMessage(content="Restored"),
+            _assistant("Restored"),
             UserMessage(content="Continue."),
         ],
     )
@@ -3642,7 +3669,7 @@ async def test_session_toggle_scoped_model_preserves_newer_provider_file_changes
 
     session.toggle_scoped_model(ModelChoice(provider_name="local", model="llama"))
 
-    saved = coding_session_module.load_provider_settings(tau_paths)
+    saved = load_provider_settings(tau_paths)
     assert saved.get_provider("remote").default_model == "sonnet"
     assert saved.scoped_models == (
         ScopedModelConfig(provider="local", model="qwen"),
@@ -3671,7 +3698,7 @@ async def test_session_set_model_rejects_model_not_declared_for_provider(tmp_pat
     )
 
     with pytest.raises(
-        coding_session_module.ProviderConfigError,
+        ProviderConfigError,
         match="Model is not configured for provider openai: gpt-5.5",
     ):
         session.set_model("gpt-5.5")
@@ -3687,14 +3714,14 @@ async def test_session_load_falls_back_when_persisted_model_does_not_match_provi
     created: list[tuple[str, str | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
         thinking_level: str | None = None,
     ) -> SwitchableFakeProvider:
         del credential_store, thinking_level
-        created.append((provider_config.name, model))  # type: ignore[attr-defined]
+        created.append((provider_config.name, model))
         return SwitchableFakeProvider(provider_config)
 
     monkeypatch.setattr(coding_session_module, "create_model_provider", create_provider)
@@ -3753,7 +3780,7 @@ async def test_session_set_model_persists_default_provider_model(
 
     session.set_model("gpt-5-mini")
 
-    saved = coding_session_module.load_provider_settings(tau_paths)
+    saved = load_provider_settings(tau_paths)
     assert saved.default_provider == "openai"
     assert saved.get_provider("openai").default_model == "gpt-5-mini"
 
@@ -3784,14 +3811,14 @@ async def test_session_set_model_choice_persists_default_provider_model(
     created: list[tuple[str, str | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
         thinking_level: str | None = None,
     ) -> SwitchableFakeProvider:
         del credential_store, thinking_level
-        created.append((provider_config.name, model))  # type: ignore[attr-defined]
+        created.append((provider_config.name, model))
         return SwitchableFakeProvider(provider_config)
 
     monkeypatch.setattr(coding_session_module, "create_model_provider", create_provider)
@@ -3812,7 +3839,7 @@ async def test_session_set_model_choice_persists_default_provider_model(
 
     session.set_model_choice(ModelChoice(provider_name="local", model="llama"))
 
-    saved = coding_session_module.load_provider_settings(tau_paths)
+    saved = load_provider_settings(tau_paths)
     assert saved.default_provider == "local"
     assert saved.get_provider("local").default_model == "llama"
     assert created == [("local", "llama")]
@@ -3849,14 +3876,14 @@ async def test_session_set_model_choice_switches_provider_model_directly(
     created: list[tuple[str, str | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
         thinking_level: str | None = None,
     ) -> SwitchableFakeProvider:
         del credential_store, thinking_level
-        created.append((provider_config.name, model))  # type: ignore[attr-defined]
+        created.append((provider_config.name, model))
         return SwitchableFakeProvider(provider_config)
 
     monkeypatch.setattr(coding_session_module, "create_model_provider", create_provider)
@@ -3925,7 +3952,7 @@ async def test_session_set_model_preserves_newer_provider_file_changes(
 
     session.set_model("gpt-5-mini")
 
-    saved = coding_session_module.load_provider_settings(tau_paths)
+    saved = load_provider_settings(tau_paths)
     assert saved.get_provider("openai").default_model == "gpt-5-mini"
     assert saved.get_provider("openrouter").headers == {"X-Title": "Tau"}
     assert saved.scoped_models == (
@@ -3963,14 +3990,14 @@ async def test_session_new_session_uses_default_provider_model(
     created: list[tuple[str, str | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
         thinking_level: str | None = None,
     ) -> SwitchableFakeProvider:
         del credential_store, thinking_level
-        created.append((provider_config.name, model))  # type: ignore[attr-defined]
+        created.append((provider_config.name, model))
         return SwitchableFakeProvider(provider_config)
 
     monkeypatch.setattr(coding_session_module, "create_model_provider", create_provider)
@@ -3995,6 +4022,7 @@ async def test_session_new_session_uses_default_provider_model(
     assert message.startswith("Started new session: ")
     assert session.provider_name == "openai"
     assert session.model == "gpt-5"
+    assert session.session_id is not None
     assert manager.get_session(session.session_id) is None
     assert created == [("openai", "gpt-5")]
 
@@ -4017,7 +4045,7 @@ async def test_session_new_session_is_indexed_after_first_message(
     )
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
@@ -4028,11 +4056,11 @@ async def test_session_new_session_is_indexed_after_first_message(
             [
                 [
                     assistant_start(model="gpt-5"),
-                    assistant_done(message=AssistantMessage(content="Greeting")),
+                    assistant_done(message=_assistant("Greeting")),
                 ],
                 [
                     assistant_start(model="gpt-5"),
-                    assistant_done(message=AssistantMessage(content="Done")),
+                    assistant_done(message=_assistant("Done")),
                 ],
             ]
         )
@@ -4087,7 +4115,7 @@ async def test_session_name_indexes_pending_session_without_prompt(
     )
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
@@ -4170,14 +4198,14 @@ async def test_session_resume_uses_target_session_provider_model(
     created: list[tuple[str, str | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
         thinking_level: str | None = None,
     ) -> SwitchableFakeProvider:
         del credential_store, thinking_level
-        created.append((provider_config.name, model))  # type: ignore[attr-defined]
+        created.append((provider_config.name, model))
         return SwitchableFakeProvider(provider_config)
 
     monkeypatch.setattr(coding_session_module, "create_model_provider", create_provider)
@@ -4248,14 +4276,14 @@ async def test_session_resume_missing_provider_preserves_active_provider_model(
     created: list[tuple[str, str | None]] = []
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
         thinking_level: str | None = None,
     ) -> SwitchableFakeProvider:
         del credential_store, thinking_level
-        created.append((provider_config.name, model))  # type: ignore[attr-defined]
+        created.append((provider_config.name, model))
         return SwitchableFakeProvider(provider_config)
 
     monkeypatch.setattr(coding_session_module, "create_model_provider", create_provider)
@@ -4325,7 +4353,7 @@ async def test_session_resume_rejects_incompatible_provider_model(
     )
 
     def create_provider(
-        provider_config: object,
+        provider_config: ProviderConfig,
         *,
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
@@ -4386,7 +4414,7 @@ async def test_session_context_usage_recalculates_after_resume(tmp_path: Path) -
     await second_storage.append(SessionInfoEntry(cwd=str(second_record.cwd)))
     await second_storage.append(ModelChangeEntry(model="fake"))
     await second_storage.append(MessageEntry(message=UserMessage(content="Earlier " * 20)))
-    await second_storage.append(MessageEntry(message=AssistantMessage(content="Restored " * 20)))
+    await second_storage.append(MessageEntry(message=_assistant("Restored " * 20)))
 
     _message = await session.resume(second_record.id)
     after_resume_usage = session.context_usage
@@ -4400,8 +4428,8 @@ async def test_session_context_usage_recalculates_after_resume(tmp_path: Path) -
 def test_custom_prompt_template_retains_precedence_over_other_commands(tmp_path: Path) -> None:
     session = CodingSession(
         _config(tmp_path, FakeProvider([]), JsonlSessionStorage(tmp_path / "session.jsonl")),
-        state=object(),  # type: ignore[arg-type]
-        harness=object(),  # type: ignore[arg-type]
+        state=cast(SessionState, object()),
+        harness=cast(AgentHarness, object()),
         last_parent_id=None,
         prompt_templates=(
             PromptTemplate(name="new", path=tmp_path / "new.md", content="Custom workflow"),
@@ -4417,8 +4445,8 @@ def test_custom_prompt_template_retains_precedence_over_other_commands(tmp_path:
 def test_minimal_commands_are_handled(tmp_path: Path) -> None:
     session = CodingSession(
         _config(tmp_path, FakeProvider([]), JsonlSessionStorage(tmp_path / "session.jsonl")),
-        state=object(),  # type: ignore[arg-type]
-        harness=object(),  # type: ignore[arg-type]
+        state=cast(SessionState, object()),
+        harness=cast(AgentHarness, object()),
         last_parent_id=None,
     )
 

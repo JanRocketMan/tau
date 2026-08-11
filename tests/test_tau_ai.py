@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from tau_agent import (
+    AgentMessage,
     AgentTool,
     AgentToolResult,
     AssistantMessage,
@@ -16,10 +17,12 @@ from tau_agent import (
     UserMessage,
 )
 from tau_agent.messages import assistant_content
+from tau_agent.tools import ToolCancellationToken, ToolUpdateCallback
 from tau_agent.types import JSONValue
 from tau_ai import (
     AssistantDoneEvent,
     AssistantErrorEvent,
+    AssistantMessageEvent,
     AssistantStartEvent,
     FakeProvider,
     OpenAICodexConfig,
@@ -34,8 +37,16 @@ from tau_ai import (
 )
 
 
-async def _collect(stream: AsyncIterator[object]) -> list[object]:
+async def _collect[T](stream: AsyncIterator[T]) -> list[T]:
     return [event async for event in stream]
+
+
+def _diagnostic_details(event: AssistantErrorEvent) -> dict[str, JSONValue]:
+    diagnostics = event.error.diagnostics
+    assert diagnostics
+    details = diagnostics[0].details
+    assert isinstance(details, dict)
+    return details
 
 
 def _provider_tool(
@@ -46,18 +57,18 @@ def _provider_tool(
     async def execute(
         tool_call_id: str,
         arguments: Mapping[str, JSONValue],
-        signal: object | None = None,
-        on_update: object | None = None,
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
         del tool_call_id, signal, on_update
-        return AgentToolResult(content=str(arguments))
+        return AgentToolResult(content=[TextContent(text=str(arguments))])
 
     return AgentTool(
         name=name,
         label=name,
         description=description,
         parameters=parameters,
-        execute_fn=execute,  # type: ignore[arg-type]
+        execute_fn=execute,
     )
 
 
@@ -72,8 +83,8 @@ def _weather_tool() -> AgentTool:
 @pytest.mark.anyio
 async def test_fake_provider_replays_scripted_events() -> None:
     start = AssistantMessage(model="fake-model")
-    final = AssistantMessage(content="hello", model="fake-model")
-    scripted = [
+    final = AssistantMessage(content=[TextContent(text="hello")], model="fake-model")
+    scripted: list[AssistantMessageEvent] = [
         AssistantStartEvent(partial=start),
         TextDeltaEvent(content_index=0, delta="hello", partial=final),
         AssistantDoneEvent(reason="stop", message=final),
@@ -595,7 +606,7 @@ async def test_openai_compatible_provider_does_not_retry_non_transient_status() 
         "test-openai request failed with status 400 for model test-model: "
         "The selected model is unavailable."
     )
-    assert events[-1].error.diagnostics[0].details == {
+    assert _diagnostic_details(events[-1]) == {
         "status_code": 400,
         "body": '{"error":{"message":"The selected model is unavailable."}}',
         "attempts": 1,
@@ -631,7 +642,7 @@ async def test_openai_compatible_provider_includes_plain_http_error_body_in_mess
     assert events[-1].error.error_message == (
         "test-openai request failed with status 400 for model test-model: bad request details"
     )
-    assert events[-1].error.diagnostics[0].details == {
+    assert _diagnostic_details(events[-1]) == {
         "status_code": 400,
         "body": "bad request details",
         "attempts": 1,
@@ -729,7 +740,7 @@ async def test_openai_codex_provider_includes_http_error_detail_in_message() -> 
         "openai-codex request failed with status 400 for model gpt-5.5: "
         "The requested model does not exist."
     )
-    assert events[-1].error.diagnostics[0].details == {
+    assert _diagnostic_details(events[-1]) == {
         "status_code": 400,
         "body": '{"error":{"message":"The requested model does not exist."}}',
         "attempts": 1,
@@ -768,7 +779,7 @@ async def test_openai_codex_provider_includes_plain_http_error_body_in_message()
     assert events[-1].error.error_message == (
         "openai-codex request failed with status 400 for model gpt-5.5: bad request details"
     )
-    assert events[-1].error.diagnostics[0].details == {
+    assert _diagnostic_details(events[-1]) == {
         "status_code": 400,
         "body": "bad request details",
         "attempts": 1,
@@ -823,7 +834,7 @@ async def test_openai_codex_provider_surfaces_nested_stream_error_message() -> N
     assert events[-1].error.error_message == (
         "Our servers are currently overloaded. Please try again later."
     )
-    assert events[-1].error.diagnostics[0].details == {
+    assert _diagnostic_details(events[-1]) == {
         "event": {
             "type": "error",
             "error": {
@@ -1437,7 +1448,7 @@ async def test_responses_api_formats_request_for_restricted_model() -> None:
             headers={"content-type": "text/event-stream"},
         )
 
-    messages = [
+    messages: list[AgentMessage] = [
         UserMessage(content="weather in Paris?"),
         AssistantMessage(
             content=assistant_content(
@@ -1786,8 +1797,10 @@ async def test_responses_api_surfaces_stream_failure() -> None:
     assert len(error_events) == 1
     assert error_events[0].error.error_message == "model exploded"
     # The raw event is preserved for debugging (code/param/type, etc.).
-    assert error_events[0].error.diagnostics[0].details is not None
-    assert error_events[0].error.diagnostics[0].details["event"]["type"] == "response.failed"
+    details = _diagnostic_details(error_events[0])
+    raw_event = details["event"]
+    assert isinstance(raw_event, dict)
+    assert raw_event["type"] == "response.failed"
 
 
 @pytest.mark.anyio

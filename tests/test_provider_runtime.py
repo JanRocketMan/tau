@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from tau_ai import OpenAICodexProvider, OpenAICompatibleProvider
@@ -14,7 +16,7 @@ from tau_coding.provider_config import (
 from tau_coding.provider_runtime import OpenAICodexCredentialResolver, create_model_provider
 
 
-def test_create_model_provider_returns_openai_codex_provider(tmp_path) -> None:
+def test_create_model_provider_returns_openai_codex_provider(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
 
     provider = create_model_provider(
@@ -25,8 +27,9 @@ def test_create_model_provider_returns_openai_codex_provider(tmp_path) -> None:
     assert isinstance(provider, OpenAICodexProvider)
 
 
-def test_create_model_provider_uses_codex_model_image_capability(tmp_path) -> None:
+def test_create_model_provider_uses_codex_model_image_capability(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
+    store.set_api_key("opencode", "sk-test")
     config = provider_config_from_catalog_entry("openai-codex")
 
     vision_provider = create_model_provider(
@@ -50,7 +53,7 @@ def test_create_model_provider_uses_codex_model_image_capability(tmp_path) -> No
     assert text_provider._config.supports_images is False
 
 
-def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path) -> None:
+def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_api_key("opencode", "sk-test")
 
@@ -66,7 +69,7 @@ def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path) -> Non
     assert provider._config.compat["sessionAffinityFormat"] == "openai"
 
 
-def test_huggingface_runtime_pins_backing_provider_with_model_alias(tmp_path) -> None:
+def test_huggingface_runtime_pins_backing_provider_with_model_alias(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_api_key("huggingface", "hf-test")
     config = OpenAICompatibleProviderConfig(
@@ -87,7 +90,7 @@ def test_huggingface_runtime_pins_backing_provider_with_model_alias(tmp_path) ->
     assert provider._config.model_aliases == {"zai-org/GLM-5.2": "zai-org/GLM-5.2:deepinfra"}
 
 
-def test_huggingface_runtime_rejects_policy_suffix(tmp_path) -> None:
+def test_huggingface_runtime_rejects_policy_suffix(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_api_key("huggingface", "hf-test")
     config = OpenAICompatibleProviderConfig(
@@ -106,7 +109,7 @@ def test_huggingface_runtime_rejects_policy_suffix(tmp_path) -> None:
         )
 
 
-def test_compatible_gateway_defaults_to_no_openai_cache_affinity(tmp_path) -> None:
+def test_compatible_gateway_defaults_to_no_openai_cache_affinity(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_api_key("opencode", "gateway-key")
 
@@ -120,7 +123,9 @@ def test_compatible_gateway_defaults_to_no_openai_cache_affinity(tmp_path) -> No
     assert provider._config.compat["sendSessionAffinityHeaders"] is False
 
 
-def test_create_model_provider_rejects_model_not_declared_for_provider(tmp_path) -> None:
+def test_create_model_provider_rejects_model_not_declared_for_provider(
+    tmp_path: Path,
+) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     provider_config = OpenAICompatibleProviderConfig(
         name="local",
@@ -135,7 +140,7 @@ def test_create_model_provider_rejects_model_not_declared_for_provider(tmp_path)
         create_model_provider(provider_config, credential_store=store, model="llama")
 
 
-def test_create_model_provider_maps_codex_reasoning_effort_like_pi(tmp_path) -> None:
+def test_create_model_provider_maps_codex_reasoning_effort_like_pi(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     provider_config = OpenAICodexProviderConfig(
         thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
@@ -172,7 +177,7 @@ def test_create_model_provider_maps_codex_reasoning_effort_like_pi(tmp_path) -> 
 
 def test_create_model_provider_coerces_unsupported_startup_thinking_level(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     # Regression: startup used to pass the global default ("medium") straight
     # to create_model_provider, which crashed for models like kimi-code:k3
@@ -227,7 +232,7 @@ def test_create_model_provider_coerces_unsupported_startup_thinking_level(
 @pytest.mark.anyio
 async def test_openai_codex_credential_resolver_refreshes_expired_credentials(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set_oauth(

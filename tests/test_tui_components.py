@@ -9,11 +9,17 @@ exceptions staying un-swallowed, and main-view open/close restoring the main
 transcript.
 """
 
+from typing import cast
+
 import pytest
 from textual.containers import Container
+from textual.widget import Widget
 from textual.widgets import Static
 
+from tau_coding import CodingSession
+from tau_coding.extensions import SlotWidgetFactory
 from tau_coding.tui.app import PromptInput, TauTuiApp
+from tau_coding.tui.config import TuiTheme
 from tau_coding.tui.widgets import TranscriptView
 from test_tui_app import (  # noqa: E402 - sibling test module (see docstring)
     FakeSession,
@@ -21,9 +27,13 @@ from test_tui_app import (  # noqa: E402 - sibling test module (see docstring)
 )
 
 
+def _app() -> TauTuiApp:
+    return TauTuiApp(cast(CodingSession, FakeSession()))
+
+
 @pytest.mark.anyio
 async def test_component_above_prompt_slot_mounts_into_above_slot() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -45,7 +55,7 @@ async def test_component_above_prompt_slot_mounts_into_above_slot() -> None:
 
 @pytest.mark.anyio
 async def test_component_multiple_slot_widgets_mount_in_call_order() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -62,7 +72,7 @@ async def test_component_multiple_slot_widgets_mount_in_call_order() -> None:
 
 @pytest.mark.anyio
 async def test_component_second_main_view_replaces_first() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -92,7 +102,7 @@ async def test_component_slot_replace_same_id_same_tick_no_duplicate() -> None:
     drains would leave two widgets sharing an id (``DuplicateIds``). The swap
     must await the removal, so exactly one widget survives with no failure.
     """
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -119,7 +129,7 @@ async def test_component_slot_replace_same_id_same_tick_no_duplicate() -> None:
 @pytest.mark.anyio
 async def test_component_slot_rapid_a_b_c_last_wins() -> None:
     """Three same-id slot swaps in one tick collapse to the last, no duplicates."""
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -127,8 +137,9 @@ async def test_component_slot_rapid_a_b_c_last_wins() -> None:
 
         made: dict[str, Static] = {}
 
-        def factory(label: str):  # noqa: ANN202
-            def build(theme):  # noqa: ANN001, ANN202
+        def factory(label: str) -> SlotWidgetFactory:
+            def build(theme: TuiTheme) -> Widget:
+                del theme
                 widget = made[label] = Static(label, id="abc-slot")
                 return widget
 
@@ -152,7 +163,7 @@ async def test_component_slot_rapid_a_b_c_last_wins() -> None:
 @pytest.mark.anyio
 async def test_component_second_main_view_same_id_no_duplicate() -> None:
     """Opening a second same-id main view while one is open must not collide."""
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -175,7 +186,7 @@ async def test_component_second_main_view_same_id_no_duplicate() -> None:
 @pytest.mark.anyio
 async def test_component_main_view_rapid_a_b_c_last_wins() -> None:
     """Three same-id main-view opens in one tick mount exactly the last one."""
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -192,7 +203,7 @@ async def test_component_main_view_rapid_a_b_c_last_wins() -> None:
         slot = app.query_one("#main-slot", Container)
         surviving = slot.query("#abc-view")
         assert len(surviving) == 1
-        assert surviving.first() is c.widget
+        assert surviving.first() is app._extension_main_view_mounted
         assert app._extension_main_view is c
         assert not a.is_open
         assert not b.is_open
@@ -202,7 +213,7 @@ async def test_component_main_view_rapid_a_b_c_last_wins() -> None:
 
 @pytest.mark.anyio
 async def test_component_host_exception_is_not_swallowed() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     with pytest.raises(RuntimeError, match="core-bug"):
         async with app.run_test(size=(100, 30)) as pilot:
@@ -226,7 +237,7 @@ async def test_component_host_exception_is_not_swallowed() -> None:
 
 @pytest.mark.anyio
 async def test_component_main_view_open_close_restores_transcript() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _app()
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()

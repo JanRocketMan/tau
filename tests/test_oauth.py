@@ -94,7 +94,7 @@ async def test_refresh_openai_codex_token_preserves_refresh_and_reads_jwt_expiry
 
 
 def _jwt(account_id: str, *, expires: int | None = None) -> str:
-    payload = {OPENAI_CODEX_ACCOUNT_CLAIM: {"chatgpt_account_id": account_id}}
+    payload: dict[str, object] = {OPENAI_CODEX_ACCOUNT_CLAIM: {"chatgpt_account_id": account_id}}
     if expires is not None:
         payload["exp"] = expires
     return ".".join(

@@ -1,6 +1,8 @@
 """Canonical Pi event constructors used by the test suite."""
 
-from tau_agent.messages import AssistantMessage, ThinkingContent, ToolCall
+from typing import Literal
+
+from tau_agent.messages import AssistantMessage, TextContent, ThinkingContent, ToolCall
 from tau_agent.provider_events import (
     AssistantDoneEvent,
     AssistantErrorEvent,
@@ -16,7 +18,11 @@ def assistant_start(model: str = "fake") -> AssistantStartEvent:
 
 
 def text_delta(delta: str) -> TextDeltaEvent:
-    return TextDeltaEvent(content_index=0, delta=delta, partial=AssistantMessage(content=delta))
+    return TextDeltaEvent(
+        content_index=0,
+        delta=delta,
+        partial=AssistantMessage(content=[TextContent(text=delta)]),
+    )
 
 
 def thinking_delta(delta: str) -> ThinkingDeltaEvent:
@@ -44,6 +50,7 @@ def assistant_done(
         if isinstance(message, AssistantMessage)
         else AssistantMessage.model_validate(message)
     )
+    reason: Literal["stop", "length", "toolUse"]
     if final.tool_calls or finish_reason in {"tool_calls", "tool_use", "toolUse"}:
         reason = "toolUse"
     elif finish_reason in {"length", "max_tokens", "MAX_TOKENS", "incomplete"}:

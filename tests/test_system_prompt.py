@@ -1,7 +1,10 @@
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
 from tau_agent import AgentTool, AgentToolResult
+from tau_agent.tools import ToolCancellationToken, ToolUpdateCallback
+from tau_agent.types import JSONValue
 from tau_coding import Skill
 from tau_coding.system_prompt import (
     BuildSystemPromptOptions,
@@ -16,12 +19,12 @@ from tau_coding.tools import create_coding_tools
 
 async def _unused_executor(
     tool_call_id: str,
-    _arguments: object,
-    signal: object | None = None,
-    on_update: object | None = None,
+    arguments: Mapping[str, JSONValue],
+    signal: ToolCancellationToken | None = None,
+    on_update: ToolUpdateCallback | None = None,
 ) -> AgentToolResult:
-    del tool_call_id, signal, on_update
-    return AgentToolResult(content="")
+    del tool_call_id, arguments, signal, on_update
+    return AgentToolResult()
 
 
 def test_default_prompt_includes_tools_guidelines_date_and_cwd(tmp_path: Path) -> None:
@@ -54,7 +57,7 @@ def test_tool_without_prompt_snippet_is_hidden_from_available_tools() -> None:
         label="Hidden",
         description="Still sent to provider",
         parameters={"type": "object"},
-        execute_fn=_unused_executor,  # type: ignore[arg-type]
+        execute_fn=_unused_executor,
     )
 
     assert format_available_tools([tool]) == "(none)"
@@ -129,7 +132,7 @@ def test_skills_are_included_only_when_read_tool_is_available(tmp_path: Path) ->
         label="Custom",
         description="Custom",
         parameters={"type": "object"},
-        execute_fn=_unused_executor,  # type: ignore[arg-type]
+        execute_fn=_unused_executor,
         prompt_snippet="Custom tool",
     )
 

@@ -35,4 +35,33 @@ from tau_ai.openai_codex import (
 from tau_ai.openai_compatible import OpenAICompatibleProvider
 from tau_ai.provider import CancellationToken, ModelProvider
 
-__all__ = [name for name in globals() if not name.startswith("_")]
+__all__ = [
+    "DEFAULT_OPENAI_CODEX_BASE_URL",
+    "DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES",
+    "DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS",
+    "DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS",
+    "AssistantDoneEvent",
+    "AssistantErrorEvent",
+    "AssistantMessageEvent",
+    "AssistantStartEvent",
+    "CancellationToken",
+    "FakeProvider",
+    "ModelLimitsProvider",
+    "ModelProvider",
+    "OpenAICodexConfig",
+    "OpenAICodexCredentials",
+    "OpenAICodexProvider",
+    "OpenAICompatibleConfig",
+    "OpenAICompatibleProvider",
+    "RuntimeModelLimits",
+    "RuntimeProviderAuth",
+    "TextDeltaEvent",
+    "TextEndEvent",
+    "TextStartEvent",
+    "ThinkingDeltaEvent",
+    "ThinkingEndEvent",
+    "ThinkingStartEvent",
+    "ToolCallDeltaEvent",
+    "ToolCallEndEvent",
+    "ToolCallStartEvent",
+]

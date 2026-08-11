@@ -8,6 +8,7 @@ from tau_agent import (
     LeafEntry,
     MessageEntry,
     ModelChangeEntry,
+    SessionEntry,
     SessionInfoEntry,
     TextContent,
     ToolCall,
@@ -20,12 +21,12 @@ from tau_coding.tui.themes import TAU_DARK_THEME, TAU_LIGHT_THEME
 
 
 def test_render_session_html_preserves_branch_tree() -> None:
-    entries = [
+    entries: list[SessionEntry] = [
         MessageEntry(id="root", message=UserMessage(content="Start <session>")),
         MessageEntry(
             id="left",
             parent_id="root",
-            message=AssistantMessage(content="Left branch"),
+            message=AssistantMessage(content=[TextContent(text="Left branch")]),
         ),
         MessageEntry(
             id="right",
@@ -132,7 +133,7 @@ def test_render_session_html_syntax_highlights_tool_call_arguments() -> None:
 
 
 def test_render_session_html_includes_filter_bar_and_accordions() -> None:
-    entries = [
+    entries: list[SessionEntry] = [
         SessionInfoEntry(id="info", title="Filtered export", cwd="/tmp"),
         MessageEntry(
             id="tool-call",
@@ -219,9 +220,13 @@ def test_render_session_html_marks_error_tool_results() -> None:
 
 
 def test_render_session_html_includes_jsonl_download() -> None:
-    entries = [
+    entries: list[SessionEntry] = [
         MessageEntry(id="root", message=UserMessage(content="Hello")),
-        MessageEntry(id="reply", parent_id="root", message=AssistantMessage(content="Hi")),
+        MessageEntry(
+            id="reply",
+            parent_id="root",
+            message=AssistantMessage(content=[TextContent(text="Hi")]),
+        ),
         LeafEntry(id="leaf", parent_id="reply", entry_id="reply"),
     ]
 
@@ -279,13 +284,13 @@ def test_export_session_html_writes_file(tmp_path: Path) -> None:
 
 
 def test_render_session_html_includes_usage_tab() -> None:
-    entries = [
+    entries: list[SessionEntry] = [
         MessageEntry(id="root", message=UserMessage(content="Hello")),
         MessageEntry(
             id="reply",
             parent_id="root",
             message=AssistantMessage(
-                content="Hi",
+                content=[TextContent(text="Hi")],
                 provider="anthropic",
                 model="claude-sonnet-4-5",
                 usage=Usage(input=120, output=30, cache_read=880, cache_write=40),
@@ -315,7 +320,9 @@ def test_render_session_html_uses_tau_theme_palette() -> None:
         MessageEntry(
             id="reply",
             parent_id="root",
-            message=AssistantMessage(content="Hi", usage=Usage(input=10, output=5)),
+            message=AssistantMessage(
+                content=[TextContent(text="Hi")], usage=Usage(input=10, output=5)
+            ),
         ),
     ]
 

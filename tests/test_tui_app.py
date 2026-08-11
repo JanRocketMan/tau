@@ -1,19 +1,25 @@
+# mypy: disable-error-code="func-returns-value, method-assign"
+
 import asyncio
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal, Never, cast
 
 import pytest
+from markdown_it.token import Token
 from rich.console import Console
 from textual import events
 from textual.color import Color
 from textual.containers import Container, VerticalScroll
-from textual.content import Style as TextualStyle
+from textual.content import Content as TextualContent
 from textual.geometry import Offset
 from textual.selection import SELECT_ALL, Selection
+from textual.style import Style as TextualStyle
+from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Static, TextArea
 from textual.widgets import Markdown as TextualMarkdown
 from textual.widgets.markdown import MarkdownStream
@@ -22,6 +28,7 @@ from conftest import isolate_home
 from tau_agent import (
     AgentEndEvent,
     AgentEvent,
+    AgentMessage,
     AgentStartEvent,
     AgentToolResult,
     AssistantMessage,
@@ -37,9 +44,12 @@ from tau_agent import (
     ToolExecutionUpdateEvent,
     ToolResultMessage,
     UserMessage,
+    message_text,
 )
-from tau_agent.messages import assistant_content
+from tau_agent.messages import AssistantContent, assistant_content
 from tau_agent.provider_events import TextDeltaEvent, ThinkingDeltaEvent
+from tau_agent.types import JSONValue
+from tau_coding import builtin_provider_entry, load_provider_settings
 from tau_coding.catalog_loader import user_catalog_path
 from tau_coding.commands import CommandResult
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
@@ -51,6 +61,7 @@ from tau_coding.events import (
     QueueUpdateEvent,
     SessionAgentEndEvent,
 )
+from tau_coding.extensions import UiBridge
 from tau_coding.paths import TauPaths
 from tau_coding.prompt_templates import PromptTemplate
 from tau_coding.provider_config import (
@@ -62,12 +73,15 @@ from tau_coding.provider_config import (
     save_provider_settings,
 )
 from tau_coding.session import (
+    CodingSession,
+    CodingSessionConfig,
     ModelChoice,
     SessionTreeBranchResult,
     SessionTreeChoice,
+    StreamingBehavior,
     TerminalCommandResult,
 )
-from tau_coding.session_manager import CodingSessionRecord
+from tau_coding.session_manager import CodingSessionRecord, SessionManager
 from tau_coding.skills import Skill, format_skill_invocation
 from tau_coding.system_prompt import ProjectContextFile
 from tau_coding.tools import create_coding_tools
@@ -143,6 +157,47 @@ from tau_coding.tui.widgets import (
 ANSI_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
+def _tui_app(
+    session: object,
+    *,
+    tui_settings: TuiSettings | None = None,
+    startup_message: str | None = None,
+    startup_notice: str | None = None,
+    startup_update_notice: str | None = None,
+    startup_notices: Sequence[str] = (),
+    initial_prompt: str | None = None,
+) -> TauTuiApp:
+    return TauTuiApp(
+        cast(CodingSession, session),
+        tui_settings=tui_settings,
+        startup_message=startup_message,
+        startup_notice=startup_notice,
+        startup_update_notice=startup_update_notice,
+        startup_notices=startup_notices,
+        initial_prompt=initial_prompt,
+    )
+
+
+def _render_content(widget: Static) -> TextualContent:
+    renderable = widget.render()
+    assert isinstance(renderable, TextualContent)
+    return renderable
+
+
+def _render_plain(widget: Static) -> str:
+    return _render_content(widget).plain
+
+
+def _assistant(content: str | list[AssistantContent]) -> AssistantMessage:
+    if isinstance(content, str):
+        content = [TextContent(text=content)]
+    return AssistantMessage(content=content)
+
+
+def _tool_result(content: str) -> AgentToolResult:
+    return AgentToolResult(content=[TextContent(text=content)])
+
+
 def _strip_ansi(text: str) -> str:
     return ANSI_PATTERN.sub("", text)
 
@@ -164,14 +219,21 @@ class FakeSessionState:
 
 
 class FakeSession:
-    def __init__(self, messages=(), events=()) -> None:
-        self.messages = tuple(messages)
-        self.events = tuple(events)
+    theme_dirs: tuple[Path, ...]
+    extension_runtime: object
+
+    def __init__(
+        self,
+        messages: Sequence[AgentMessage] = (),
+        events: Sequence[CodingSessionEvent] = (),
+    ) -> None:
+        self.messages: tuple[AgentMessage, ...] = tuple(messages)
+        self.events: tuple[CodingSessionEvent, ...] = tuple(events)
         self.cwd = Path("/workspace/project")
         self.provider_name = "openai"
         self.model = "fake-model"
-        self.available_models = ("fake-model", "other-model")
-        self.available_model_choices = (
+        self.available_models: tuple[str, ...] = ("fake-model", "other-model")
+        self.available_model_choices: tuple[ModelChoice, ...] = (
             ModelChoice(provider_name="opencode", model="fake-model"),
             ModelChoice(provider_name="opencode", model="other-model"),
             ModelChoice(provider_name="local", model="local-model"),
@@ -180,8 +242,10 @@ class FakeSession:
         self.available_providers = ("opencode",)
         self.tools = tuple(create_coding_tools(cwd=self.cwd))
         self.extension_tool_sources: dict[str, str] = {}
-        self.skills = (Skill(name="review", path=self.cwd / "review.md", content="Review code"),)
-        self.prompt_templates = ()
+        self.skills: tuple[Skill, ...] = (
+            Skill(name="review", path=self.cwd / "review.md", content="Review code"),
+        )
+        self.prompt_templates: tuple[PromptTemplate, ...] = ()
         self.context_files = (
             ProjectContextFile(path=str(self.cwd / "AGENTS.md"), content="Follow rules."),
         )
@@ -195,7 +259,7 @@ class FakeSession:
         self.resource_diagnostics = ()
         self.extension_names = ("permission-gate", "subagents")
         self.system_prompt = "You are Tau."
-        self.session_manager = None
+        self.session_manager: object | None = None
         self._session_title: str | None = None
         self.compact_summaries: list[str] = []
         self.resumed_session_ids: list[str] = []
@@ -379,10 +443,12 @@ class FakeSession:
         *,
         summarize: bool = False,
         custom_instructions: str | None = None,
-    ) -> str:
+        replace_instructions: bool = False,
+    ) -> SessionTreeBranchResult:
+        del replace_instructions
         self.tree_branch_requests.append((entry_id, summarize, custom_instructions))
         self.messages = (UserMessage(content=f"Branched to {entry_id}"),)
-        return f"Branched session at {entry_id}."
+        return SessionTreeBranchResult(message=f"Branched session at {entry_id}.")
 
     async def new_session(self) -> str:
         self.new_session_count += 1
@@ -432,11 +498,11 @@ class FakeSession:
         self,
         text: str,
         *,
-        streaming_behavior: str | None = None,
-        source: str = "interactive",
+        streaming_behavior: StreamingBehavior | None = None,
+        source: Literal["interactive", "extension"] = "interactive",
         custom_type: str | None = None,
-        details: dict[str, object] | None = None,
-    ) -> AsyncIterator[AgentEvent]:
+        details: dict[str, JSONValue] | None = None,
+    ) -> AsyncIterator[CodingSessionEvent]:
         self.prompt_texts.append(text)
         self.prompt_sources.append(source)
         self.streaming_behaviors.append(streaming_behavior)
@@ -502,12 +568,14 @@ def test_compact_session_info_shows_unknown_without_provider_usage() -> None:
     assert "?/200k" in console.export_text()
 
 
-def test_compact_session_info_redraws_when_provider_usage_becomes_available() -> None:
+def test_compact_session_info_redraws_when_provider_usage_becomes_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session = FakeSession()
     session.has_provider_context_usage = False
     widget = CompactSessionInfo()
     updates: list[object] = []
-    widget.update = updates.append  # type: ignore[method-assign]
+    monkeypatch.setattr(widget, "update", updates.append)
 
     widget.update_from_session(session)
     first_console = Console(record=True, width=120)
@@ -930,7 +998,7 @@ def test_tui_state_indexes_tool_items_and_clears_index() -> None:
 
 
 def test_tui_state_compacts_branch_summary_messages() -> None:
-    state = tui_app.TuiState()
+    state = TuiState()
 
     state.load_messages(
         [
@@ -949,7 +1017,7 @@ def test_tui_state_compacts_branch_summary_messages() -> None:
 
 
 def test_tui_state_compacts_compaction_summary_messages() -> None:
-    state = tui_app.TuiState()
+    state = TuiState()
 
     state.load_messages(
         [UserMessage(content="Previous conversation summary:\nCompacted prior work.")]
@@ -971,7 +1039,7 @@ def test_tui_state_compacts_expanded_skill_messages() -> None:
         content="# Review\nFull noisy instructions.",
         description="Review code",
     )
-    state = tui_app.TuiState()
+    state = TuiState()
 
     state.load_messages(
         [
@@ -997,7 +1065,7 @@ def test_tui_state_renders_restored_skill_file_reads_with_skill_style() -> None:
         content="# Review\nFull noisy instructions.",
         description="Review code",
     )
-    state = tui_app.TuiState(skills=(skill,))
+    state = TuiState(skills=(skill,))
 
     state.load_messages(
         [
@@ -1118,8 +1186,8 @@ def test_markdown_tables_use_highlight_color_for_headers() -> None:
 
 @pytest.mark.anyio
 async def test_textual_markdown_widget_uses_theme_link_style() -> None:
-    app = TauTuiApp(
-        FakeSession([AssistantMessage(content="Read [docs](https://example.com).")]),
+    app = _tui_app(
+        FakeSession([_assistant("Read [docs](https://example.com).")]),
     )
 
     async with app.run_test() as pilot:
@@ -1128,6 +1196,7 @@ async def test_textual_markdown_widget_uses_theme_link_style() -> None:
         markdown = app.query_one(ThemedMarkdownWidget)
         block = app.query_one(TauMarkdownBlock)
 
+    assert isinstance(block.content, TextualContent)
     link_spans = [
         span
         for span in block.content.spans
@@ -1278,7 +1347,7 @@ def test_chat_items_preserve_malformed_fenced_code() -> None:
 
 @pytest.mark.anyio
 async def test_transcript_message_widget_extracts_plain_text_selection() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content="alpha beta\ngamma"),
@@ -1299,7 +1368,7 @@ async def test_transcript_message_widget_extracts_plain_text_selection() -> None
 @pytest.mark.anyio
 async def test_transcript_message_widget_renders_full_height_role_block() -> None:
     plain_text = "alpha beta gamma\nsecond line\nthird line"
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(messages=[UserMessage(content=plain_text)]),
         tui_settings=TuiSettings(theme="high-contrast"),
     )
@@ -1335,7 +1404,7 @@ async def test_transcript_message_widget_renders_full_height_role_block() -> Non
 
 @pytest.mark.anyio
 async def test_streaming_transcript_applies_role_foreground() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(60, 20)) as pilot:
         await pilot.pause()
@@ -1365,7 +1434,7 @@ async def test_streaming_transcript_applies_role_foreground() -> None:
 
 @pytest.mark.anyio
 async def test_tool_execution_updates_render_in_place() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async def stream(event: AgentEvent) -> None:
         app.adapter.apply(event)
@@ -1383,7 +1452,7 @@ async def test_tool_execution_updates_render_in_place() -> None:
                 tool_call_id="call-1",
                 tool_name="agent",
                 args={},
-                partial_result=AgentToolResult(content="agent-1: bash · turn 1"),
+                partial_result=_tool_result("agent-1: bash · turn 1"),
             )
         )
         await pilot.pause()
@@ -1398,7 +1467,7 @@ async def test_tool_execution_updates_render_in_place() -> None:
                 tool_call_id="call-1",
                 tool_name="agent",
                 args={},
-                partial_result=AgentToolResult(content="agent-1: turn 2 done"),
+                partial_result=_tool_result("agent-1: turn 2 done"),
             )
         )
         await pilot.pause()
@@ -1412,7 +1481,7 @@ async def test_tool_execution_updates_render_in_place() -> None:
             ToolExecutionEndEvent(
                 tool_call_id="call-1",
                 tool_name="agent",
-                result=AgentToolResult(content="report"),
+                result=_tool_result("report"),
                 is_error=False,
             )
         )
@@ -1424,7 +1493,7 @@ async def test_tool_execution_updates_render_in_place() -> None:
 
 @pytest.mark.anyio
 async def test_tool_completion_updates_row_without_redrawing_history() -> None:
-    app = TauTuiApp(FakeSession(messages=[UserMessage(content="earlier")]))
+    app = _tui_app(FakeSession(messages=[UserMessage(content="earlier")]))
 
     async def stream(event: AgentEvent) -> None:
         app.adapter.apply(event)
@@ -1451,7 +1520,7 @@ async def test_tool_completion_updates_row_without_redrawing_history() -> None:
             ToolExecutionEndEvent(
                 tool_call_id="call-1",
                 tool_name="read",
-                result=AgentToolResult(content="contents"),
+                result=_tool_result("contents"),
                 is_error=False,
             )
         )
@@ -1469,8 +1538,8 @@ async def test_tool_completion_updates_row_without_redrawing_history() -> None:
 
 @pytest.mark.anyio
 async def test_assistant_message_renders_without_role_block() -> None:
-    app = TauTuiApp(
-        FakeSession([AssistantMessage(content="line one\nline two")]),
+    app = _tui_app(
+        FakeSession([_assistant("line one\nline two")]),
         tui_settings=TuiSettings(theme="high-contrast"),
     )
 
@@ -1494,7 +1563,7 @@ async def test_long_transcript_mounts_bounded_latest_window_and_pages_earlier(
 
     monkeypatch.setattr(tui_widgets, "TRANSCRIPT_WINDOW_ITEMS", 6)
     monkeypatch.setattr(tui_widgets, "TRANSCRIPT_WINDOW_PAGE_ITEMS", 2)
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(messages=[UserMessage(content=f"message {index}") for index in range(12)])
     )
 
@@ -1527,7 +1596,7 @@ async def test_long_transcript_mounts_bounded_latest_window_and_pages_earlier(
 @pytest.mark.anyio
 async def test_long_transcript_incremental_appends_keep_mounted_window_bounded() -> None:
     initial_count = TRANSCRIPT_WINDOW_ITEMS + TRANSCRIPT_WINDOW_OVERSCAN_ITEMS
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[UserMessage(content=f"message {index}") for index in range(initial_count)]
         )
@@ -1549,9 +1618,7 @@ async def test_long_transcript_incremental_appends_keep_mounted_window_bounded()
 
 @pytest.mark.anyio
 async def test_transcript_resize_preserves_mounted_message_widgets() -> None:
-    app = TauTuiApp(
-        FakeSession(messages=[AssistantMessage(content=f"answer {index}") for index in range(20)])
-    )
+    app = _tui_app(FakeSession(messages=[_assistant(f"answer {index}") for index in range(20)]))
 
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause()
@@ -1565,7 +1632,7 @@ async def test_transcript_resize_preserves_mounted_message_widgets() -> None:
 
 @pytest.mark.anyio
 async def test_streaming_transcript_deltas_do_not_force_scroll_end_during_scrollback() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content=f"message {index}\n" + "line\n" * 4) for index in range(12)
@@ -1585,14 +1652,14 @@ async def test_streaming_transcript_deltas_do_not_force_scroll_end_during_scroll
         )
         await pilot.pause()
         forced_scrolls = 0
-        original_scroll_end = transcript.scroll_end
+        original_scroll_end = cast(Callable[..., None], transcript.scroll_end)
 
         def tracking_scroll_end(*args: object, **kwargs: object) -> None:
             nonlocal forced_scrolls
             forced_scrolls += 1
             original_scroll_end(*args, **kwargs)
 
-        transcript.scroll_end = tracking_scroll_end  # type: ignore[method-assign]
+        transcript.scroll_end = tracking_scroll_end  # ty: ignore[invalid-assignment]
 
         await transcript.append_assistant_delta("alpha")
         await transcript.append_assistant_delta(" beta")
@@ -1603,7 +1670,7 @@ async def test_streaming_transcript_deltas_do_not_force_scroll_end_during_scroll
 
 @pytest.mark.anyio
 async def test_streaming_transcript_deltas_follow_when_at_bottom() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content=f"message {index}\n" + "line\n" * 4) for index in range(12)
@@ -1629,7 +1696,7 @@ async def test_streaming_transcript_deltas_follow_when_at_bottom() -> None:
 
 @pytest.mark.anyio
 async def test_streaming_transcript_deltas_preserve_user_scrollback() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content=f"message {index}\n" + "line\n" * 4) for index in range(12)
@@ -1662,7 +1729,7 @@ async def test_streaming_transcript_deltas_preserve_user_scrollback() -> None:
 
 @pytest.mark.anyio
 async def test_streaming_transcript_deltas_do_not_apply_stale_follow_scroll() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content=f"message {index}\n" + "line\n" * 4) for index in range(12)
@@ -1694,7 +1761,7 @@ async def test_streaming_transcript_deltas_do_not_apply_stale_follow_scroll() ->
 
 @pytest.mark.anyio
 async def test_streaming_transcript_fractional_scrollback_after_refollow_stops_following() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content=f"message {index}\n" + "line\n" * 4) for index in range(12)
@@ -1738,11 +1805,11 @@ async def test_streaming_transcript_fractional_scrollback_after_refollow_stops_f
 
 @pytest.mark.anyio
 async def test_tui_transcript_selects_only_one_message() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content="first message"),
-                AssistantMessage(content="second message"),
+                _assistant("second message"),
             ]
         )
     )
@@ -1751,18 +1818,18 @@ async def test_tui_transcript_selects_only_one_message() -> None:
         await pilot.pause()
         messages = list(app.query(TranscriptMessageWidget))
 
-        app.screen.selections = {messages[0]: SELECT_ALL}
+        app.screen.selections = cast(dict[Widget, Selection], {messages[0]: SELECT_ALL})
 
         assert app.screen.get_selected_text() == "first message"
 
 
 @pytest.mark.anyio
 async def test_tui_transcript_extracts_adjacent_message_selection() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content="first one"),
-                AssistantMessage(content="middle message"),
+                _assistant("middle message"),
                 UserMessage(content="third item"),
             ]
         )
@@ -1772,18 +1839,21 @@ async def test_tui_transcript_extracts_adjacent_message_selection() -> None:
         await pilot.pause()
         messages = list(app.query(TranscriptMessageWidget))
 
-        app.screen.selections = {
-            messages[0]: Selection(Offset(6, 0), None),
-            messages[1]: SELECT_ALL,
-            messages[2]: Selection(None, Offset(5, 0)),
-        }
+        app.screen.selections = cast(
+            dict[Widget, Selection],
+            {
+                messages[0]: Selection(Offset(6, 0), None),
+                messages[1]: SELECT_ALL,
+                messages[2]: Selection(None, Offset(5, 0)),
+            },
+        )
 
         assert app.screen.get_selected_text() == "one\nmiddle message\nthird"
 
 
 @pytest.mark.anyio
 async def test_tui_auto_copies_selected_text_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(messages=[UserMessage(content="copy this")]),
         tui_settings=TuiSettings(auto_copy_selection=True),
     )
@@ -1793,7 +1863,7 @@ async def test_tui_auto_copies_selected_text_when_enabled(monkeypatch: pytest.Mo
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         message = app.query_one(TranscriptMessageWidget)
-        app.screen.selections = {message: SELECT_ALL}
+        app.screen.selections = cast(dict[Widget, Selection], {message: SELECT_ALL})
 
         await app.on_text_selected()
 
@@ -1802,7 +1872,7 @@ async def test_tui_auto_copies_selected_text_when_enabled(monkeypatch: pytest.Mo
 
 @pytest.mark.anyio
 async def test_tui_auto_copy_selection_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(messages=[UserMessage(content="do not copy")]),
         tui_settings=TuiSettings(auto_copy_selection=False),
     )
@@ -1812,7 +1882,7 @@ async def test_tui_auto_copy_selection_can_be_disabled(monkeypatch: pytest.Monke
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         message = app.query_one(TranscriptMessageWidget)
-        app.screen.selections = {message: SELECT_ALL}
+        app.screen.selections = cast(dict[Widget, Selection], {message: SELECT_ALL})
 
         await app.on_text_selected()
 
@@ -1834,7 +1904,7 @@ def test_transcript_selection_text_tracks_tool_result_visibility() -> None:
 
 @pytest.mark.anyio
 async def test_tool_transcript_uses_native_markdown_without_custom_selection_painting() -> None:
-    app = TauTuiApp(FakeSession(messages=[]))
+    app = _tui_app(FakeSession(messages=[]))
     item = ChatItem(
         role="tool",
         text="→ read README.md",
@@ -1856,7 +1926,7 @@ async def test_tool_transcript_uses_native_markdown_without_custom_selection_pai
 
 @pytest.mark.anyio
 async def test_tui_message_start_does_not_mount_empty_assistant_message() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)) as pilot:
         await app._apply_streaming_transcript_event(MessageStartEvent(message=AssistantMessage()))
@@ -1866,7 +1936,9 @@ async def test_tui_message_start_does_not_mount_empty_assistant_message() -> Non
 
 
 @pytest.mark.anyio
-async def test_tui_streaming_deltas_update_active_message_without_full_refresh() -> None:
+async def test_tui_streaming_deltas_update_active_message_without_full_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     partial = AssistantMessage()
     session = FakeSession(
         events=[
@@ -1884,11 +1956,11 @@ async def test_tui_streaming_deltas_update_active_message_without_full_refresh()
                     content_index=0, delta="beta", partial=partial
                 ),
             ),
-            MessageEndEvent(message=AssistantMessage(content="alpha beta")),
+            MessageEndEvent(message=_assistant("alpha beta")),
             AgentEndEvent(),
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     stream_replacements: list[str] = []
     stream_writes: list[str] = []
     full_stream_updates: list[str] = []
@@ -1915,9 +1987,17 @@ async def test_tui_streaming_deltas_update_active_message_without_full_refresh()
         stream_replacements.append(text)
         await original_replace_text(self, text)
 
-    StreamingTranscriptMessageWidget.replace_text = tracking_replace_text  # type: ignore[method-assign]
-    StreamingTranscriptMessageWidget.update = tracking_stream_update  # type: ignore[method-assign]
-    MarkdownStream.write = tracking_stream_write  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        StreamingTranscriptMessageWidget,
+        "replace_text",
+        tracking_replace_text,
+    )
+    monkeypatch.setattr(
+        StreamingTranscriptMessageWidget,
+        "update",
+        tracking_stream_update,
+    )
+    monkeypatch.setattr(MarkdownStream, "write", tracking_stream_write)
     full_refreshes = 0
 
     original_refresh = app._refresh
@@ -1927,7 +2007,7 @@ async def test_tui_streaming_deltas_update_active_message_without_full_refresh()
         full_refreshes += 1
         original_refresh()
 
-    app._refresh = tracking_refresh  # type: ignore[method-assign]
+    app._refresh = tracking_refresh  # ty: ignore[invalid-assignment]
 
     try:
         async with app.run_test(size=(120, 30)) as pilot:
@@ -1938,9 +2018,17 @@ async def test_tui_streaming_deltas_update_active_message_without_full_refresh()
             streamed = app.query_one(StreamingTranscriptMessageWidget)
             transcript_text = "\n".join(line.text for line in transcript.lines)
     finally:
-        StreamingTranscriptMessageWidget.replace_text = original_replace_text  # type: ignore[method-assign]
-        StreamingTranscriptMessageWidget.update = original_stream_update  # type: ignore[method-assign]
-        MarkdownStream.write = original_stream_write  # type: ignore[method-assign]
+        monkeypatch.setattr(
+            StreamingTranscriptMessageWidget,
+            "replace_text",
+            original_replace_text,
+        )
+        monkeypatch.setattr(
+            StreamingTranscriptMessageWidget,
+            "update",
+            original_stream_update,
+        )
+        monkeypatch.setattr(MarkdownStream, "write", original_stream_write)
 
     assert full_refreshes == 1
     assert stream_writes == ["alpha ", "beta"]
@@ -1960,7 +2048,7 @@ async def test_tui_submit_prompt_optimistically_appends_user_message_without_ful
             AgentEndEvent(),
         ],
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     full_refreshes = 0
     original_refresh = app._refresh
 
@@ -1969,7 +2057,7 @@ async def test_tui_submit_prompt_optimistically_appends_user_message_without_ful
         full_refreshes += 1
         original_refresh()
 
-    app._refresh = tracking_refresh  # type: ignore[method-assign]
+    app._refresh = tracking_refresh  # ty: ignore[invalid-assignment]
 
     async with app.run_test(size=(120, 30)) as pilot:
         full_refreshes = 0
@@ -2000,7 +2088,7 @@ async def test_tui_transformed_prompt_replaces_optimistic_user_message() -> None
             AgentEndEvent(),
         ],
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await app._submit_prompt("original words")
@@ -2025,7 +2113,7 @@ async def test_tui_submit_prompt_does_not_optimistically_append_slash_commands()
             AgentEndEvent(),
         ],
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await app._submit_prompt("/review src/app.py")
@@ -2117,7 +2205,7 @@ def test_prompt_input_drops_only_deleted_large_paste_placeholder() -> None:
 @pytest.mark.anyio
 async def test_tui_submit_large_paste_sends_full_content() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     pasted = "x" * (PASTE_DISPLAY_THRESHOLD + 1)
 
     async with app.run_test() as pilot:
@@ -2132,7 +2220,7 @@ async def test_tui_submit_large_paste_sends_full_content() -> None:
 @pytest.mark.anyio
 async def test_tui_submit_replaced_large_paste_does_not_send_stale_content() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     pasted = "x" * (PASTE_DISPLAY_THRESHOLD + 1)
 
     async with app.run_test() as pilot:
@@ -2148,7 +2236,7 @@ async def test_tui_submit_replaced_large_paste_does_not_send_stale_content() -> 
 @pytest.mark.anyio
 async def test_tui_submit_multiple_large_pastes_sends_all_full_content() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     first = "a" * (PASTE_DISPLAY_THRESHOLD + 1)
     second = "b" * (PASTE_DISPLAY_THRESHOLD + 2)
 
@@ -2165,15 +2253,15 @@ async def test_tui_submit_multiple_large_pastes_sends_all_full_content() -> None
 
 @pytest.mark.anyio
 async def test_tui_app_mounts_status_and_transcript_without_sidebar() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)):
         assert not app.query("#sidebar")
         assert app.query_one("#compact-session-info") is not None
-        transcript = app.query_one("#transcript")
+        transcript = app.query_one("#transcript", TranscriptView)
         assert transcript is not None
         assert transcript.min_width == 1
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         assert isinstance(prompt, TextArea)
         assert prompt.soft_wrap is True
 
@@ -2182,7 +2270,7 @@ def test_tau_markdown_block_is_not_selectable_until_mounted() -> None:
     markdown = TextualMarkdown("example")
     block = TauMarkdownBlock(
         markdown,
-        type("Token", (), {"map": (0, 1), "level": 0, "type": "paragraph_open"})(),
+        Token(type="paragraph_open", tag="", nesting=0, map=[0, 1]),
     )
 
     assert block.allow_select is False
@@ -2190,8 +2278,8 @@ def test_tau_markdown_block_is_not_selectable_until_mounted() -> None:
 
 @pytest.mark.anyio
 async def test_tau_markdown_block_remains_selectable_after_mount() -> None:
-    app = TauTuiApp(
-        FakeSession([AssistantMessage(content="Read [docs](https://example.com).")]),
+    app = _tui_app(
+        FakeSession([_assistant("Read [docs](https://example.com).")]),
     )
 
     async with app.run_test() as pilot:
@@ -2204,7 +2292,7 @@ async def test_tau_markdown_block_remains_selectable_after_mount() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_disables_text_selection_while_agent_is_running() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)):
         assert app.ALLOW_SELECT is True
@@ -2222,7 +2310,7 @@ async def test_tui_app_disables_text_selection_while_agent_is_running() -> None:
 
 @pytest.mark.anyio
 async def test_prompt_input_does_not_highlight_active_line() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)) as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -2267,7 +2355,7 @@ def test_activity_prompt_border_uses_tool_running_color_in_shell_mode() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_hides_prompt_prefix() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)):
         prompt = app.query_one("#prompt", PromptInput)
@@ -2280,7 +2368,7 @@ async def test_tui_app_hides_prompt_prefix() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_highlights_prompt_shell_mode() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)) as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -2289,7 +2377,7 @@ async def test_tui_app_highlights_prompt_shell_mode() -> None:
         await pilot.pause()
 
         assert prompt.has_class("-shell-mode")
-        assert indicator.render().plain == "$"
+        assert _render_plain(indicator) == "$"
         tool_running_color = app.tui_settings.resolved_theme.role_styles["tool"].border
         assert (
             _activity_prompt_border_color(
@@ -2316,12 +2404,12 @@ async def test_tui_app_highlights_prompt_shell_mode() -> None:
 
         assert not prompt.has_class("-shell-mode")
         assert prompt.get_line(0).spans == []
-        assert indicator.render().plain == "τ"
+        assert _render_plain(indicator) == "τ"
 
 
 @pytest.mark.anyio
 async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 40)):
         assert not app.query("Footer")
@@ -2341,10 +2429,10 @@ async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_footer_hints_update_for_completions() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)):
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/se"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -2358,7 +2446,7 @@ async def test_tui_app_footer_hints_update_for_completions() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_footer_hints_update_while_running() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)):
         app.adapter.apply(AgentStartEvent())
@@ -2375,7 +2463,7 @@ async def test_tui_app_footer_hints_update_while_running() -> None:
 
 @pytest.mark.anyio
 async def test_tui_prompt_grows_to_six_lines_then_scrolls() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)) as pilot:
         prompt = app.query_one("#prompt", TextArea)
@@ -2397,7 +2485,7 @@ async def test_tui_prompt_grows_to_six_lines_then_scrolls() -> None:
 async def test_tui_status_shows_session_title_on_large_windows() -> None:
     session = FakeSession()
     session._session_title = "Customer bugfix"
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)):
         compact_info = app.query_one("#compact-session-info", Static)
@@ -2418,7 +2506,7 @@ async def test_tui_status_hides_session_title_on_small_windows(
 ) -> None:
     session = FakeSession()
     session._session_title = "Customer bugfix"
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=size):
         compact_info = app.query_one("#compact-session-info", Static)
@@ -2436,7 +2524,7 @@ async def test_tui_status_hides_session_title_on_small_windows(
 async def test_tui_status_session_title_visibility_updates_on_resize() -> None:
     session = FakeSession()
     session._session_title = "Customer bugfix"
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         compact_info = app.query_one("#compact-session-info", Static)
@@ -2463,7 +2551,7 @@ async def test_tui_status_session_title_visibility_updates_on_resize() -> None:
 
 @pytest.mark.anyio
 async def test_tui_transcript_reflows_when_terminal_resizes() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(
@@ -2477,7 +2565,7 @@ async def test_tui_transcript_reflows_when_terminal_resizes() -> None:
     )
 
     async with app.run_test(size=(120, 30)) as pilot:
-        transcript = app.query_one("#transcript")
+        transcript = app.query_one("#transcript", TranscriptView)
         assert transcript.virtual_size.width <= transcript.scrollable_content_region.width
 
         await pilot.resize_terminal(width=64, height=30)
@@ -2499,7 +2587,7 @@ async def test_tui_transcript_code_block_scrollbar_matches_overflow(
     code: str,
     has_horizontal_overflow: bool,
 ) -> None:
-    app = TauTuiApp(FakeSession(messages=[AssistantMessage(content=f"```python\n{code}\n```")]))
+    app = _tui_app(FakeSession(messages=[_assistant(f"```python\n{code}\n```")]))
 
     async with app.run_test(size=(64, 30)) as pilot:
         await pilot.pause()
@@ -2516,7 +2604,7 @@ async def test_tui_transcript_code_block_scrollbar_matches_overflow(
 
 @pytest.mark.anyio
 async def test_streaming_code_block_hides_horizontal_scrollbar_until_finalized() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
     long_code_line = "value = '" + ("x" * 140) + "'"
 
     async with app.run_test(size=(64, 30)) as pilot:
@@ -2553,8 +2641,8 @@ async def test_transcript_code_fence_uses_theme_background(theme: TuiTheme) -> N
     Tau's plain `ThemedMarkdownWidget MarkdownFence` selector, which used to
     leave light-theme code fences with a transparent white background.
     """
-    app = TauTuiApp(
-        FakeSession([AssistantMessage(content="```python\nx = 1\n```")]),
+    app = _tui_app(
+        FakeSession([_assistant("```python\nx = 1\n```")]),
         tui_settings=TuiSettings(theme=theme.name),
     )
 
@@ -2567,7 +2655,7 @@ async def test_transcript_code_fence_uses_theme_background(theme: TuiTheme) -> N
 
 
 def test_tui_app_uses_configured_theme_css_variables() -> None:
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(theme="high-contrast"))
+    app = _tui_app(FakeSession(), tui_settings=TuiSettings(theme="high-contrast"))
 
     variables = app.get_theme_variable_defaults()
 
@@ -2593,7 +2681,7 @@ def test_tui_app_registers_and_applies_custom_theme() -> None:
     }
     set_custom_tui_themes({"midnight": parse_tui_theme_json(theme_data)})
     try:
-        app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(theme="midnight"))
+        app = _tui_app(FakeSession(), tui_settings=TuiSettings(theme="midnight"))
 
         assert app.theme == "midnight"
         assert app.get_theme_variable_defaults()["tau-screen-background"] == "#123456"
@@ -2623,7 +2711,7 @@ async def test_tui_app_removes_source_project_themes_after_resume(
     monkeypatch.setattr(tui_app, "load_custom_tui_themes", lambda _dirs: ({}, []))
     session = FakeSession()
     session.theme_dirs = ()
-    app = TauTuiApp(session, tui_settings=TuiSettings(theme="project-theme"))
+    app = _tui_app(session, tui_settings=TuiSettings(theme="project-theme"))
     try:
         async with app.run_test() as pilot:
             await app._resume_session("destination-session")
@@ -2642,7 +2730,7 @@ def test_tui_app_falls_back_to_codeyellow_when_theme_is_missing(
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
 
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(theme="missing-theme"))
+    app = _tui_app(FakeSession(), tui_settings=TuiSettings(theme="missing-theme"))
 
     assert app.theme == "codeyellow"
     assert any("missing-theme" in item.text for item in app.state.items if item.role == "status")
@@ -2652,7 +2740,7 @@ def test_tui_app_falls_back_to_codeyellow_when_theme_is_missing(
 
 
 def test_tui_app_uses_light_theme_css_variables() -> None:
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(theme="tau-light"))
+    app = _tui_app(FakeSession(), tui_settings=TuiSettings(theme="tau-light"))
 
     variables = app.get_theme_variable_defaults()
 
@@ -2669,7 +2757,7 @@ def test_tui_app_uses_light_theme_css_variables() -> None:
 
 
 def test_tui_app_registers_only_tau_themes_with_textual() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     assert tuple(app.available_themes) == ("tau-dark", "tau-light", "high-contrast", "codeyellow")
 
@@ -2732,7 +2820,7 @@ def test_tau_light_theme_uses_light_chat_backgrounds() -> None:
 
 
 def test_tui_app_loads_restored_messages_into_display_state() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content="Read the file"),
@@ -2773,11 +2861,11 @@ def test_tui_app_loads_restored_messages_into_display_state() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_shows_activity_indicator_while_running() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test():
-        prompt = app.query_one("#prompt")
-        indicator = app.query_one("#prompt-prefix")
+        prompt = app.query_one("#prompt", PromptInput)
+        indicator = app.query_one("#prompt-prefix", Static)
 
         assert not app.query("#status")
         assert not app.query("#activity-status")
@@ -2785,7 +2873,7 @@ async def test_tui_app_shows_activity_indicator_while_running() -> None:
         assert prompt.styles.border_top[0] == ""
         assert prompt.styles.border_right[0] == ""
         assert prompt.styles.border_bottom[0] == ""
-        assert indicator.render().plain == "τ"
+        assert _render_plain(indicator) == "τ"
 
         app.adapter.apply(AgentStartEvent())
         app._refresh()
@@ -2793,26 +2881,26 @@ async def test_tui_app_shows_activity_indicator_while_running() -> None:
         assert pytest.approx(tui_app.ACTIVITY_TICK_SECONDS) == 0.15
         assert tui_app.ACTIVITY_COLOR_FADE_STEPS == 24
         assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
-        assert indicator.render().plain.startswith("■")
+        assert _render_plain(indicator).startswith("■")
 
         app._tick_activity()
 
         assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
-        assert indicator.render().plain.splitlines()[1] == "■"
+        assert _render_plain(indicator).splitlines()[1] == "■"
 
         app.adapter.apply(AgentEndEvent())
         app._refresh()
 
         assert not app.query("#status")
         assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
-        assert indicator.render().plain == "τ"
+        assert _render_plain(indicator) == "τ"
 
 
 @pytest.mark.anyio
 async def test_tui_app_updates_terminal_title_for_running_and_named_session() -> None:
     session = FakeSession()
     session._session_title = "build notes"
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     writes: list[str] = []
     app._terminal_title = TerminalTitleController(enabled=True, writer=writes.append)
 
@@ -2844,10 +2932,10 @@ async def test_tui_app_notifies_when_agent_settles_while_unfocused() -> None:
             self,
             text: str,
             *,
-            streaming_behavior: str | None = None,
-            source: str = "interactive",
+            streaming_behavior: StreamingBehavior | None = None,
+            source: Literal["interactive", "extension"] = "interactive",
             custom_type: str | None = None,
-            details: dict[str, object] | None = None,
+            details: dict[str, JSONValue] | None = None,
         ) -> AsyncIterator[CodingSessionEvent]:
             del streaming_behavior, source, custom_type, details
             self.prompt_texts.append(text)
@@ -2855,7 +2943,7 @@ async def test_tui_app_notifies_when_agent_settles_while_unfocused() -> None:
             yield AgentEndEvent()
             yield AgentSettledEvent()
 
-    app = TauTuiApp(SettledSession(), tui_settings=TuiSettings(turn_notification="desktop"))
+    app = _tui_app(SettledSession(), tui_settings=TuiSettings(turn_notification="desktop"))
     writes: list[str] = []
     app._terminal_notification = TerminalNotificationController(
         "desktop",
@@ -2884,11 +2972,11 @@ async def test_tui_app_updates_terminal_title_after_auto_session_naming() -> Non
             self,
             text: str,
             *,
-            streaming_behavior: str | None = None,
-            source: str = "interactive",
+            streaming_behavior: StreamingBehavior | None = None,
+            source: Literal["interactive", "extension"] = "interactive",
             custom_type: str | None = None,
-            details: dict[str, object] | None = None,
-        ) -> AsyncIterator[AgentEvent]:
+            details: dict[str, JSONValue] | None = None,
+        ) -> AsyncIterator[CodingSessionEvent]:
             del streaming_behavior, source, custom_type, details
             self.prompt_texts.append(text)
             yield AgentStartEvent()
@@ -2896,7 +2984,7 @@ async def test_tui_app_updates_terminal_title_after_auto_session_naming() -> Non
             yield MessageEndEvent(message=UserMessage(content=text))
             yield AgentEndEvent()
 
-    app = TauTuiApp(AutoNamingSession())
+    app = _tui_app(AutoNamingSession())
     writes: list[str] = []
     app._terminal_title = TerminalTitleController(enabled=True, writer=writes.append)
 
@@ -2915,11 +3003,11 @@ async def test_tui_app_updates_terminal_title_after_auto_session_naming() -> Non
 
 @pytest.mark.anyio
 async def test_tui_app_clears_activity_status_on_error() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test():
-        prompt = app.query_one("#prompt")
-        indicator = app.query_one("#prompt-prefix")
+        prompt = app.query_one("#prompt", PromptInput)
+        indicator = app.query_one("#prompt-prefix", Static)
         app.adapter.apply(AgentStartEvent())
         app._refresh()
         app.adapter.apply(
@@ -2935,7 +3023,7 @@ async def test_tui_app_clears_activity_status_on_error() -> None:
         assert prompt.styles.border_top[0] == ""
         assert prompt.styles.border_right[0] == ""
         assert prompt.styles.border_bottom[0] == ""
-        assert indicator.render().plain == "τ"
+        assert _render_plain(indicator) == "τ"
 
 
 @pytest.mark.anyio
@@ -2943,7 +3031,7 @@ async def test_textual_theme_change_persists_tau_theme(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         app.theme = "tau-light"
@@ -2960,7 +3048,7 @@ async def test_tui_app_skills_picker_filters_and_inserts_without_submitting() ->
         Skill("zebra", Path("/skills/zebra/SKILL.md"), "", "Work with stripes"),
         Skill("alpha", Path("/skills/alpha/SKILL.md"), "", "Review Python code"),
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -2971,7 +3059,7 @@ async def test_tui_app_skills_picker_filters_and_inserts_without_submitting() ->
         picker = app.screen
         assert isinstance(picker, SkillPickerScreen)
         assert [
-            [label.render().plain for label in item.query(Label)] for item in picker.query(ListItem)
+            [_render_plain(label) for label in item.query(Label)] for item in picker.query(ListItem)
         ] == [
             ["alpha", "Review Python code"],
             ["zebra", "Work with stripes"],
@@ -2991,17 +3079,15 @@ async def test_tui_app_skills_picker_filters_and_inserts_without_submitting() ->
         search.value = "missing"
         await pilot.pause()
         assert not picker.query(ListItem)
-        assert (
-            picker.query_one("#skill-picker-help", Static)
-            .render()
-            .plain.startswith("No matching skills")
+        assert _render_plain(picker.query_one("#skill-picker-help", Static)).startswith(
+            "No matching skills"
         )
 
         search.value = ""
         await pilot.press("p", "y", "t", "h", "o", "n", "space", "c", "o", "d", "e")
         await pilot.pause()
         assert search.value == "python code"
-        assert [label.render().plain for label in picker.query(Label)] == [
+        assert [_render_plain(label) for label in picker.query(Label)] == [
             "alpha",
             "Review Python code",
         ]
@@ -3024,7 +3110,7 @@ async def test_tui_app_skills_picker_previews_description_and_shows_content_in_t
             "Review changes carefully across the whole repository.",
         ),
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -3039,7 +3125,7 @@ async def test_tui_app_skills_picker_previews_description_and_shows_content_in_t
 
         description = app.screen
         assert isinstance(description, CommandOutputScreen)
-        assert description.query_one("#command-output-body", Static).render().plain == (
+        assert _render_plain(description.query_one("#command-output-body", Static)) == (
             "Review changes carefully across the whole repository."
         )
         await pilot.press("escape")
@@ -3064,7 +3150,7 @@ async def test_tui_app_skills_picker_previews_description_and_shows_content_in_t
 async def test_tui_app_skills_picker_cancel_clears_prompt_and_shows_empty_states() -> None:
     session = FakeSession()
     session.skills = ()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -3074,10 +3160,8 @@ async def test_tui_app_skills_picker_cancel_clears_prompt_and_shows_empty_states
 
         picker = app.screen
         assert isinstance(picker, SkillPickerScreen)
-        assert (
-            picker.query_one("#skill-picker-help", Static)
-            .render()
-            .plain.startswith("No skills loaded")
+        assert _render_plain(picker.query_one("#skill-picker-help", Static)).startswith(
+            "No skills loaded"
         )
         await pilot.press("escape")
         await pilot.pause()
@@ -3092,10 +3176,10 @@ async def test_tui_app_theme_command_opens_picker_and_persists_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/theme"
         await pilot.press("enter")
         await pilot.pause()
@@ -3133,7 +3217,7 @@ async def test_tui_app_theme_command_opens_picker_and_persists_selection(
 @pytest.mark.anyio
 async def test_theme_picker_highlight_uses_theme_selection_palette(theme: TuiTheme) -> None:
     theme_names = (TAU_DARK_THEME.name, TAU_LIGHT_THEME.name, HIGH_CONTRAST_THEME.name)
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(theme=theme.name))
+    app = _tui_app(FakeSession(), tui_settings=TuiSettings(theme=theme.name))
 
     async with app.run_test() as pilot:
         picker = ThemePickerScreen(
@@ -3152,7 +3236,7 @@ async def test_theme_picker_highlight_uses_theme_selection_palette(theme: TuiThe
 
 @pytest.mark.anyio
 async def test_extension_select_dialog_returns_choice() -> None:
-    app = TauTuiApp(FakeSession())  # type: ignore[arg-type]
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -3172,7 +3256,7 @@ async def test_extension_select_dialog_returns_choice() -> None:
 
 @pytest.mark.anyio
 async def test_extension_select_dialog_escape_returns_none() -> None:
-    app = TauTuiApp(FakeSession())  # type: ignore[arg-type]
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -3187,7 +3271,7 @@ async def test_extension_select_dialog_escape_returns_none() -> None:
 
 @pytest.mark.anyio
 async def test_extension_confirm_dialog_yes_and_cancel() -> None:
-    app = TauTuiApp(FakeSession())  # type: ignore[arg-type]
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -3214,7 +3298,7 @@ async def test_extension_confirm_dialog_yes_and_cancel() -> None:
 
 @pytest.mark.anyio
 async def test_extension_input_dialog_returns_text() -> None:
-    app = TauTuiApp(FakeSession())  # type: ignore[arg-type]
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -3232,7 +3316,7 @@ async def test_extension_input_dialog_returns_text() -> None:
 
 @pytest.mark.anyio
 async def test_extension_input_dialog_escape_returns_none() -> None:
-    app = TauTuiApp(FakeSession())  # type: ignore[arg-type]
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -3248,22 +3332,41 @@ async def test_extension_input_dialog_escape_returns_none() -> None:
 class _RenderCallRuntime:
     """Minimal extension-runtime stub for `_connect_extension_runtime`."""
 
-    def set_ui_bridge(self, bridge) -> None:  # noqa: ANN001
+    def set_ui_bridge(self, bridge: UiBridge) -> None:
         del bridge
 
-    def set_turn_requested_callback(self, callback) -> None:  # noqa: ANN001
+    def set_turn_requested_callback(
+        self,
+        callback: Callable[[], None] | None,
+    ) -> None:
         del callback
 
-    def render_custom_message(self, custom_type, content, details, expanded):  # noqa: ANN001
+    def render_custom_message(
+        self,
+        custom_type: str,
+        content: str,
+        details: Mapping[str, JSONValue] | None,
+        expanded: bool,
+    ) -> str | None:
+        del custom_type, content, details, expanded
         return None
 
-    def render_tool_call(self, name, arguments):  # noqa: ANN001
+    def render_tool_call(
+        self,
+        name: str,
+        arguments: Mapping[str, JSONValue],
+    ) -> str | None:
         if name == "agent":
             return f"▸ agent · {arguments.get('description')}"
         return None
 
-    def render_tool_result(self, tool_name, result, expanded):  # noqa: ANN001
-        if tool_name == "agent" and result.details:
+    def render_tool_result(
+        self,
+        tool_name: str,
+        result: AgentToolResult,
+        expanded: bool,
+    ) -> str | None:
+        if tool_name == "agent" and isinstance(result.details, dict):
             suffix = " · expanded" if expanded else ""
             return f"[green]✓[/green] {result.details.get('description')} completed{suffix}"
         return None
@@ -3272,7 +3375,13 @@ class _RenderCallRuntime:
 class _CustomMessageRuntime(_RenderCallRuntime):
     """Runtime stub whose custom renderer produces a card for notifications."""
 
-    def render_custom_message(self, custom_type, content, details, expanded):  # noqa: ANN001
+    def render_custom_message(
+        self,
+        custom_type: str,
+        content: str,
+        details: Mapping[str, JSONValue] | None,
+        expanded: bool,
+    ) -> str | None:
         del content, expanded
         if custom_type != "subagent-notification" or not details:
             return None
@@ -3304,7 +3413,7 @@ async def test_restored_tool_calls_render_via_render_call() -> None:
         ]
     )
     session.extension_runtime = _RenderCallRuntime()
-    app = TauTuiApp(session)  # type: ignore[arg-type]
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -3317,7 +3426,7 @@ async def test_restored_tool_calls_render_via_render_call() -> None:
 async def test_render_call_line_composes_with_live_update_text() -> None:
     session = FakeSession()
     session.extension_runtime = _RenderCallRuntime()
-    app = TauTuiApp(session)  # type: ignore[arg-type]
+    app = _tui_app(session)
 
     async def stream(event: AgentEvent) -> None:
         app.adapter.apply(event)
@@ -3337,7 +3446,7 @@ async def test_render_call_line_composes_with_live_update_text() -> None:
                 tool_call_id="call-1",
                 tool_name="agent",
                 args={},
-                partial_result=AgentToolResult(content="agent-1: bash · turn 1"),
+                partial_result=_tool_result("agent-1: bash · turn 1"),
             )
         )
         await pilot.pause()
@@ -3351,7 +3460,7 @@ async def test_render_call_line_composes_with_live_update_text() -> None:
 async def test_tool_result_renders_via_render_result() -> None:
     session = FakeSession()
     session.extension_runtime = _RenderCallRuntime()
-    app = TauTuiApp(session)  # type: ignore[arg-type]
+    app = _tui_app(session)
 
     async def stream(event: AgentEvent) -> None:
         app.adapter.apply(event)
@@ -3422,7 +3531,7 @@ async def test_restored_tool_results_render_via_render_result() -> None:
         ]
     )
     session.extension_runtime = _RenderCallRuntime()
-    app = TauTuiApp(session)  # type: ignore[arg-type]
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -3435,7 +3544,7 @@ async def test_restored_tool_results_render_via_render_result() -> None:
 async def test_pending_tool_row_keeps_static_marker_while_running() -> None:
     session = FakeSession()
     session.extension_runtime = _RenderCallRuntime()
-    app = TauTuiApp(session)  # type: ignore[arg-type]
+    app = _tui_app(session)
 
     async def stream(event: AgentEvent) -> None:
         app.adapter.apply(event)
@@ -3478,7 +3587,7 @@ async def test_pending_tool_row_keeps_static_marker_while_running() -> None:
                 tool_call_id="call-1",
                 tool_name="agent",
                 is_error=False,
-                result=AgentToolResult(content="done"),
+                result=_tool_result("done"),
             )
         )
         await pilot.pause()
@@ -3490,7 +3599,7 @@ async def test_pending_tool_row_keeps_static_marker_while_running() -> None:
 async def test_activity_animation_throttles_tool_timer_layout_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
     scheduled: list[object] = []
 
     async with app.run_test() as pilot:
@@ -3511,7 +3620,7 @@ async def test_activity_animation_throttles_tool_timer_layout_work(
 
 @pytest.mark.anyio
 async def test_extension_select_dialog_timeout_returns_default() -> None:
-    app = TauTuiApp(FakeSession())  # type: ignore[arg-type]
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -3528,10 +3637,10 @@ async def test_tui_app_theme_command_argument_updates_theme_and_persists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/theme tau-light"
         await pilot.press("enter")
 
@@ -3543,21 +3652,22 @@ async def test_tui_app_theme_command_argument_updates_theme_and_persists(
 
 @pytest.mark.anyio
 async def test_tui_app_new_command_starts_new_visible_state() -> None:
-    app = TauTuiApp(FakeSession(messages=[UserMessage(content="Earlier")]))
+    session = FakeSession(messages=[UserMessage(content="Earlier")])
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/new"
         await pilot.press("enter")
 
-        assert app.session.new_session_count == 1
+        assert session.new_session_count == 1
         assert app.state.items == []
         assert notifications == []
 
@@ -3570,10 +3680,10 @@ async def test_tui_app_new_command_starts_new_visible_state() -> None:
 @pytest.mark.anyio
 async def test_tui_app_compact_command_runs_session_compaction() -> None:
     session = FakeSession(messages=[UserMessage(content="Earlier")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/compact Summary of earlier work."
         await pilot.press("enter")
 
@@ -3587,10 +3697,10 @@ async def test_tui_app_compact_command_runs_session_compaction() -> None:
 @pytest.mark.anyio
 async def test_tui_app_compact_command_accepts_no_instructions() -> None:
     session = FakeSession(messages=[UserMessage(content="Earlier")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/compact"
         await pilot.press("enter")
 
@@ -3615,17 +3725,17 @@ async def test_tui_app_blocks_session_commands_while_compacting(blocked_command:
             return "Compacted 2 context entries."
 
     session = SlowCompactSession(messages=[UserMessage(content="Earlier")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/compact Summary of earlier work."
         await pilot.press("enter")
         await asyncio.wait_for(started.wait(), timeout=1)
@@ -3650,18 +3760,18 @@ async def test_tui_app_blocks_session_commands_while_compacting(blocked_command:
 @pytest.mark.anyio
 async def test_tui_app_blocks_compact_command_while_agent_is_running() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.state.running = True
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/compact Summary of earlier work."
         await pilot.press("enter")
         await pilot.pause()
@@ -3677,18 +3787,18 @@ async def test_tui_app_blocks_compact_command_while_agent_is_running() -> None:
 async def test_tui_app_blocks_compact_command_while_follow_up_is_queued() -> None:
     session = FakeSession()
     session.queued_follow_up_messages = ("after this",)
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app._refresh()
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/compact Summary of earlier work."
         await pilot.press("enter")
         await pilot.pause()
@@ -3717,17 +3827,17 @@ async def test_tui_app_escape_cancels_active_compaction() -> None:
             return "Compacted 2 context entries."
 
     session = SlowCompactSession(messages=[UserMessage(content="Earlier")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/compact Summary of earlier work."
         await pilot.press("enter")
         await asyncio.wait_for(started.wait(), timeout=1)
@@ -3762,7 +3872,7 @@ async def test_tui_app_shows_working_state_during_manual_compaction() -> None:
 
     session = SlowCompactSession(messages=[UserMessage(content="Earlier")])
     session._session_title = "build notes"
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     titles: list[str] = []
     app._terminal_title = TerminalTitleController(enabled=True, writer=titles.append)
 
@@ -3779,7 +3889,7 @@ async def test_tui_app_shows_working_state_during_manual_compaction() -> None:
         assert app._is_agent_or_queue_active() is False
         assert app._is_compaction_active() is True
         assert prompt._footer_mode == "running"
-        assert indicator.render().plain != "τ"
+        assert _render_plain(indicator) != "τ"
         assert titles[-1] == "\x1b]0;⠋ τ | build notes\x07"
 
         app._tick_activity()
@@ -3791,8 +3901,8 @@ async def test_tui_app_shows_working_state_during_manual_compaction() -> None:
 
         assert app._is_working() is False
         assert app._is_compaction_active() is False
-        assert prompt._footer_mode == "normal"
-        assert indicator.render().plain == "τ"
+        assert str(prompt._footer_mode) == "normal"
+        assert _render_plain(indicator) == "τ"
         assert titles[-1] == "\x1b]0;τ | build notes\x07"
 
 
@@ -3803,14 +3913,14 @@ async def test_tui_app_clears_working_state_when_manual_compaction_fails() -> No
             del summary
             raise RuntimeError("boom")
 
-    app = TauTuiApp(FailingCompactSession(messages=[UserMessage(content="Earlier")]))
+    app = _tui_app(FailingCompactSession(messages=[UserMessage(content="Earlier")]))
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -3836,8 +3946,8 @@ async def test_tui_app_clears_working_state_when_compaction_is_cancelled() -> No
             await finish.wait()
             return "Compacted 2 context entries."
 
-    app = TauTuiApp(SlowCompactSession(messages=[UserMessage(content="Earlier")]))
-    app._notify = lambda message, **kwargs: None  # type: ignore[method-assign]
+    app = _tui_app(SlowCompactSession(messages=[UserMessage(content="Earlier")]))
+    app._notify = lambda message, **kwargs: None  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -3857,7 +3967,7 @@ async def test_tui_app_clears_working_state_when_compaction_is_cancelled() -> No
 @pytest.mark.anyio
 async def test_tui_app_keeps_working_state_when_recompacting_during_cancel_teardown() -> None:
     class GatedCompactSession(FakeSession):
-        def __init__(self, messages=()) -> None:
+        def __init__(self, messages: Sequence[AgentMessage] = ()) -> None:
             super().__init__(messages=messages)
             self.started = (asyncio.Event(), asyncio.Event())
             self.teardown_gate = asyncio.Event()
@@ -3878,8 +3988,8 @@ async def test_tui_app_keeps_working_state_when_recompacting_during_cancel_teard
             return "Compacted 2 context entries."
 
     session = GatedCompactSession(messages=[UserMessage(content="Earlier")])
-    app = TauTuiApp(session)
-    app._notify = lambda message, **kwargs: None  # type: ignore[method-assign]
+    app = _tui_app(session)
+    app._notify = lambda message, **kwargs: None  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -3915,7 +4025,7 @@ async def test_tui_app_keeps_working_state_when_recompacting_during_cancel_teard
 
 @pytest.mark.anyio
 async def test_tui_app_clears_working_state_when_compaction_setup_fails() -> None:
-    app = TauTuiApp(FakeSession(messages=[UserMessage(content="Earlier")]))
+    app = _tui_app(FakeSession(messages=[UserMessage(content="Earlier")]))
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
@@ -3925,10 +4035,10 @@ async def test_tui_app_clears_working_state_when_compaction_setup_fails() -> Non
     def failing_refresh() -> None:
         raise RuntimeError("no matches")
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test():
-        app._refresh = failing_refresh  # type: ignore[method-assign]
+        app._refresh = failing_refresh  # ty: ignore[invalid-assignment]
         await app._run_compaction("Summary")
 
         assert notifications == ["Error: no matches"]
@@ -3938,7 +4048,7 @@ async def test_tui_app_clears_working_state_when_compaction_setup_fails() -> Non
 
 @pytest.mark.anyio
 async def test_tui_app_notifies_once_when_manual_compaction_finishes_unfocused() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(messages=[UserMessage(content="Earlier")]),
         tui_settings=TuiSettings(turn_notification="desktop"),
     )
@@ -3949,7 +4059,7 @@ async def test_tui_app_notifies_once_when_manual_compaction_finishes_unfocused()
         writer=writes.append,
         environ={"TERM_PROGRAM": "ghostty"},
     )
-    app._notify = lambda message, **kwargs: None  # type: ignore[method-assign]
+    app._notify = lambda message, **kwargs: None  # ty: ignore[invalid-assignment]
 
     async with app.run_test():
         await app._run_compaction("focused summary")
@@ -3967,10 +4077,10 @@ async def test_tui_app_notifies_once_for_turn_with_automatic_compaction() -> Non
             self,
             text: str,
             *,
-            streaming_behavior: str | None = None,
-            source: str = "interactive",
+            streaming_behavior: StreamingBehavior | None = None,
+            source: Literal["interactive", "extension"] = "interactive",
             custom_type: str | None = None,
-            details: dict[str, object] | None = None,
+            details: dict[str, JSONValue] | None = None,
         ) -> AsyncIterator[CodingSessionEvent]:
             del streaming_behavior, source, custom_type, details
             self.prompt_texts.append(text)
@@ -3980,7 +4090,7 @@ async def test_tui_app_notifies_once_for_turn_with_automatic_compaction() -> Non
             yield AgentEndEvent()
             yield AgentSettledEvent()
 
-    app = TauTuiApp(AutoCompactSession(), tui_settings=TuiSettings(turn_notification="desktop"))
+    app = _tui_app(AutoCompactSession(), tui_settings=TuiSettings(turn_notification="desktop"))
     writes: list[str] = []
     app._terminal_notification = TerminalNotificationController(
         "desktop",
@@ -3999,17 +4109,17 @@ async def test_tui_app_notifies_once_for_turn_with_automatic_compaction() -> Non
 @pytest.mark.anyio
 async def test_tui_app_export_command_runs_session_export() -> None:
     session = FakeSession(messages=[UserMessage(content="Earlier")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/export --format jsonl out.jsonl"
         await pilot.press("enter")
 
@@ -4025,10 +4135,10 @@ async def test_tui_app_export_command_runs_session_export() -> None:
 @pytest.mark.anyio
 async def test_tui_app_resume_command_reloads_visible_state() -> None:
     session = FakeSession(messages=[UserMessage(content="Earlier")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/resume session-1"
         await pilot.press("enter")
 
@@ -4056,10 +4166,10 @@ async def test_tui_app_resume_command_opens_session_picker() -> None:
     )
     session = FakeSession(messages=[UserMessage(content="Earlier")])
     session.session_manager = _FakeSessionManager([record])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/resume"
         await pilot.press("enter")
 
@@ -4071,7 +4181,7 @@ async def test_tui_app_resume_command_opens_session_picker() -> None:
 
 @pytest.mark.anyio
 async def test_prompt_arrow_keys_move_between_lines_without_completions() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", TextArea)
@@ -4094,10 +4204,10 @@ async def test_tui_app_submits_multiline_prompt_with_enter() -> None:
             AgentEndEvent(),
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "first"
         prompt.cursor_position = len(prompt.value)
         await pilot.press("shift+enter")
@@ -4119,7 +4229,7 @@ async def test_tui_extension_turn_delivers_source_extension() -> None:
             return False
 
     session = IdleSession(events=[AgentStartEvent(), AgentEndEvent()])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         await app._deliver_extension_message("from extension")
@@ -4144,7 +4254,7 @@ async def test_tui_idle_extension_custom_message_renders_card_not_raw_content() 
         def is_running(self) -> bool:
             return False
 
-    details = {"description": "Summarize codebase"}
+    details: dict[str, JSONValue] = {"description": "Summarize codebase"}
     session = IdleSession(
         events=[
             AgentStartEvent(),
@@ -4159,7 +4269,7 @@ async def test_tui_idle_extension_custom_message_renders_card_not_raw_content() 
         ]
     )
     session.extension_runtime = _CustomMessageRuntime()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -4200,7 +4310,7 @@ async def test_tui_mid_run_custom_follow_up_renders_card_not_raw_content() -> No
         ]
     )
     session.extension_runtime = _CustomMessageRuntime()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await app._submit_prompt("New prompt")
@@ -4222,7 +4332,7 @@ async def test_tui_mid_run_custom_follow_up_renders_card_not_raw_content() -> No
 async def test_structured_assistant_redraw_preserves_extension_custom_card() -> None:
     raw = "<task-notification>agent-1 completed</task-notification>"
     partial = AssistantMessage()
-    final = AssistantMessage(content=[ThinkingContent(thinking="plan"), TextContent(text="done")])
+    final = _assistant([ThinkingContent(thinking="plan"), TextContent(text="done")])
     session = FakeSession(
         events=[
             AgentStartEvent(),
@@ -4255,7 +4365,7 @@ async def test_structured_assistant_redraw_preserves_extension_custom_card() -> 
         ]
     )
     session.extension_runtime = _CustomMessageRuntime()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await app._run_prompt("run")
@@ -4308,7 +4418,7 @@ async def test_structured_assistant_finalization_preserves_existing_widget_ident
         ],
     )
     session.extension_runtime = _CustomMessageRuntime()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
@@ -4346,7 +4456,7 @@ async def test_structured_assistant_ignores_empty_final_content_blocks() -> None
             AgentEndEvent(),
         ],
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await app._run_prompt("run")
@@ -4373,7 +4483,7 @@ async def test_tui_app_prompts_picker_filters_and_inserts_without_submitting() -
             description="Run checks",
         ),
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -4397,7 +4507,8 @@ async def test_tui_app_prompts_picker_filters_and_inserts_without_submitting() -
         )
         search.value = "tes"
         await pilot.pause()
-        assert [template.name for template in app.screen.visible_templates] == ["test"]
+        visible_templates = cast(tuple[PromptTemplate, ...], app.screen.visible_templates)
+        assert [template.name for template in visible_templates] == ["test"]
 
         await pilot.press("enter")
         await pilot.pause()
@@ -4409,7 +4520,7 @@ async def test_tui_app_prompts_picker_filters_and_inserts_without_submitting() -
 
 @pytest.mark.anyio
 async def test_tui_app_prompts_picker_cancel_and_empty_state() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -4441,10 +4552,10 @@ async def test_tui_app_completes_custom_prompt_slash_command() -> None:
             description="Run the example prompt.",
         ),
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/exa"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4456,10 +4567,10 @@ async def test_tui_app_completes_custom_prompt_slash_command() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_completes_registered_slash_command() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/se"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4471,10 +4582,10 @@ async def test_tui_app_completes_registered_slash_command() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_enter_accepts_completion_without_submitting() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/se"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4487,10 +4598,10 @@ async def test_tui_app_enter_accepts_completion_without_submitting() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_enter_accepts_arrow_selected_completion() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/s"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4512,10 +4623,10 @@ async def test_tui_app_accepts_file_reference_completion(tmp_path: Path) -> None
 
     session = FakeSession()
     session.cwd = tmp_path
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "inspect @main"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4532,10 +4643,10 @@ async def test_tui_app_accepts_shell_path_completion(tmp_path: Path) -> None:
 
     session = FakeSession()
     session.cwd = tmp_path
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "!cat READ"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4548,10 +4659,10 @@ async def test_tui_app_accepts_shell_path_completion(tmp_path: Path) -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_completes_skill_name() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/skill:r"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4563,10 +4674,10 @@ async def test_tui_app_completes_skill_name() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_completes_model_argument() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/model fak"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4592,10 +4703,10 @@ async def test_tui_app_completes_resume_session_argument() -> None:
             )
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/resume sess"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -4626,7 +4737,7 @@ async def test_tui_app_session_picker_resumes_selected_session() -> None:
             )
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+r")
@@ -4667,7 +4778,7 @@ async def test_tui_app_session_picker_shows_human_readable_session_metadata() ->
             ),
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+r")
@@ -4710,7 +4821,7 @@ async def test_tui_app_session_picker_arrow_keys_select_session() -> None:
             ),
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+r")
@@ -4748,7 +4859,7 @@ async def test_tui_app_session_picker_search_filters_sessions() -> None:
             ),
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+r")
@@ -4786,7 +4897,7 @@ async def test_tui_app_session_picker_search_does_not_match_workspace_path() -> 
             ),
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+r")
@@ -4821,7 +4932,7 @@ async def test_tui_app_session_picker_search_with_no_matches_shows_help_text() -
             ),
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+r")
@@ -4840,18 +4951,18 @@ async def test_tui_app_session_picker_search_with_no_matches_shows_help_text() -
 @pytest.mark.anyio
 async def test_tui_app_blocks_tree_picker_while_agent_is_running() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.state.running = True
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/tree"
         await pilot.press("enter")
         await pilot.pause()
@@ -4867,17 +4978,17 @@ async def test_tui_app_blocks_tree_picker_while_agent_is_running() -> None:
 @pytest.mark.anyio
 async def test_tui_app_blocks_tree_branch_selection_while_agent_is_running() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/tree"
         await pilot.press("enter")
         await pilot.pause()
@@ -4896,10 +5007,10 @@ async def test_tui_app_blocks_tree_branch_selection_while_agent_is_running() -> 
 @pytest.mark.anyio
 async def test_tui_app_tree_picker_branches_with_summary() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/tree"
         await pilot.press("enter")
         await pilot.pause()
@@ -4907,7 +5018,7 @@ async def test_tui_app_tree_picker_branches_with_summary() -> None:
         assert isinstance(app.screen, TreePickerScreen)
         tree_list = app.screen.query_one("#tree-picker-list", ListView)
         assert tree_list.index == 3
-        rendered_labels = [item.query_one(Label).render() for item in tree_list.children]
+        rendered_labels = [_render_content(item.query_one(Label)) for item in tree_list.children]
         labels = [str(label) for label in rendered_labels]
         assert labels == [
             "  user: Root",
@@ -4921,8 +5032,8 @@ async def test_tui_app_tree_picker_branches_with_summary() -> None:
         await pilot.press("up")
         await pilot.pause()
         assert tree_list.index == 2
-        left_label = tree_list.children[2].query_one(Label).render()
-        right_label = tree_list.children[3].query_one(Label).render()
+        left_label = _render_content(tree_list.children[2].query_one(Label))
+        right_label = _render_content(tree_list.children[3].query_one(Label))
         assert str(left_label.spans[0].style) == _style_rgb(CODEYELLOW_THEME.highlight_text)
         assert str(right_label.spans[0].style) == _style_rgb(CODEYELLOW_THEME.accent)
         await pilot.press("s")
@@ -4933,7 +5044,7 @@ async def test_tui_app_tree_picker_branches_with_summary() -> None:
             ("user", "Branched to left"),
         ]
 
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         await pilot.press("up")
         await pilot.pause()
 
@@ -4949,7 +5060,9 @@ async def test_tui_app_tree_picker_prefills_selected_user_message() -> None:
             *,
             summarize: bool = False,
             custom_instructions: str | None = None,
+            replace_instructions: bool = False,
         ) -> SessionTreeBranchResult:
+            del replace_instructions
             self.tree_branch_requests.append((entry_id, summarize, custom_instructions))
             self.messages = ()
             return SessionTreeBranchResult(
@@ -4958,7 +5071,7 @@ async def test_tui_app_tree_picker_prefills_selected_user_message() -> None:
             )
 
     session = PrefillSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -4990,18 +5103,20 @@ async def test_tui_app_tree_summary_clears_transcript_while_summarizing() -> Non
             *,
             summarize: bool = False,
             custom_instructions: str | None = None,
-        ) -> str:
+            replace_instructions: bool = False,
+        ) -> SessionTreeBranchResult:
+            del replace_instructions
             self.tree_branch_requests.append((entry_id, summarize, custom_instructions))
             started.set()
             await finish.wait()
             self.messages = (UserMessage(content=f"Branched to {entry_id}"),)
-            return f"Branched session at {entry_id}."
+            return SessionTreeBranchResult(message=f"Branched session at {entry_id}.")
 
     session = SlowSummarySession(messages=[UserMessage(content="Old thread")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/tree"
         await pilot.press("enter")
         await pilot.pause()
@@ -5027,10 +5142,10 @@ async def test_tui_app_tree_summary_clears_transcript_while_summarizing() -> Non
 @pytest.mark.anyio
 async def test_tui_app_tree_picker_toggles_tool_calls() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/tree"
         await pilot.press("enter")
         await pilot.pause()
@@ -5170,10 +5285,10 @@ async def test_tui_app_scrolls_completion_selection_into_view() -> None:
         )
         for index in range(30)
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(80, 24)) as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.focus()
         prompt.value = "/"
         app._completion_state = app._build_completion_state(prompt.value)
@@ -5215,10 +5330,10 @@ async def test_tui_app_uses_terminal_space_for_initial_completion_window() -> No
         )
         for index in range(30)
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(80, 18)) as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.focus()
         prompt.value = "/"
         await pilot.pause()
@@ -5246,10 +5361,10 @@ async def test_tui_app_keeps_completion_window_height_stable_after_edit(
         )
         for index in range(30)
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test(size=(80, 24)) as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.focus()
         prompt.value = "/"
         await pilot.pause()
@@ -5265,10 +5380,10 @@ async def test_tui_app_keeps_completion_window_height_stable_after_edit(
 
 @pytest.mark.anyio
 async def test_tui_app_cycles_completion_selection() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test():
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.focus()
         prompt.value = "/s"
         app._completion_state = app._build_completion_state(prompt.value)
@@ -5283,10 +5398,10 @@ async def test_tui_app_cycles_completion_selection() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_opens_command_palette_from_keybinding() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         await pilot.press("ctrl+k")
 
         assert prompt.value == "/"
@@ -5303,14 +5418,14 @@ def test_tui_model_picker_guides_setup_when_no_provider_is_usable() -> None:
             self.available_model_choices = ()
 
     session = UnusableProviderSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[tuple[str, str | None]] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         severity = kwargs.get("severity")
         notifications.append((message, severity if isinstance(severity, str) else None))
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     app._open_model_picker()
 
@@ -5321,7 +5436,7 @@ def test_tui_model_picker_guides_setup_when_no_provider_is_usable() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_deduplicates_active_notifications() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(notifications=True) as pilot:
         app._notify("Thinking controls are not available.", severity="warning")
@@ -5341,7 +5456,7 @@ async def test_tui_app_deduplicates_active_notifications() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_notifications_render_literal_markup_text() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(notifications=True) as pilot:
         app._notify("Error: value [type=extra_forbidden]", severity="error")
@@ -5355,7 +5470,7 @@ async def test_tui_app_notifications_render_literal_markup_text() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_clicking_transcript_refocuses_prompt() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -5367,15 +5482,15 @@ async def test_tui_app_clicking_transcript_refocuses_prompt() -> None:
         await pilot.click("#transcript")
         await pilot.pause()
 
-        assert app.screen.focused is prompt
+        assert cast(object, app.screen.focused) is prompt
 
 
 @pytest.mark.anyio
 async def test_tui_app_help_uses_modal_instead_of_transcript() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/session"
         await pilot.press("enter")
 
@@ -5389,7 +5504,7 @@ async def test_tui_app_help_uses_modal_instead_of_transcript() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_tools_reference_opens_filters_and_cancels() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -5453,7 +5568,7 @@ async def test_tui_app_tools_reference_groups_origins_and_searches_extension_nam
         "bash": "first-extension",
         "write": "second-extension",
     }
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -5473,7 +5588,7 @@ async def test_tui_app_tools_reference_groups_origins_and_searches_extension_nam
 async def test_tui_app_tools_reference_shows_empty_and_no_match_states() -> None:
     session = FakeSession()
     session.tools = ()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
@@ -5486,7 +5601,7 @@ async def test_tui_app_tools_reference_shows_empty_and_no_match_states() -> None
         assert [str(label.render()) for label in labels] == ["No tools available."]
 
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/tools"
@@ -5500,10 +5615,10 @@ async def test_tui_app_tools_reference_shows_empty_and_no_match_states() -> None
 @pytest.mark.anyio
 async def test_tui_app_reload_appends_command_output_to_transcript() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/reload"
         await pilot.press("enter")
         await pilot.pause()
@@ -5521,10 +5636,10 @@ async def test_tui_app_reload_appends_command_output_to_transcript() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_system_appends_command_output_to_transcript() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/system"
         await pilot.press("enter")
         await pilot.pause()
@@ -5535,7 +5650,7 @@ async def test_tui_app_system_appends_command_output_to_transcript() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_omits_textual_header() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test():
         assert not app.query("Header")
@@ -5543,10 +5658,10 @@ async def test_tui_app_omits_textual_header() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_name_updates_status() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/name Customer bugfix"
         await pilot.press("enter")
         await pilot.pause()
@@ -5559,17 +5674,17 @@ async def test_tui_app_name_updates_status() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_name_success_uses_notification_instead_of_modal() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/name Customer bugfix"
         await pilot.press("enter")
         await pilot.pause()
@@ -5581,7 +5696,7 @@ async def test_tui_app_name_success_uses_notification_instead_of_modal() -> None
 
 @pytest.mark.anyio
 async def test_tui_app_command_modal_arrow_keys_scroll_output() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
     long_message = "\n".join(f"line {index}" for index in range(80))
 
     async with app.run_test(size=(100, 20)) as pilot:
@@ -5603,7 +5718,7 @@ async def test_tui_app_command_modal_arrow_keys_scroll_output() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_command_modal_renders_literal_markup_text() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         app._show_command_message("/session", "Session [info]\n/session")
@@ -5616,7 +5731,7 @@ async def test_tui_app_command_modal_renders_literal_markup_text() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_command_modal_uses_centered_picker_style() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         app._show_command_message("/session", "Session info")
@@ -5626,19 +5741,25 @@ async def test_tui_app_command_modal_uses_centered_picker_style() -> None:
         command_output = app.screen.query_one("#command-output")
         command_scroll = app.screen.query_one("#command-output-scroll")
         assert app.screen.styles.align == ("center", "middle")
-        assert command_output.styles.width.value == 76
-        assert command_output.styles.max_width.value == 90
-        assert command_output.styles.height.is_auto
-        assert command_output.styles.max_height.value == 70
-        assert command_scroll.styles.height.is_auto
-        assert command_scroll.styles.max_height.value == 18
+        width = command_output.styles.width
+        max_width = command_output.styles.max_width
+        height = command_output.styles.height
+        max_height = command_output.styles.max_height
+        scroll_height = command_scroll.styles.height
+        scroll_max_height = command_scroll.styles.max_height
+        assert width is not None and width.value == 76
+        assert max_width is not None and max_width.value == 90
+        assert height is not None and height.is_auto
+        assert max_height is not None and max_height.value == 70
+        assert scroll_height is not None and scroll_height.is_auto
+        assert scroll_max_height is not None and scroll_max_height.value == 18
 
 
 @pytest.mark.anyio
 async def test_tui_app_session_modal_auto_copies_selected_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(auto_copy_selection=False))
+    app = _tui_app(FakeSession(), tui_settings=TuiSettings(auto_copy_selection=False))
     copied: list[str] = []
     monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
 
@@ -5659,7 +5780,7 @@ async def test_tui_app_session_modal_auto_copies_selected_text(
 async def test_tui_app_non_session_modal_uses_global_auto_copy_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(auto_copy_selection=False))
+    app = _tui_app(FakeSession(), tui_settings=TuiSettings(auto_copy_selection=False))
     copied: list[str] = []
     monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
 
@@ -5684,14 +5805,14 @@ async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
             return True
 
     session = RunningSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.adapter.apply(AgentStartEvent())
@@ -5707,13 +5828,13 @@ async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
 @pytest.mark.anyio
 async def test_tui_app_new_command_cancels_active_run_and_ignores_late_events() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         app.adapter.apply(AgentStartEvent())
         app._refresh()
         old_run_id = app._prompt_run_id
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/new"
 
         await pilot.press("enter")
@@ -5724,7 +5845,7 @@ async def test_tui_app_new_command_cancels_active_run_and_ignores_late_events() 
         assert app.state.items == []
         assert app.state.running is False
 
-        session.events = (MessageEndEvent(message=AssistantMessage(content="late old output")),)
+        session.events = (MessageEndEvent(message=_assistant("late old output")),)
         await app._run_prompt("old prompt", old_run_id)
 
         assert app.state.items == []
@@ -5732,14 +5853,14 @@ async def test_tui_app_new_command_cancels_active_run_and_ignores_late_events() 
 
 @pytest.mark.anyio
 async def test_tui_app_escape_without_running_does_not_append_transcript_status() -> None:
-    app = TauTuiApp(FakeSession(messages=[UserMessage(content="Earlier")]))
+    app = _tui_app(FakeSession(messages=[UserMessage(content="Earlier")]))
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         await pilot.press("escape")
@@ -5750,13 +5871,13 @@ async def test_tui_app_escape_without_running_does_not_append_transcript_status(
 
 @pytest.mark.anyio
 async def test_tui_app_uses_configured_command_palette_keybinding() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(),
         tui_settings=TuiSettings(keybindings=TuiKeybindings(command_palette="ctrl+j")),
     )
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         await pilot.press("ctrl+k")
 
         assert prompt.value == ""
@@ -5771,10 +5892,10 @@ async def test_tui_app_uses_configured_command_palette_keybinding() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_quits_from_focused_prompt_with_default_keybinding() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         visible_bindings = [
             binding for binding in prompt._bindings.get_bindings_for_key("ctrl+d") if binding.show
         ]
@@ -5792,13 +5913,13 @@ async def test_tui_app_quits_from_focused_prompt_with_default_keybinding() -> No
 
 @pytest.mark.anyio
 async def test_tui_app_uses_configured_completion_keybinding() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(),
         tui_settings=TuiSettings(keybindings=TuiKeybindings(accept_completion="f2")),
     )
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/se"
         app._completion_state = app._build_completion_state(prompt.value)
         app._refresh_completions()
@@ -5817,10 +5938,10 @@ async def test_tui_login_saves_provider_key(
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login opencode"
         await pilot.press("enter")
         await pilot.pause()
@@ -5852,10 +5973,10 @@ async def test_tui_openai_codex_alias_opens_oauth(
         raise AssertionError("unreachable")
 
     monkeypatch.setattr(tui_app, "login_openai_codex", fake_login_openai_codex)
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login openai-codex"
         await pilot.press("enter")
         await pilot.pause()
@@ -5868,10 +5989,10 @@ async def test_tui_openai_codex_alias_opens_oauth(
 
 @pytest.mark.anyio
 async def test_tui_opencode_alias_opens_api_key_login() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login opencode"
         await pilot.press("enter")
         await pilot.pause()
@@ -5886,17 +6007,17 @@ async def test_tui_login_openai_codex_saves_oauth_credentials(
     tmp_path: Path,
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
-    credential_future = asyncio.get_running_loop().create_future()
+    credential_future: asyncio.Future[OAuthCredential] = asyncio.get_running_loop().create_future()
 
     async def fake_login_openai_codex(**_kwargs: object) -> OAuthCredential:
         return await credential_future
 
     monkeypatch.setattr(tui_app, "login_openai_codex", fake_login_openai_codex)
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login openai-codex"
         await pilot.press("enter")
         await pilot.pause()
@@ -5915,7 +6036,7 @@ async def test_tui_login_openai_codex_saves_oauth_credentials(
     assert session.reload_count == 0
     assert session.provider_reload_count == 1
     assert session.provider_name == "openai-codex"
-    assert tui_app.load_provider_settings().default_provider == "openai-codex"
+    assert load_provider_settings().default_provider == "openai-codex"
     assert all("access-token" not in item.text for item in app.state.items)
     credentials = (tmp_path / ".tau" / "credentials.json").read_text(encoding="utf-8")
     assert '"type": "oauth"' in credentials
@@ -5929,7 +6050,7 @@ async def test_tui_login_custom_provider_writes_catalog_and_preferences(
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test():
         app._handle_custom_provider_login_result(
@@ -5946,7 +6067,7 @@ async def test_tui_login_custom_provider_writes_catalog_and_preferences(
 
     paths = TauPaths(home=tmp_path / ".tau")
     catalog = user_catalog_path(paths).read_text(encoding="utf-8")
-    settings = tui_app.load_provider_settings(paths)
+    settings = load_provider_settings(paths)
 
     assert 'name = "nebius"' in catalog
     assert 'display_name = "Nebius AI Studio"' in catalog
@@ -5962,10 +6083,10 @@ async def test_tui_login_custom_provider_writes_catalog_and_preferences(
 
 @pytest.mark.anyio
 async def test_tui_login_custom_provider_opens_from_slash_command() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login custom"
         await pilot.press("enter")
         await pilot.pause()
@@ -5996,14 +6117,14 @@ async def test_tui_login_preserves_existing_scoped_models_and_providers(
     )
     save_provider_settings(settings)
     session = FakeSession()
-    app = TauTuiApp(session)
-    entry = tui_app.builtin_provider_entry("opencode-go")
+    app = _tui_app(session)
+    entry = builtin_provider_entry("opencode-go")
     assert entry is not None
 
     async with app.run_test():
         app._handle_login_result(entry, "stored-opencode-key")
 
-    saved = tui_app.load_provider_settings()
+    saved = load_provider_settings()
     assert saved.default_provider == "local"
     assert saved.get_provider("local").default_model == "qwen"
     assert saved.get_provider("opencode-go").credential_name == "opencode"
@@ -6020,8 +6141,8 @@ async def test_tui_login_provider_does_not_change_default_startup_provider(
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
     session = FakeSession()
-    app = TauTuiApp(session)
-    entry = tui_app.builtin_provider_entry("opencode-go")
+    app = _tui_app(session)
+    entry = builtin_provider_entry("opencode-go")
     assert entry is not None
 
     async with app.run_test():
@@ -6029,7 +6150,7 @@ async def test_tui_login_provider_does_not_change_default_startup_provider(
 
     assert session.provider_reload_count == 1
     assert session.provider_name == "opencode-go"
-    assert tui_app.load_provider_settings().default_provider == "openai-codex"
+    assert load_provider_settings().default_provider == "openai-codex"
 
 
 @pytest.mark.anyio
@@ -6039,17 +6160,17 @@ async def test_tui_logout_without_stored_credentials_shows_message(
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[tuple[str, str | None]] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         severity = kwargs.get("severity")
         notifications.append((message, severity if isinstance(severity, str) else None))
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/logout"
         await pilot.press("enter")
         await pilot.pause()
@@ -6067,17 +6188,17 @@ async def test_tui_logout_removes_stored_api_key(
     credential_path = tmp_path / ".tau" / "credentials.json"
     FileCredentialStore(credential_path).set("opencode", "stored-opencode-key")
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/logout opencode"
         await pilot.press("enter")
         await pilot.pause()
@@ -6107,17 +6228,17 @@ async def test_tui_logout_removes_oauth_credential(
         ),
     )
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/logout openai-codex"
         await pilot.press("enter")
         await pilot.pause()
@@ -6134,10 +6255,10 @@ async def test_tui_logout_opens_stored_credential_provider_picker(
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
     FileCredentialStore(tmp_path / ".tau" / "credentials.json").set("opencode", "stored-key")
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/logout"
         await pilot.press("enter")
         await pilot.pause()
@@ -6152,10 +6273,10 @@ async def test_tui_logout_opens_stored_credential_provider_picker(
 
 @pytest.mark.anyio
 async def test_tui_login_opens_method_picker() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()
@@ -6174,10 +6295,10 @@ async def test_tui_login_opens_method_picker() -> None:
 
 @pytest.mark.anyio
 async def test_tui_login_method_picker_supports_arrow_keys() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()
@@ -6207,10 +6328,10 @@ async def test_tui_login_method_picker_supports_arrow_keys() -> None:
 
 @pytest.mark.anyio
 async def test_tui_login_escape_returns_from_provider_picker_to_method_picker() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()
@@ -6225,10 +6346,10 @@ async def test_tui_login_escape_returns_from_provider_picker_to_method_picker() 
 
 @pytest.mark.anyio
 async def test_tui_login_ctrl_d_closes_modal_without_closing_app() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()
@@ -6245,10 +6366,10 @@ async def test_tui_login_ctrl_d_closes_modal_without_closing_app() -> None:
 
 @pytest.mark.anyio
 async def test_tui_login_subscription_opens_oauth_provider_picker() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()
@@ -6266,10 +6387,10 @@ async def test_tui_login_subscription_opens_oauth_provider_picker() -> None:
 
 @pytest.mark.anyio
 async def test_tui_login_api_provider_picker_filters_by_name_and_display_name() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()
@@ -6306,10 +6427,10 @@ async def test_tui_login_api_provider_picker_filters_by_name_and_display_name() 
 
 @pytest.mark.anyio
 async def test_tui_login_api_provider_picker_handles_no_matches() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()
@@ -6336,10 +6457,10 @@ async def test_tui_login_api_provider_picker_handles_no_matches() -> None:
 
 @pytest.mark.anyio
 async def test_tui_login_api_key_opens_api_provider_picker() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()
@@ -6366,17 +6487,17 @@ async def test_tui_login_api_key_opens_api_provider_picker() -> None:
 @pytest.mark.anyio
 async def test_tui_model_opens_interactive_picker() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/model"
         await pilot.press("enter")
         await pilot.pause()
@@ -6418,10 +6539,10 @@ async def test_tui_model_opens_interactive_picker() -> None:
 @pytest.mark.anyio
 async def test_tui_scoped_models_picker_toggles_scoped_models_without_switching_model() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/scoped-models"
         await pilot.press("enter")
         await pilot.pause()
@@ -6446,7 +6567,7 @@ async def test_tui_scoped_models_picker_toggles_scoped_models_without_switching_
         await pilot.press("enter")
         await pilot.pause()
 
-        assert session.scoped_model_choices == ()
+        assert not session.scoped_model_choices
         assert session.provider_name == "openai"
         assert session.model == "fake-model"
 
@@ -6454,10 +6575,10 @@ async def test_tui_scoped_models_picker_toggles_scoped_models_without_switching_
 @pytest.mark.anyio
 async def test_tui_app_runs_terminal_command_and_adds_context() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "! pwd"
         await pilot.press("enter")
         await pilot.pause()
@@ -6472,10 +6593,10 @@ async def test_tui_app_runs_terminal_command_and_adds_context() -> None:
 @pytest.mark.anyio
 async def test_tui_app_runs_terminal_command_without_context() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "!! pwd"
         await pilot.press("enter")
         await pilot.pause()
@@ -6497,7 +6618,7 @@ async def test_tui_app_terminal_command_does_not_cancel_active_agent() -> None:
             self,
             text: str,
             **kwargs: object,
-        ) -> AsyncIterator[AgentEvent]:
+        ) -> AsyncIterator[CodingSessionEvent]:
             del kwargs
             self.prompt_texts.append(text)
             yield AgentStartEvent()
@@ -6508,10 +6629,10 @@ async def test_tui_app_terminal_command_does_not_cancel_active_agent() -> None:
             completed.set()
 
     session = RunningSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "keep working"
         await pilot.press("enter")
         await started.wait()
@@ -6534,7 +6655,7 @@ async def test_tui_app_terminal_command_does_not_cancel_active_agent() -> None:
 @pytest.mark.parametrize("add_to_context", [True, False])
 async def test_tui_app_renders_terminal_command_while_running(add_to_context: bool) -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -6553,7 +6674,7 @@ async def test_tui_app_renders_terminal_command_while_running(add_to_context: bo
             added_to_context=add_to_context,
         )
 
-    session.run_terminal_command = fake_run_terminal_command  # type: ignore[method-assign]
+    session.run_terminal_command = fake_run_terminal_command  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         task = asyncio.create_task(
@@ -6577,7 +6698,7 @@ async def test_tui_app_renders_terminal_command_while_running(add_to_context: bo
 @pytest.mark.anyio
 async def test_tui_app_marks_failed_terminal_command_as_error() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async def fake_run_terminal_command(
         command: str,
@@ -6592,10 +6713,10 @@ async def test_tui_app_marks_failed_terminal_command_as_error() -> None:
             added_to_context=add_to_context,
         )
 
-    session.run_terminal_command = fake_run_terminal_command  # type: ignore[method-assign]
+    session.run_terminal_command = fake_run_terminal_command  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "!! false"
         await pilot.press("enter")
         await pilot.pause()
@@ -6608,7 +6729,7 @@ async def test_tui_app_marks_failed_terminal_command_as_error() -> None:
 @pytest.mark.anyio
 async def test_tui_app_marks_terminal_command_exception_as_failed() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async def fake_run_terminal_command(
         command: str,
@@ -6618,10 +6739,10 @@ async def test_tui_app_marks_terminal_command_exception_as_failed() -> None:
         del command, add_to_context
         raise RuntimeError("boom")
 
-    session.run_terminal_command = fake_run_terminal_command  # type: ignore[method-assign]
+    session.run_terminal_command = fake_run_terminal_command  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "!! false"
         await pilot.press("enter")
         await pilot.pause()
@@ -6648,7 +6769,7 @@ async def test_tui_app_renders_terminal_command_output_when_tool_results_are_col
 @pytest.mark.anyio
 async def test_tui_app_limits_terminal_command_output_preview() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     output = "\n".join(f"line {index}" for index in range(130))
 
     async def fake_run_terminal_command(
@@ -6664,10 +6785,10 @@ async def test_tui_app_limits_terminal_command_output_preview() -> None:
             added_to_context=add_to_context,
         )
 
-    session.run_terminal_command = fake_run_terminal_command  # type: ignore[method-assign]
+    session.run_terminal_command = fake_run_terminal_command  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "!! seq 130"
         await pilot.press("enter")
         await pilot.pause()
@@ -6681,14 +6802,14 @@ async def test_tui_app_limits_terminal_command_output_preview() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_toggles_tool_results_from_keybinding() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         assert app.state.show_tool_results is False
@@ -6704,7 +6825,7 @@ async def test_tui_app_toggles_tool_results_from_keybinding() -> None:
 
 @pytest.mark.anyio
 async def test_tool_result_toggle_preserves_unrelated_message_widgets() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content="earlier"),
@@ -6739,14 +6860,14 @@ async def test_tool_result_toggle_preserves_unrelated_message_widgets() -> None:
 @pytest.mark.anyio
 async def test_tui_app_queues_steering_prompt_while_running() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.state.running = True
@@ -6777,14 +6898,14 @@ async def test_tui_app_queues_steering_prompt_while_running() -> None:
 @pytest.mark.anyio
 async def test_tui_app_queues_follow_up_prompt_from_keybinding() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.state.running = True
@@ -6815,7 +6936,7 @@ async def test_tui_app_queues_follow_up_prompt_from_keybinding() -> None:
 @pytest.mark.anyio
 async def test_tui_app_up_arrow_edits_latest_queued_follow_up() -> None:
     session = FakeSession(messages=[UserMessage(content="remembered prompt")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         app.state.running = True
@@ -6829,7 +6950,7 @@ async def test_tui_app_up_arrow_edits_latest_queued_follow_up() -> None:
         await pilot.pause()
 
         assert prompt.text == "latest follow-up"
-        assert session.queued_follow_up_messages == ("first follow-up",)
+        assert list(session.queued_follow_up_messages) == ["first follow-up"]
         assert app.state.queued_follow_up == ("first follow-up",)
         queued_messages = app.query_one("#queued-messages")
         assert queued_messages.display is True
@@ -6838,7 +6959,7 @@ async def test_tui_app_up_arrow_edits_latest_queued_follow_up() -> None:
 @pytest.mark.anyio
 async def test_tui_app_up_arrow_edits_latest_queued_steering_message() -> None:
     session = FakeSession(messages=[UserMessage(content="remembered prompt")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         app.state.running = True
@@ -6852,7 +6973,7 @@ async def test_tui_app_up_arrow_edits_latest_queued_steering_message() -> None:
         await pilot.pause()
 
         assert prompt.text == "latest steering"
-        assert session.queued_steering_messages == ("first steering",)
+        assert list(session.queued_steering_messages) == ["first steering"]
         assert app.state.queued_steering == ("first steering",)
         queued_messages = app.query_one("#queued-messages")
         assert queued_messages.display is True
@@ -6861,7 +6982,7 @@ async def test_tui_app_up_arrow_edits_latest_queued_steering_message() -> None:
 @pytest.mark.anyio
 async def test_tui_app_up_arrow_prefers_queued_follow_up_before_steering() -> None:
     session = FakeSession(messages=[UserMessage(content="remembered prompt")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         app.state.running = True
@@ -6877,7 +6998,7 @@ async def test_tui_app_up_arrow_prefers_queued_follow_up_before_steering() -> No
 
         assert prompt.text == "queued follow-up"
         assert session.queued_steering_messages == ("queued steering",)
-        assert session.queued_follow_up_messages == ()
+        assert not session.queued_follow_up_messages
         assert app.state.queued_steering == ("queued steering",)
         assert app.state.queued_follow_up == ()
 
@@ -6885,7 +7006,7 @@ async def test_tui_app_up_arrow_prefers_queued_follow_up_before_steering() -> No
 @pytest.mark.anyio
 async def test_tui_app_up_arrow_recalls_latest_sent_prompt_when_input_is_empty() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", TextArea)
@@ -6907,11 +7028,11 @@ async def test_tui_app_up_arrow_recalls_latest_sent_prompt_when_input_is_empty()
 
 @pytest.mark.anyio
 async def test_tui_app_up_arrow_recalls_latest_restored_user_message() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=[
                 UserMessage(content="earlier prompt"),
-                AssistantMessage(content="response"),
+                _assistant("response"),
                 UserMessage(content="restored prompt"),
             ]
         )
@@ -6931,7 +7052,7 @@ async def test_tui_app_up_arrow_recalls_latest_restored_user_message() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_up_arrow_preserves_non_empty_prompt_movement() -> None:
-    app = TauTuiApp(FakeSession(messages=[UserMessage(content="remembered prompt")]))
+    app = _tui_app(FakeSession(messages=[UserMessage(content="remembered prompt")]))
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", TextArea)
@@ -6948,7 +7069,7 @@ async def test_tui_app_up_arrow_preserves_non_empty_prompt_movement() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_toggles_thinking_tokens_from_keybinding_while_running() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
@@ -6959,7 +7080,7 @@ async def test_tui_app_toggles_thinking_tokens_from_keybinding_while_running() -
         transcript = app.query_one("#transcript", TranscriptView)
         return "\n".join(line.text for line in transcript.lines)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.state.running = True
@@ -7008,11 +7129,11 @@ async def test_tui_app_hidden_thinking_placeholder_stays_before_streamed_answer(
                     content_index=0, delta="public answer", partial=partial
                 ),
             ),
-            MessageEndEvent(message=AssistantMessage(content="public answer")),
+            MessageEndEvent(message=_assistant("public answer")),
             AgentEndEvent(),
         ]
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
 
     async with app.run_test() as pilot:
         await app._run_prompt("stream")
@@ -7028,7 +7149,7 @@ async def test_tui_app_hidden_thinking_placeholder_stays_before_streamed_answer(
 
 @pytest.mark.anyio
 async def test_tui_app_restored_thinking_toggles_in_persisted_order() -> None:
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             messages=(
                 UserMessage(content="prompt"),
@@ -7079,7 +7200,7 @@ async def test_tui_app_restored_thinking_toggles_in_persisted_order() -> None:
 
 @pytest.mark.anyio
 async def test_tui_app_thinking_toggle_preserves_unrelated_items() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         app.state.add_item("user", "first prompt")
@@ -7131,7 +7252,7 @@ async def test_tui_app_thinking_toggle_preserves_unrelated_items() -> None:
 
 @pytest.mark.anyio
 async def test_tui_prompt_ctrl_c_clears_text() -> None:
-    app = TauTuiApp(FakeSession(messages=(UserMessage(content="User prompt"),)))
+    app = _tui_app(FakeSession(messages=(UserMessage(content="User prompt"),)))
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", TextArea)
@@ -7147,17 +7268,17 @@ async def test_tui_prompt_ctrl_c_clears_text() -> None:
 @pytest.mark.anyio
 async def test_tui_app_effort_command_changes_thinking_level() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/effort high"
         await pilot.press("enter")
         await pilot.pause()
@@ -7169,14 +7290,14 @@ async def test_tui_app_effort_command_changes_thinking_level() -> None:
 @pytest.mark.anyio
 async def test_tui_app_cycles_thinking_from_keybinding() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         await pilot.press("shift+tab")
@@ -7189,14 +7310,14 @@ async def test_tui_app_cycles_thinking_from_keybinding() -> None:
 @pytest.mark.anyio
 async def test_tui_app_cycles_thinking_from_keybinding_while_running() -> None:
     session = FakeSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.state.running = True
@@ -7215,14 +7336,14 @@ async def test_tui_app_cycles_scoped_model_from_keybinding() -> None:
         ModelChoice(provider_name="opencode", model="fake-model"),
         ModelChoice(provider_name="opencode", model="other-model"),
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     notifications: list[str] = []
 
     def fake_notify(message: str, **kwargs: object) -> None:
         del kwargs
         notifications.append(message)
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+p")
@@ -7243,7 +7364,7 @@ async def test_tui_app_cycles_scoped_model_without_redrawing_transcript() -> Non
         ModelChoice(provider_name="opencode", model="fake-model"),
         ModelChoice(provider_name="opencode", model="other-model"),
     )
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     transcript_refreshes = 0
 
     async with app.run_test() as pilot:
@@ -7254,7 +7375,7 @@ async def test_tui_app_cycles_scoped_model_without_redrawing_transcript() -> Non
             nonlocal transcript_refreshes
             transcript_refreshes += 1
 
-        transcript.update_from_state = fake_update_from_state  # type: ignore[method-assign]
+        transcript.update_from_state = fake_update_from_state  # ty: ignore[invalid-assignment]
         await pilot.press("ctrl+p")
         await pilot.pause()
 
@@ -7266,7 +7387,7 @@ async def test_tui_app_cycles_scoped_model_without_redrawing_transcript() -> Non
 @pytest.mark.anyio
 async def test_tui_app_uses_configured_thinking_keybinding() -> None:
     session = FakeSession()
-    app = TauTuiApp(
+    app = _tui_app(
         session,
         tui_settings=TuiSettings(keybindings=TuiKeybindings(thinking_cycle="f3")),
     )
@@ -7284,14 +7405,14 @@ async def test_tui_app_uses_configured_thinking_keybinding() -> None:
 
 @pytest.mark.anyio
 async def test_tui_prompt_worker_refreshes_directly() -> None:
-    app = TauTuiApp(FakeSession(events=[AgentStartEvent(), AgentEndEvent()]))
+    app = _tui_app(FakeSession(events=[AgentStartEvent(), AgentEndEvent()]))
     refreshes = 0
 
     def fake_refresh() -> None:
         nonlocal refreshes
         refreshes += 1
 
-    app._refresh = fake_refresh  # type: ignore[method-assign]
+    app._refresh = fake_refresh  # ty: ignore[invalid-assignment]
 
     await app._run_prompt("hello")
 
@@ -7317,8 +7438,8 @@ async def test_tui_prompt_worker_shows_diagnostic_log_path_for_error_event(tmp_p
             self.last_diagnostic_log_path = tmp_path / "tau-home" / "logs" / "agent-calls.jsonl"
 
     session = ErrorSession()
-    app = TauTuiApp(session)
-    app._refresh = lambda: None  # type: ignore[method-assign]
+    app = _tui_app(session)
+    app._refresh = lambda: None  # ty: ignore[invalid-assignment]
 
     await app._run_prompt("break")
 
@@ -7348,15 +7469,15 @@ async def test_tui_prompt_worker_shows_recovery_status_instead_of_overflow_error
                     CompactionStartEvent(reason="overflow"),
                     CompactionEndEvent(reason="overflow", will_retry=True),
                     AgentStartEvent(),
-                    MessageEndEvent(message=AssistantMessage(content="Recovered answer")),
+                    MessageEndEvent(message=_assistant("Recovered answer")),
                     SessionAgentEndEvent(will_retry=False),
                     AgentSettledEvent(),
                 ]
             )
 
     session = OverflowSession()
-    app = TauTuiApp(session)
-    app._refresh = lambda: None  # type: ignore[method-assign]
+    app = _tui_app(session)
+    app._refresh = lambda: None  # ty: ignore[invalid-assignment]
 
     await app._run_prompt("break")
 
@@ -7388,8 +7509,8 @@ async def test_tui_prompt_worker_surfaces_overflow_when_compaction_fails() -> No
             AgentSettledEvent(),
         ]
     )
-    app = TauTuiApp(session)
-    app._refresh = lambda: None  # type: ignore[method-assign]
+    app = _tui_app(session)
+    app._refresh = lambda: None  # ty: ignore[invalid-assignment]
 
     await app._run_prompt("break")
 
@@ -7402,7 +7523,7 @@ async def test_tui_prompt_worker_surfaces_overflow_when_compaction_fails() -> No
 @pytest.mark.anyio
 async def test_tui_prompt_worker_mounts_provider_error_in_live_transcript() -> None:
     error = AssistantMessage(stop_reason="error", error_message="provider failed")
-    app = TauTuiApp(
+    app = _tui_app(
         FakeSession(
             events=[
                 AgentStartEvent(),
@@ -7437,14 +7558,14 @@ async def test_tui_prompt_worker_shows_diagnostic_log_path_on_failure(tmp_path: 
             super().__init__()
             self.last_diagnostic_log_path = tmp_path / "tau-home" / "logs" / "agent-calls.jsonl"
 
-        async def prompt(self, text: str, **kwargs: object) -> AsyncIterator[AgentEvent]:
+        async def prompt(self, text: str, **kwargs: object) -> AsyncIterator[CodingSessionEvent]:
             self.prompt_texts.append(text)
             raise EmptyMessageError()
             yield  # pragma: no cover
 
     session = FailingSession()
-    app = TauTuiApp(session)
-    app._refresh = lambda: None  # type: ignore[method-assign]
+    app = _tui_app(session)
+    app._refresh = lambda: None  # ty: ignore[invalid-assignment]
 
     await app._run_prompt("break")
 
@@ -7457,14 +7578,14 @@ async def test_tui_prompt_worker_shows_diagnostic_log_path_on_failure(tmp_path: 
 @pytest.mark.anyio
 async def test_tui_prompt_worker_refreshes_context_after_message_changes() -> None:
     class ContextChangingSession(FakeSession):
-        async def prompt(self, text: str, **kwargs: object) -> AsyncIterator[AgentEvent]:
+        async def prompt(self, text: str, **kwargs: object) -> AsyncIterator[CodingSessionEvent]:
             self.prompt_texts.append(text)
             self.context_token_estimate = 10
             yield AgentStartEvent()
             self.context_token_estimate = 20
             yield MessageEndEvent(message=UserMessage(content=text))
             self.context_token_estimate = 30
-            yield MessageEndEvent(message=AssistantMessage(content="Using a tool."))
+            yield MessageEndEvent(message=_assistant("Using a tool."))
             self.context_token_estimate = 40
             yield ToolExecutionStartEvent(
                 tool_call_id="call-1",
@@ -7474,20 +7595,20 @@ async def test_tui_prompt_worker_refreshes_context_after_message_changes() -> No
             yield ToolExecutionEndEvent(
                 tool_call_id="call-1",
                 tool_name="read",
-                result=AgentToolResult(content="contents"),
+                result=_tool_result("contents"),
                 is_error=False,
             )
             self.context_token_estimate = 50
             yield AgentEndEvent()
 
     session = ContextChangingSession()
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     observed_context: list[int] = []
 
     def fake_refresh() -> None:
         observed_context.append(session.context_token_estimate)
 
-    app._refresh = fake_refresh  # type: ignore[method-assign]
+    app._refresh = fake_refresh  # ty: ignore[invalid-assignment]
 
     await app._run_prompt("read README")
 
@@ -7502,7 +7623,7 @@ async def test_tui_prompt_worker_refreshes_context_after_message_changes() -> No
 @pytest.mark.anyio
 async def test_tui_resume_refreshes_context_after_session_swap() -> None:
     session = FakeSession(messages=[UserMessage(content="Earlier")])
-    app = TauTuiApp(session)
+    app = _tui_app(session)
     observed_context: list[int] = []
     notifications: list[str] = []
 
@@ -7513,8 +7634,8 @@ async def test_tui_resume_refreshes_context_after_session_swap() -> None:
         del kwargs
         notifications.append(message)
 
-    app._refresh = fake_refresh  # type: ignore[method-assign]
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._refresh = fake_refresh  # ty: ignore[invalid-assignment]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     await app._resume_session("session-1")
 
@@ -7528,7 +7649,7 @@ async def test_tui_resume_refreshes_context_after_session_swap() -> None:
 @pytest.mark.anyio
 async def test_tui_app_shows_startup_update_notice_first_in_bright_yellow() -> None:
     session = FakeSession(messages=[UserMessage(content="Earlier prompt")])
-    app = TauTuiApp(
+    app = _tui_app(
         session,
         startup_update_notice="Tau 0.2.0 is available",
         startup_notices=("Tau updated to 0.2.0",),
@@ -7539,7 +7660,7 @@ async def test_tui_app_shows_startup_update_notice_first_in_bright_yellow() -> N
         severity = kwargs.get("severity")
         notifications.append((message, severity if isinstance(severity, str) else None))
 
-    app._notify = fake_notify  # type: ignore[method-assign]
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -7555,7 +7676,7 @@ async def test_tui_app_shows_startup_update_notice_first_in_bright_yellow() -> N
         assert update_widget._role_style.body == "bold #ffff00"
 
     assert notifications == []
-    assert [message.text for message in session.messages] == ["Earlier prompt"]
+    assert [message_text(message) for message in session.messages] == ["Earlier prompt"]
 
 
 @pytest.mark.anyio
@@ -7567,7 +7688,7 @@ async def test_tui_app_runs_initial_prompt() -> None:
             AgentEndEvent(),
         ]
     )
-    app = TauTuiApp(session, initial_prompt="explain this repo")
+    app = _tui_app(session, initial_prompt="explain this repo")
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -7646,8 +7767,8 @@ async def test_run_tui_app_falls_back_to_first_credentialed_provider(
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> str:
-            assert config.provider_name == "openai"  # type: ignore[attr-defined]
+        async def load(cls, config: CodingSessionConfig) -> str:
+            assert config.provider_name == "openai"
             calls.append("load")
             return "session"
 
@@ -7691,7 +7812,9 @@ async def test_run_tui_app_falls_back_to_first_credentialed_provider(
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
 
-    await tui_app.run_tui_app(cwd=tmp_path, model=None, session_manager=FakeManager())
+    await tui_app.run_tui_app(
+        cwd=tmp_path, model=None, session_manager=cast(SessionManager, FakeManager())
+    )
 
     assert calls == [
         "provider:openai:gpt-5.5",
@@ -7745,7 +7868,7 @@ async def test_run_tui_app_exits_when_startup_trust_is_cancelled(
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> CancelledSession:
+        async def load(cls, config: CodingSessionConfig) -> CancelledSession:
             calls.append("load")
             return CancelledSession()
 
@@ -7769,7 +7892,9 @@ async def test_run_tui_app_exits_when_startup_trust_is_cancelled(
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", UnexpectedApp)
 
-    result = await tui_app.run_tui_app(cwd=tmp_path, model=None, session_manager=FakeManager())
+    result = await tui_app.run_tui_app(
+        cwd=tmp_path, model=None, session_manager=cast(SessionManager, FakeManager())
+    )
 
     assert result is None
     assert calls == ["prepare", "load", "session_closed", "provider_closed"]
@@ -7814,7 +7939,7 @@ async def test_run_tui_app_surfaces_startup_provider_error_in_login_message(
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> str:
+        async def load(cls, config: CodingSessionConfig) -> str:
             return "session"
 
     class FakeApp:
@@ -7849,13 +7974,16 @@ async def test_run_tui_app_surfaces_startup_provider_error_in_login_message(
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
 
-    await tui_app.run_tui_app(cwd=tmp_path, model=None, session_manager=FakeManager())
+    await tui_app.run_tui_app(
+        cwd=tmp_path, model=None, session_manager=cast(SessionManager, FakeManager())
+    )
 
     startup_message = captured["startup_message"]
+    assert isinstance(startup_message, str)
     assert "Login required" in startup_message
     assert "connection to provider backend refused" in startup_message
-    notices = captured["startup_notices"]
-    assert any("connection to provider backend refused" in n for n in notices)
+    notices = cast(tuple[str, ...], captured["startup_notices"])
+    assert any("connection to provider backend refused" in notice for notice in notices)
 
 
 @pytest.mark.anyio
@@ -7909,9 +8037,9 @@ async def test_run_tui_app_ignores_latest_directory_provider_model_for_new_sessi
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> str:
-            assert config.provider_name == "openai"  # type: ignore[attr-defined]
-            assert config.model == "gpt-5"  # type: ignore[attr-defined]
+        async def load(cls, config: CodingSessionConfig) -> str:
+            assert config.provider_name == "openai"
+            assert config.model == "gpt-5"
             calls.append("load")
             return "session"
 
@@ -7951,7 +8079,9 @@ async def test_run_tui_app_ignores_latest_directory_provider_model_for_new_sessi
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
     monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
 
-    await tui_app.run_tui_app(cwd=tmp_path, model=None, session_manager=FakeManager())
+    await tui_app.run_tui_app(
+        cwd=tmp_path, model=None, session_manager=cast(SessionManager, FakeManager())
+    )
 
     assert calls == [
         "provider:openai:gpt-5",
@@ -8020,8 +8150,8 @@ async def test_run_tui_app_does_not_start_new_session_from_scoped_model(
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> str:
-            assert config.provider_name == "openai"  # type: ignore[attr-defined]
+        async def load(cls, config: CodingSessionConfig) -> str:
+            assert config.provider_name == "openai"
             calls.append("load")
             return "session"
 
@@ -8062,7 +8192,9 @@ async def test_run_tui_app_does_not_start_new_session_from_scoped_model(
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
 
-    await tui_app.run_tui_app(cwd=tmp_path, model=None, session_manager=FakeManager())
+    await tui_app.run_tui_app(
+        cwd=tmp_path, model=None, session_manager=cast(SessionManager, FakeManager())
+    )
 
     assert calls == [
         "provider:openai:gpt-5.5",
@@ -8113,13 +8245,13 @@ async def test_run_tui_app_creates_new_session_by_default(
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> str:
-            assert config.provider_name == "local"  # type: ignore[attr-defined]
-            assert config.auto_compact_token_threshold == 1000  # type: ignore[attr-defined]
-            assert config.index_on_first_persist is True  # type: ignore[attr-defined]
-            assert config.system is None  # type: ignore[attr-defined]
-            assert config.custom_system_prompt == "Custom base"  # type: ignore[attr-defined]
-            assert config.append_system_prompt == "First\n\nSecond"  # type: ignore[attr-defined]
+        async def load(cls, config: CodingSessionConfig) -> str:
+            assert config.provider_name == "local"
+            assert config.auto_compact_token_threshold == 1000
+            assert config.index_on_first_persist is True
+            assert config.system is None
+            assert config.custom_system_prompt == "Custom base"
+            assert config.append_system_prompt == "First\n\nSecond"
             calls.append("load")
             return "session"
 
@@ -8160,7 +8292,7 @@ async def test_run_tui_app_creates_new_session_by_default(
         provider_name="local",
         auto_compact_token_threshold=1000,
         initial_prompt="explain this repo",
-        session_manager=FakeManager(),
+        session_manager=cast(SessionManager, FakeManager()),
         custom_system_prompt="Custom base",
         append_system_prompt="First\n\nSecond",
     )
@@ -8217,7 +8349,7 @@ async def test_run_tui_app_returns_session_id_when_persisted(
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> FakeSession:
+        async def load(cls, config: CodingSessionConfig) -> FakeSession:
             return FakeSession()
 
     class FakeApp:
@@ -8255,7 +8387,7 @@ async def test_run_tui_app_returns_session_id_when_persisted(
         model=None,
         cwd=tmp_path,
         provider_name="local",
-        session_manager=manager,
+        session_manager=cast(SessionManager, manager),
     )
     assert result is None
 
@@ -8264,7 +8396,7 @@ async def test_run_tui_app_returns_session_id_when_persisted(
         model=None,
         cwd=tmp_path,
         provider_name="local",
-        session_manager=manager,
+        session_manager=cast(SessionManager, manager),
     )
     assert result == "new-session"
 
@@ -8301,8 +8433,8 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> str:
-            calls.append(f"load:{type(config.provider).__name__}")  # type: ignore[attr-defined]
+        async def load(cls, config: CodingSessionConfig) -> str:
+            calls.append(f"load:{type(config.provider).__name__}")
             return "session"
 
     class FakeApp:
@@ -8310,9 +8442,9 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
             assert session == "session"
             message = str(kwargs["startup_message"])
             assert "Tau 0.2.0 is available" not in message
-            notices = kwargs["startup_notices"]
+            notices = cast(tuple[str, ...], kwargs["startup_notices"])
             # The startup provider error is surfaced first, then the update notice.
-            assert any("Startup provider creation failed" in n for n in notices)
+            assert any("Startup provider creation failed" in notice for notice in notices)
             assert "Missing provider API key." in notices[0]
             assert "Tau 0.2.0 is available" in notices
             assert "Login required. Run /login" in message
@@ -8337,7 +8469,7 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
     await tui_app.run_tui_app(
         cwd=tmp_path,
         model=None,
-        session_manager=FakeManager(),
+        session_manager=cast(SessionManager, FakeManager()),
         startup_notice="Tau 0.2.0 is available",
     )
 
@@ -8385,12 +8517,12 @@ async def test_run_tui_app_resumes_explicit_session(
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> str:
-            assert config.provider_name == "local"  # type: ignore[attr-defined]
-            assert config.model == "fake-model"  # type: ignore[attr-defined]
-            assert config.system is None  # type: ignore[attr-defined]
-            assert config.custom_system_prompt == "Resume base"  # type: ignore[attr-defined]
-            assert config.append_system_prompt == "Resume append"  # type: ignore[attr-defined]
+        async def load(cls, config: CodingSessionConfig) -> str:
+            assert config.provider_name == "local"
+            assert config.model == "fake-model"
+            assert config.system is None
+            assert config.custom_system_prompt == "Resume base"
+            assert config.append_system_prompt == "Resume append"
             calls.append("load")
             return "session"
 
@@ -8435,7 +8567,7 @@ async def test_run_tui_app_resumes_explicit_session(
         model=None,
         cwd=tmp_path,
         session_id="session-1",
-        session_manager=FakeManager(),
+        session_manager=cast(SessionManager, FakeManager()),
         custom_system_prompt="Resume base",
         append_system_prompt="Resume append",
     )
@@ -8483,8 +8615,8 @@ async def test_run_tui_app_ignores_uncredentialed_provider_when_matching_resume_
 
     class FakeCodingSession:
         @classmethod
-        async def load(cls, config: object) -> str:
-            assert config.provider_name == "openai"  # type: ignore[attr-defined]
+        async def load(cls, config: CodingSessionConfig) -> str:
+            assert config.provider_name == "openai"
             calls.append("load")
             return "session"
 
@@ -8532,7 +8664,7 @@ async def test_run_tui_app_ignores_uncredentialed_provider_when_matching_resume_
         model=None,
         cwd=tmp_path,
         session_id="session-1",
-        session_manager=FakeManager(),
+        session_manager=cast(SessionManager, FakeManager()),
     )
 
     assert calls == [
@@ -8566,7 +8698,7 @@ def _component_bridge(app: TauTuiApp) -> _TuiExtensionUiBridge:
 
 
 class _CrashOnRender(Static):
-    def render(self):  # noqa: ANN201
+    def render(self) -> Never:
         raise RuntimeError("boom-in-render")
 
 
@@ -8577,7 +8709,7 @@ class _CrashOnMount(Static):
 
 @pytest.mark.anyio
 async def test_component_slot_widget_mounts_and_unmounts() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8602,7 +8734,7 @@ async def test_component_slot_widget_mounts_and_unmounts() -> None:
 
 @pytest.mark.anyio
 async def test_component_slot_widget_replace_reregisters() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8626,7 +8758,7 @@ async def test_component_slot_widget_replace_reregisters() -> None:
 @pytest.mark.anyio
 async def test_component_slot_widget_strings_mount_and_render() -> None:
     """A plain list of lines mounts as a Static the host builds (no widget defined)."""
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8638,7 +8770,7 @@ async def test_component_slot_widget_strings_mount_and_render() -> None:
         slot = app.query_one("#below-prompt-slot", Container)
         statics = slot.query(Static)
         assert statics
-        text = statics.first().render().plain
+        text = _render_plain(statics.first())
         assert "hello" in text
         assert "world" in text
         assert "lines" in app._extension_slot_widgets
@@ -8647,7 +8779,7 @@ async def test_component_slot_widget_strings_mount_and_render() -> None:
 @pytest.mark.anyio
 async def test_component_slot_widget_strings_replace_updates_content() -> None:
     """Re-setting a key with different lines replaces the rendered content."""
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8661,7 +8793,7 @@ async def test_component_slot_widget_strings_replace_updates_content() -> None:
         slot = app.query_one("#below-prompt-slot", Container)
         statics = slot.query(Static)
         assert len(statics) == 1
-        text = statics.first().render().plain
+        text = _render_plain(statics.first())
         assert "second" in text
         assert "first" not in text
 
@@ -8669,7 +8801,7 @@ async def test_component_slot_widget_strings_replace_updates_content() -> None:
 @pytest.mark.anyio
 async def test_component_slot_widget_strings_none_unmounts() -> None:
     """Setting a string slot to None unmounts and forgets the key."""
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8689,7 +8821,7 @@ async def test_component_slot_widget_strings_none_unmounts() -> None:
 @pytest.mark.anyio
 async def test_component_slot_widget_strings_malformed_markup_falls_back() -> None:
     """Malformed Rich markup in a string widget renders literally, never crashes."""
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8703,7 +8835,7 @@ async def test_component_slot_widget_strings_malformed_markup_falls_back() -> No
         slot = app.query_one("#below-prompt-slot", Container)
         statics = slot.query(Static)
         assert statics
-        text = statics.first().render().plain
+        text = _render_plain(statics.first())
         assert "[not-a-tag" in text
         assert app._extension_component_failures_reported == set()
 
@@ -8711,7 +8843,7 @@ async def test_component_slot_widget_strings_malformed_markup_falls_back() -> No
 @pytest.mark.anyio
 async def test_component_slot_widget_default_placement_is_above_prompt() -> None:
     """With no explicit placement, a slot widget mounts into #above-prompt-slot."""
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8726,7 +8858,7 @@ async def test_component_slot_widget_default_placement_is_above_prompt() -> None
 
 @pytest.mark.anyio
 async def test_component_main_view_open_and_close_restores_transcript() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8757,7 +8889,7 @@ async def test_click_does_not_steal_focus_while_main_view_open() -> None:
     # The app-level click handler refocuses the prompt after main-TUI clicks,
     # but an open extension main view owns the keyboard: yanking focus back
     # would silently reroute esc/toggles/typed text to the main chat.
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8780,7 +8912,7 @@ async def test_click_does_not_steal_focus_while_main_view_open() -> None:
 
 @pytest.mark.anyio
 async def test_component_main_view_close_result_resolves_wait() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8802,7 +8934,7 @@ async def test_component_main_view_close_result_resolves_wait() -> None:
 
 @pytest.mark.anyio
 async def test_component_main_view_close_without_result_resolves_none() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8819,7 +8951,7 @@ async def test_component_main_view_close_without_result_resolves_none() -> None:
 
 @pytest.mark.anyio
 async def test_component_main_view_superseded_resolves_first_wait_with_none() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8840,7 +8972,7 @@ async def test_component_main_view_superseded_resolves_first_wait_with_none() ->
 
 @pytest.mark.anyio
 async def test_component_main_view_rebind_resolves_pending_wait_with_none() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -8863,14 +8995,14 @@ async def test_component_main_view_rebind_resolves_pending_wait_with_none() -> N
 
 @pytest.mark.anyio
 async def test_component_key_interceptor_consumes_and_gates_on_prompt_text() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         bridge = _component_bridge(app)
         seen: list[tuple[str, str]] = []
 
-        def interceptor(event, text: str) -> bool:  # noqa: ANN001
+        def interceptor(event: events.Key, text: str) -> bool:
             seen.append((event.key, text))
             return event.key == "j" and text == ""
 
@@ -8892,13 +9024,13 @@ async def test_component_key_interceptor_consumes_and_gates_on_prompt_text() -> 
 
 @pytest.mark.anyio
 async def test_component_consumed_escape_preempts_cancel() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         bridge = _component_bridge(app)
         cancels: list[int] = []
-        app.action_cancel = lambda: cancels.append(1)  # type: ignore[method-assign]
+        app.action_cancel = lambda: cancels.append(1)  # ty: ignore[invalid-assignment]
 
         unsubscribe = bridge.register_key_interceptor(lambda event, text: event.key == "escape")
         app.query_one("#prompt", PromptInput).focus()
@@ -8917,13 +9049,13 @@ async def test_component_consumed_escape_preempts_cancel() -> None:
 
 @pytest.mark.anyio
 async def test_component_key_interceptor_failure_degrades_to_typing() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         bridge = _component_bridge(app)
 
-        def boom(event, text: str) -> bool:  # noqa: ANN001
+        def boom(event: events.Key, text: str) -> bool:
             raise RuntimeError("interceptor exploded")
 
         bridge.register_key_interceptor(boom)
@@ -8949,17 +9081,17 @@ async def test_component_key_interceptor_preempts_priority_binding() -> None:
     before forwarding a key to the focused widget. The interceptor now runs in
     TauTuiApp.on_event, ahead of that priority check, so it can own those keys.
     """
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         bridge = _component_bridge(app)
         completion_next: list[int] = []
-        app.action_completion_next = lambda: completion_next.append(1)  # type: ignore[method-assign]
+        app.action_completion_next = lambda: completion_next.append(1)  # ty: ignore[invalid-assignment]
 
         seen: list[str] = []
 
-        def interceptor(event, text: str) -> bool:  # noqa: ANN001
+        def interceptor(event: events.Key, text: str) -> bool:
             seen.append(event.key)
             return event.key == "down"
 
@@ -8977,7 +9109,7 @@ async def test_component_key_interceptor_preempts_priority_binding() -> None:
 @pytest.mark.anyio
 async def test_component_key_interceptor_skipped_while_modal_open() -> None:
     """Interceptors see main-screen keys only; a modal on top is never intercepted."""
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -9017,7 +9149,7 @@ async def test_component_interceptor_never_consumes_reserved_interrupt_keys() ->
     assert "ctrl+d" in RESERVED_EXTENSION_INTERCEPTOR_KEYS
     assert "escape" not in RESERVED_EXTENSION_INTERCEPTOR_KEYS
 
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -9028,7 +9160,7 @@ async def test_component_interceptor_never_consumes_reserved_interrupt_keys() ->
         async def fake_quit() -> None:  # don't actually tear down the pilot
             quits.append(1)
 
-        app.action_quit = fake_quit  # type: ignore[method-assign]
+        app.action_quit = fake_quit  # ty: ignore[invalid-assignment]
 
         # Greedy interceptor: consumes literally every key it is consulted for.
         bridge.register_key_interceptor(lambda event, text: (seen.append(event.key), True)[1])
@@ -9059,13 +9191,13 @@ async def test_component_interceptor_never_consumes_reserved_interrupt_keys() ->
 
 @pytest.mark.anyio
 async def test_component_factory_crash_is_isolated() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         bridge = _component_bridge(app)
 
-        def exploding_factory(theme):  # noqa: ANN001, ANN202
+        def exploding_factory(theme: TuiTheme) -> Widget:
             raise RuntimeError("factory exploded")
 
         bridge.set_slot_widget("bad", exploding_factory, placement="below_prompt")
@@ -9079,7 +9211,7 @@ async def test_component_factory_crash_is_isolated() -> None:
 
 @pytest.mark.anyio
 async def test_component_render_crash_is_quarantined() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -9097,7 +9229,7 @@ async def test_component_render_crash_is_quarantined() -> None:
 
 @pytest.mark.anyio
 async def test_component_mount_crash_is_quarantined() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -9121,7 +9253,7 @@ async def test_component_bridge_clear_components_tears_down_extension_ui() -> No
     # clear_components is the teardown seam the runtime drives on /reload and
     # session rebinds (resume/new): every slot widget, the main view (with its
     # pending wait() resolved), and all key interceptors must go.
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -9154,7 +9286,7 @@ async def test_component_bridge_clear_components_tears_down_extension_ui() -> No
 
 @pytest.mark.anyio
 async def test_component_rebind_clears_slots_and_interceptors() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -9170,8 +9302,8 @@ async def test_component_rebind_clears_slots_and_interceptors() -> None:
 
         # Rebinding a session force-clears everything before the new bridge.
         session = FakeSession()
-        session.extension_runtime = _RenderCallRuntime()  # type: ignore[attr-defined]
-        app._connect_extension_runtime(session)  # type: ignore[arg-type]
+        session.extension_runtime = _RenderCallRuntime()
+        app._connect_extension_runtime(cast(CodingSession, session))
         await pilot.pause()
 
         assert app._extension_slot_widgets == {}
@@ -9185,10 +9317,10 @@ async def test_component_rebind_clears_slots_and_interceptors() -> None:
 
 @pytest.mark.anyio
 async def test_tui_login_provider_search_autofocus() -> None:
-    app = TauTuiApp(FakeSession())
+    app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt")
+        prompt = app.query_one("#prompt", PromptInput)
         prompt.value = "/login"
         await pilot.press("enter")
         await pilot.pause()

@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import cast
+from typing import TypedDict, cast
 
 import pytest
 from textual.app import App
@@ -18,7 +19,10 @@ from tau_agent.provider import ModelProvider
 from tau_agent.session import SessionEntry
 from tau_coding import SessionManager, jsonl_session_storage
 from tau_coding import project_trust as project_trust_module
+from tau_coding import session as session_module
 from tau_coding.cli import app
+from tau_coding.extensions.api import SessionLifecycleReason
+from tau_coding.extensions.runtime import ExtensionRuntime
 from tau_coding.paths import TauPaths
 from tau_coding.project_trust import (
     ExtensionTrustResult,
@@ -27,6 +31,7 @@ from tau_coding.project_trust import (
     ProjectTrustRequest,
     ProjectTrustStore,
     ProtectedResourceDetector,
+    TrustChoice,
     canonicalize_project_path,
     format_trust_diagnostic,
 )
@@ -35,9 +40,17 @@ from tau_coding.resources import (
     resource_paths_with_cwd,
     resource_paths_with_project_trust,
 )
-from tau_coding.session import CodingSession, CodingSessionConfig
+from tau_coding.session import CodingSession, CodingSessionConfig, SessionResources
+from tau_coding.system_prompt import ProjectContextFile
 from tau_coding.tui.project_trust import ProjectTrustScreen, _ProjectTrustApp
 from tau_coding.tui.themes import TAU_DARK_THEME
+
+
+class _CommonConfig(TypedDict):
+    provider: ModelProvider
+    model: str
+    cwd: Path
+    resource_paths: TauResourcePaths
 
 
 def _paths(tmp_path: Path) -> TauPaths:
@@ -154,8 +167,9 @@ def test_store_round_trip_is_sorted_and_nearest_decision_wins(tmp_path: Path) ->
     store.set(child_key, "untrusted")
     store.set(parent_key, "trusted")
 
-    assert store.nearest(child_key) is not None
-    assert store.nearest(child_key).decision == "untrusted"  # type: ignore[union-attr]
+    nearest = store.nearest(child_key)
+    assert nearest is not None
+    assert nearest.decision == "untrusted"
     payload = json.loads(store.path.read_text(encoding="utf-8"))
     assert payload == {
         "version": 1,
@@ -176,8 +190,10 @@ def test_parent_trust_removes_exact_child_for_inheritance(tmp_path: Path) -> Non
 
     saved_parent = store.trust_parent(child_key)
 
-    assert store.nearest(child_key).path == saved_parent  # type: ignore[union-attr]
-    assert store.nearest(child_key).decision == "trusted"  # type: ignore[union-attr]
+    nearest = store.nearest(child_key)
+    assert nearest is not None
+    assert nearest.path == saved_parent
+    assert nearest.decision == "trusted"
 
 
 @pytest.mark.parametrize(
@@ -357,7 +373,7 @@ async def test_project_extensions_need_trust_and_additional_opt_in(tmp_path: Pat
         root=tmp_path / "home/.tau",
         agents_root=tmp_path / "home/.agents",
     )
-    common = {
+    common: _CommonConfig = {
         "provider": cast(ModelProvider, object()),
         "model": "fake",
         "cwd": project,
@@ -422,20 +438,17 @@ def test_store_failures_preserve_prior_non_granting_bytes(
 
         if operation == "chmod":
             monkeypatch.setattr(
-                project_trust_module.os,
-                "chmod",
+                "tau_coding.project_trust.os.chmod",
                 lambda *_args: (_ for _ in ()).throw(OSError("chmod")),
             )
         elif operation == "fsync":
             monkeypatch.setattr(
-                project_trust_module.os,
-                "fsync",
+                "tau_coding.project_trust.os.fsync",
                 lambda *_args: (_ for _ in ()).throw(OSError("fsync")),
             )
         elif operation == "replace":
             monkeypatch.setattr(
-                project_trust_module.os,
-                "replace",
+                "tau_coding.project_trust.os.replace",
                 lambda *_args: (_ for _ in ()).throw(OSError("replace")),
             )
         else:
@@ -459,7 +472,7 @@ async def test_session_default_declines_project_input_and_explicit_approval_load
     project.mkdir()
     (project / "AGENTS.md").write_text("protected-default-probe", encoding="utf-8")
     resources = TauResourcePaths(root=tmp_path / "home/.tau", agents_root=None)
-    common = {
+    common: _CommonConfig = {
         "provider": cast(ModelProvider, object()),
         "model": "fake",
         "cwd": project,
@@ -693,8 +706,7 @@ def test_store_read_lock_and_write_permission_failures_are_safe(
     monkeypatch.undo()
 
     monkeypatch.setattr(
-        project_trust_module.tempfile,
-        "mkstemp",
+        "tau_coding.project_trust.tempfile.mkstemp",
         lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("write denied")),
     )
     with pytest.raises(ProjectTrustError, match="write"):
@@ -714,20 +726,23 @@ def test_store_read_lock_and_write_permission_failures_are_safe(
 )
 @pytest.mark.anyio
 async def test_interactive_choices_have_exact_persistence_semantics(
-    tmp_path: Path, choice: object, trusted: bool, saved_decision: str | None
+    tmp_path: Path,
+    choice: TrustChoice | None,
+    trusted: bool,
+    saved_decision: str | None,
 ) -> None:
     project = tmp_path / "parent/project"
     project.mkdir(parents=True)
     (project / "AGENTS.md").write_text("rules", encoding="utf-8")
     store = ProjectTrustStore(_paths(tmp_path))
 
-    async def prompt(_request: ProjectTrustRequest) -> object:
+    async def prompt(_request: ProjectTrustRequest) -> TrustChoice | None:
         return choice
 
     _summary, resolution = await ProjectTrustCoordinator(store).resolve(
         project,
         interactive=True,
-        prompt=prompt,  # type: ignore[arg-type]
+        prompt=prompt,
     )
 
     assert resolution.trusted is trusted
@@ -763,10 +778,10 @@ def test_combined_commit_and_recovery_failures_remain_fail_closed(
     if recovery_operation == "unlink":
         real_unlink = Path.unlink
 
-        def fail_pending_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        def fail_pending_unlink(path: Path, missing_ok: bool = False) -> None:
             if path == store.pending_path:
                 raise OSError("rollback unlink")
-            real_unlink(path, *args, **kwargs)
+            real_unlink(path, missing_ok=missing_ok)
 
         monkeypatch.setattr(Path, "unlink", fail_pending_unlink)
     else:
@@ -835,7 +850,9 @@ def test_resource_plan_always_rebinds_to_destination(tmp_path: Path) -> None:
     [("trust-run", "DESTINATION-CONTEXT"), ("decline-run", None)],
 )
 async def test_source_bound_plan_uses_destination_resources_for_trust_choice(
-    tmp_path: Path, choice: str, expected_text: str | None
+    tmp_path: Path,
+    choice: TrustChoice,
+    expected_text: str | None,
 ) -> None:
     source = tmp_path / "source"
     destination = tmp_path / "destination"
@@ -857,7 +874,7 @@ async def test_source_bound_plan_uses_destination_resources_for_trust_choice(
     )
     observed: list[Path] = []
 
-    async def prompt(request: ProjectTrustRequest) -> str:
+    async def prompt(request: ProjectTrustRequest) -> TrustChoice:
         observed.append(request.cwd.value)
         return choice
 
@@ -871,7 +888,7 @@ async def test_source_bound_plan_uses_destination_resources_for_trust_choice(
                 root=tmp_path / "home/.tau", agents_root=None, cwd=source
             ),
             trust_interactive=True,
-            trust_prompt=prompt,  # type: ignore[arg-type]
+            trust_prompt=prompt,
             project_extensions_enabled=True,
         )
     )
@@ -887,14 +904,16 @@ async def test_source_bound_plan_uses_destination_resources_for_trust_choice(
 @pytest.mark.anyio
 @pytest.mark.parametrize("choice", ["trust-run", "decline-run"])
 async def test_failed_reload_does_not_commit_run_choice_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, choice: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    choice: TrustChoice,
 ) -> None:
     project = tmp_path / "project"
     project.mkdir()
     coordinator = ProjectTrustCoordinator(ProjectTrustStore(_paths(tmp_path)))
     prompts = 0
 
-    async def prompt(_request: ProjectTrustRequest) -> str:
+    async def prompt(_request: ProjectTrustRequest) -> TrustChoice:
         nonlocal prompts
         prompts += 1
         return choice
@@ -908,22 +927,35 @@ async def test_failed_reload_does_not_commit_run_choice_cache(
             resource_paths=TauResourcePaths(root=tmp_path / "home/.tau", agents_root=None),
             project_trust_coordinator=coordinator,
             trust_interactive=True,
-            trust_prompt=prompt,  # type: ignore[arg-type]
+            trust_prompt=prompt,
         )
     )
     (project / "AGENTS.md").write_text("NEW-CONTEXT", encoding="utf-8")
 
-    from tau_coding import session as session_module
-
     real_load = session_module._load_session_resources
     attempts = 0
 
-    def fail_once(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+    def fail_once(
+        resource_paths: TauResourcePaths,
+        explicit_context_files: tuple[ProjectContextFile, ...],
+        *,
+        skills_enabled: bool = True,
+        system_prompt_enabled: bool = True,
+        custom_system_prompt_explicit: bool = False,
+        append_system_prompt_explicit: bool = False,
+    ) -> SessionResources:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise ValueError("resource preparation failed")
-        return real_load(*args, **kwargs)
+        return real_load(
+            resource_paths,
+            explicit_context_files,
+            skills_enabled=skills_enabled,
+            system_prompt_enabled=system_prompt_enabled,
+            custom_system_prompt_explicit=custom_system_prompt_explicit,
+            append_system_prompt_explicit=append_system_prompt_explicit,
+        )
 
     monkeypatch.setattr(session_module, "_load_session_resources", fail_once)
     with pytest.raises(ValueError, match="resource preparation failed"):
@@ -946,7 +978,7 @@ async def test_failed_project_extension_reload_re_resolves_trust(
     coordinator = ProjectTrustCoordinator(ProjectTrustStore(_paths(tmp_path)))
     prompts = 0
 
-    async def prompt(_request: ProjectTrustRequest) -> str:
+    async def prompt(_request: ProjectTrustRequest) -> TrustChoice:
         nonlocal prompts
         prompts += 1
         return "trust-run"
@@ -970,14 +1002,27 @@ async def test_failed_project_extension_reload_re_resolves_trust(
         "def setup(tau):\n    tau.add_prompt_guideline('DESTINATION-EXTENSION')\n",
         encoding="utf-8",
     )
-    from tau_coding.extensions.runtime import ExtensionRuntime
-
     real_load = ExtensionRuntime.load
 
-    def fail_project_setup(self: ExtensionRuntime, *args: object, **kwargs: object) -> None:
-        if kwargs.get("include_project_dir") is True:
+    def fail_project_setup(
+        self: ExtensionRuntime,
+        paths: TauResourcePaths,
+        *,
+        extra_paths: Sequence[Path] = (),
+        include_resource_dirs: bool = True,
+        include_project_dir: bool = False,
+        include_user_dir: bool = True,
+    ) -> None:
+        if include_project_dir:
             raise RuntimeError("setup failed")
-        real_load(self, *args, **kwargs)  # type: ignore[arg-type]
+        real_load(
+            self,
+            paths,
+            extra_paths=extra_paths,
+            include_resource_dirs=include_resource_dirs,
+            include_project_dir=include_project_dir,
+            include_user_dir=include_user_dir,
+        )
 
     monkeypatch.setattr(ExtensionRuntime, "load", fail_project_setup)
     with pytest.raises(RuntimeError, match="setup failed"):
@@ -1104,7 +1149,7 @@ async def test_reload_cancellation_during_shutdown_preserves_snapshot_and_re_res
     coordinator = ProjectTrustCoordinator(ProjectTrustStore(_paths(tmp_path)))
     prompts = 0
 
-    async def prompt(_request: ProjectTrustRequest) -> str:
+    async def prompt(_request: ProjectTrustRequest) -> TrustChoice:
         nonlocal prompts
         prompts += 1
         return "trust-run"
@@ -1148,14 +1193,12 @@ async def test_reload_cancellation_during_shutdown_preserves_snapshot_and_re_res
 async def test_reload_cancellation_during_staged_start_preserves_snapshot_and_re_resolves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from tau_coding.extensions.runtime import ExtensionRuntime
-
     project = tmp_path / "project"
     project.mkdir()
     coordinator = ProjectTrustCoordinator(ProjectTrustStore(_paths(tmp_path)))
     prompts = 0
 
-    async def prompt(_request: ProjectTrustRequest) -> str:
+    async def prompt(_request: ProjectTrustRequest) -> TrustChoice:
         nonlocal prompts
         prompts += 1
         return "trust-run"
@@ -1179,12 +1222,15 @@ async def test_reload_cancellation_during_staged_start_preserves_snapshot_and_re
     real_start = ExtensionRuntime.emit_session_start
     cancelled = False
 
-    async def cancel_staged_start(self: ExtensionRuntime, reason: str) -> None:
+    async def cancel_staged_start(
+        self: ExtensionRuntime,
+        reason: SessionLifecycleReason,
+    ) -> None:
         nonlocal cancelled
         if reason == "reload" and self is not old_runtime and not cancelled:
             cancelled = True
             raise asyncio.CancelledError
-        await real_start(self, reason)  # type: ignore[arg-type]
+        await real_start(self, reason)
 
     monkeypatch.setattr(ExtensionRuntime, "emit_session_start", cancel_staged_start)
     with pytest.raises(asyncio.CancelledError):
@@ -1204,8 +1250,6 @@ async def test_reload_cancellation_during_staged_start_preserves_snapshot_and_re
 async def test_destination_adoption_cancellation_keeps_source_and_retry_resolves_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from tau_coding.extensions.runtime import ExtensionRuntime
-
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     source.mkdir()
@@ -1230,7 +1274,7 @@ async def test_destination_adoption_cancellation_keeps_source_and_retry_resolves
     source_prompt = active.system_prompt
     prompts = 0
 
-    async def prompt(_request: ProjectTrustRequest) -> str:
+    async def prompt(_request: ProjectTrustRequest) -> TrustChoice:
         nonlocal prompts
         prompts += 1
         return "trust-run"
@@ -1252,10 +1296,13 @@ async def test_destination_adoption_cancellation_keeps_source_and_retry_resolves
     real_start = ExtensionRuntime.emit_session_start
     cancelled_runtime = replacement._extension_runtime
 
-    async def cancel_adoption(self: ExtensionRuntime, reason: str) -> None:
+    async def cancel_adoption(
+        self: ExtensionRuntime,
+        reason: SessionLifecycleReason,
+    ) -> None:
         if self is cancelled_runtime:
             raise asyncio.CancelledError
-        await real_start(self, reason)  # type: ignore[arg-type]
+        await real_start(self, reason)
 
     monkeypatch.setattr(ExtensionRuntime, "emit_session_start", cancel_adoption)
     with pytest.raises(asyncio.CancelledError):

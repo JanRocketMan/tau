@@ -46,7 +46,10 @@ def test_context_token_estimate_includes_system_messages_and_tools(tmp_path: Pat
 
     estimate = estimate_context_tokens(
         system="You are Tau.",
-        messages=(UserMessage(content="hello"), AssistantMessage(content="hi")),
+        messages=(
+            UserMessage(content="hello"),
+            AssistantMessage(content=[TextContent(text="hi")]),
+        ),
         tools=tools,
     )
 
@@ -55,7 +58,7 @@ def test_context_token_estimate_includes_system_messages_and_tools(tmp_path: Pat
 
 def test_context_usage_uses_latest_provider_report_and_estimates_only_trailing_messages() -> None:
     reported = AssistantMessage(
-        content="answer",
+        content=[TextContent(text="answer")],
         usage=Usage(input=70_000, output=2_000, cache_read=28_000, total_tokens=100_000),
         timestamp=200,
     )
@@ -75,7 +78,7 @@ def test_context_usage_uses_latest_provider_report_and_estimates_only_trailing_m
 
 def test_context_usage_ignores_stale_provider_report_after_newer_prefix_is_inserted() -> None:
     stale = AssistantMessage(
-        content="old answer",
+        content=[TextContent(text="old answer")],
         usage=Usage(total_tokens=100_000),
         timestamp=100,
     )
@@ -108,7 +111,10 @@ def test_auto_compaction_threshold_keeps_pi_style_reserve() -> None:
 
 def test_context_usage_estimate_reports_breakdown(tmp_path: Path) -> None:
     tools = tuple(create_coding_tools(cwd=tmp_path))
-    messages = (UserMessage(content="hello"), AssistantMessage(content="hi"))
+    messages = (
+        UserMessage(content="hello"),
+        AssistantMessage(content=[TextContent(text="hi")]),
+    )
 
     usage = estimate_context_usage(system="You are Tau.", messages=messages, tools=tools)
 
@@ -152,7 +158,7 @@ def test_compaction_summary_prompt_uses_pi_format_and_custom_instructions() -> N
     prompt = build_compaction_summary_prompt(
         (
             UserMessage(content="Refactor src/app.py"),
-            AssistantMessage(content="Updated src/app.py"),
+            AssistantMessage(content=[TextContent(text="Updated src/app.py")]),
         ),
         custom_instructions="Focus on files changed.",
     )

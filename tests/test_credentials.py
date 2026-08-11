@@ -1,3 +1,4 @@
+from pathlib import Path
 from stat import S_IMODE
 
 import pytest
@@ -5,7 +6,9 @@ import pytest
 from tau_coding.credentials import CredentialStoreError, FileCredentialStore, OAuthCredential
 
 
-def test_file_credential_store_round_trips_and_sets_private_permissions(tmp_path) -> None:
+def test_file_credential_store_round_trips_and_sets_private_permissions(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "credentials.json"
     store = FileCredentialStore(path)
 
@@ -15,7 +18,7 @@ def test_file_credential_store_round_trips_and_sets_private_permissions(tmp_path
     assert S_IMODE(path.stat().st_mode) == 0o600
 
 
-def test_file_credential_store_deletes_key(tmp_path) -> None:
+def test_file_credential_store_deletes_key(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     store.set("openai", "test-key")
 
@@ -24,14 +27,14 @@ def test_file_credential_store_deletes_key(tmp_path) -> None:
     assert store.get("openai") is None
 
 
-def test_file_credential_store_rejects_empty_values(tmp_path) -> None:
+def test_file_credential_store_rejects_empty_values(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
 
     with pytest.raises(CredentialStoreError, match="must not be empty"):
         store.set("openai", "")
 
 
-def test_file_credential_store_round_trips_oauth_credentials(tmp_path) -> None:
+def test_file_credential_store_round_trips_oauth_credentials(tmp_path: Path) -> None:
     path = tmp_path / "credentials.json"
     store = FileCredentialStore(path)
     credential = OAuthCredential(
@@ -48,7 +51,9 @@ def test_file_credential_store_round_trips_oauth_credentials(tmp_path) -> None:
     assert '"type": "oauth"' in path.read_text(encoding="utf-8")
 
 
-def test_file_credential_store_round_trips_extensible_oauth_metadata(tmp_path) -> None:
+def test_file_credential_store_round_trips_extensible_oauth_metadata(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "credentials.json"
     store = FileCredentialStore(path)
     credential = OAuthCredential(
@@ -68,7 +73,7 @@ def test_file_credential_store_round_trips_extensible_oauth_metadata(tmp_path) -
     assert not list(tmp_path.glob(".credentials.json.*"))
 
 
-def test_file_credential_store_loads_legacy_codex_oauth_shape(tmp_path) -> None:
+def test_file_credential_store_loads_legacy_codex_oauth_shape(tmp_path: Path) -> None:
     path = tmp_path / "credentials.json"
     path.write_text(
         '{"openai-codex":{"type":"oauth","access":"a","refresh":"r",'

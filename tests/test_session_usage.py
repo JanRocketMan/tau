@@ -1,4 +1,11 @@
-from tau_agent import AssistantMessage, CompactionEntry, MessageEntry, ToolCall, UserMessage
+from tau_agent import (
+    AssistantMessage,
+    CompactionEntry,
+    MessageEntry,
+    SessionEntry,
+    ToolCall,
+    UserMessage,
+)
 from tau_agent.messages import Usage, UsageCost, assistant_content
 from tau_coding.session_usage import collect_session_usage, render_usage_dashboard
 
@@ -23,7 +30,7 @@ def _assistant(
 
 
 def test_collect_session_usage_aggregates_requests_tools_and_compactions() -> None:
-    entries = [
+    entries: list[SessionEntry] = [
         MessageEntry(id="user", message=UserMessage(content="hi")),
         _assistant(
             "a1",

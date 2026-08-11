@@ -14,7 +14,7 @@ from tau_agent.session.entries import SessionEntry
 class SessionAgentEndEvent(WireModel):
     type: Literal["agent_end"] = "agent_end"
     messages: list[AgentMessage] = Field(default_factory=list)
-    will_retry: bool = Field(False)
+    will_retry: bool = False
 
 
 class AgentSettledEvent(WireModel):
@@ -24,7 +24,7 @@ class AgentSettledEvent(WireModel):
 class QueueUpdateEvent(WireModel):
     type: Literal["queue_update"] = "queue_update"
     steering: tuple[str, ...] = ()
-    follow_up: tuple[str, ...] = Field(())
+    follow_up: tuple[str, ...] = ()
 
 
 CompactionReason = Literal["manual", "threshold", "overflow"]
@@ -40,8 +40,8 @@ class CompactionEndEvent(WireModel):
     reason: CompactionReason
     result: object | None = None
     aborted: bool = False
-    will_retry: bool = Field(False)
-    error_message: str | None = Field(None)
+    will_retry: bool = False
+    error_message: str | None = None
 
 
 class EntryAppendedEvent(WireModel):

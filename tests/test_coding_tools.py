@@ -69,8 +69,12 @@ def test_read_tool_schema_defines_line_controls_as_integers(tmp_path: Path) -> N
     properties = definition.input_schema["properties"]
 
     assert isinstance(properties, dict)
-    assert properties["offset"]["type"] == "integer"
-    assert properties["limit"]["type"] == "integer"
+    offset_schema = properties["offset"]
+    limit_schema = properties["limit"]
+    assert isinstance(offset_schema, dict)
+    assert isinstance(limit_schema, dict)
+    assert offset_schema["type"] == "integer"
+    assert limit_schema["type"] == "integer"
 
 
 @pytest.mark.anyio
@@ -83,7 +87,7 @@ async def test_read_tool_reads_file_with_offset_and_limit(tmp_path: Path) -> Non
 
     assert result.text
     assert result.text == "two\n\n[2 more lines in file. Use offset=3 to continue.]"
-    assert result.details is not None
+    assert isinstance(result.details, dict)
     assert result.details["path"] == str(path)
     assert isinstance(result.details["truncation"], dict)
 
@@ -170,7 +174,7 @@ async def test_read_tool_converts_bmp_to_png(tmp_path: Path) -> None:
     image = next(block for block in result.content if isinstance(block, ImageContent))
     assert image.mime_type == "image/png"
     assert base64.b64decode(image.data).startswith(b"\x89PNG\r\n\x1a\n")
-    assert result.details is not None
+    assert isinstance(result.details, dict)
     assert result.details["source_mime_type"] == "image/bmp"
 
 
@@ -229,7 +233,7 @@ async def test_read_tool_rejects_oversized_image_from_prefix_before_full_read(
 
     assert "exceeding the 50.0MB processing limit" in result.text
     assert not any(isinstance(block, ImageContent) for block in result.content)
-    assert result.details is not None
+    assert isinstance(result.details, dict)
     assert result.details["bytes"] == source_size
 
 
@@ -251,9 +255,14 @@ async def test_read_tool_still_reads_large_text_files(tmp_path: Path) -> None:
 @pytest.mark.anyio
 async def test_read_tool_uses_pluggable_read_operations(tmp_path: Path) -> None:
     reads: list[Path] = []
+
+    def read_bytes(path: Path) -> bytes:
+        reads.append(path)
+        return b"remote text"
+
     operations = ReadOperations(
         validate_path=lambda path: None,
-        read_bytes=lambda path: reads.append(path) or b"remote text",
+        read_bytes=read_bytes,
     )
     tool = create_read_tool(cwd=tmp_path, operations=operations)
 
@@ -352,7 +361,7 @@ async def test_bash_tool_captures_stdout_and_exit_code(tmp_path: Path) -> None:
 
     assert result.text
     assert result.text == "hello"
-    assert result.details is not None
+    assert isinstance(result.details, dict)
     assert result.details["exit_code"] == 0
     assert result.details["timed_out"] is False
 
@@ -371,7 +380,7 @@ async def test_create_coding_tools_applies_shell_command_prefix(
 
     assert result.text
     assert result.text == "coding-tool-alias"
-    assert result.details is not None
+    assert isinstance(result.details, dict)
     assert result.details["shell_command_prefix_applied"] is True
 
 
@@ -390,7 +399,7 @@ async def test_bash_tool_applies_opt_in_shell_command_prefix(tmp_path: Path) -> 
 
     assert result.text
     assert result.text == "alias-output"
-    assert result.details is not None
+    assert isinstance(result.details, dict)
     assert result.details["shell_command_prefix_applied"] is True
     assert not marker.exists()
 
@@ -401,8 +410,8 @@ async def test_bash_tool_reports_timeout(tmp_path: Path) -> None:
 
     result = await tool.execute("test-call", {"command": "sleep 1", "timeout": 0.01})
 
-    assert result.details is not None
-    assert result.details is not None
+    assert isinstance(result.details, dict)
+    assert isinstance(result.details, dict)
     assert result.details["timed_out"] is True
     assert "timed out" in result.text
 
@@ -419,8 +428,8 @@ async def test_bash_tool_timeout_kills_shell_children(tmp_path: Path) -> None:
     duration = monotonic() - start
     await asyncio.sleep(0.35)
 
-    assert result.details is not None
-    assert result.details is not None
+    assert isinstance(result.details, dict)
+    assert isinstance(result.details, dict)
     assert result.details["timed_out"] is True
     assert duration < 0.5
     assert not marker.exists()
@@ -440,8 +449,8 @@ async def test_bash_tool_cancellation_kills_shell_children(tmp_path: Path) -> No
     result = await task
     duration = monotonic() - start
 
-    assert result.details is not None
-    assert result.details is not None
+    assert isinstance(result.details, dict)
+    assert isinstance(result.details, dict)
     assert result.details["cancelled"] is True
     assert "cancelled" in result.text
     assert duration < 0.5

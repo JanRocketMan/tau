@@ -10,7 +10,12 @@ Install by copying into `~/.tau/extensions/`, or run:
 
 import re
 
-from tau_coding.extensions import ExtensionAPI, ToolCallHookEvent, ToolCallHookResult
+from tau_coding.extensions import (
+    ExtensionAPI,
+    ExtensionContext,
+    ToolCallHookEvent,
+    ToolCallHookResult,
+)
 
 DANGEROUS_PATTERNS = (
     # rm with a flag cluster containing both r and f, in either order
@@ -23,8 +28,12 @@ DANGEROUS_PATTERNS = (
 )
 
 
-def _gate_tool_call(event: ToolCallHookEvent, context) -> ToolCallHookResult | None:  # noqa: ANN001
+def _gate_tool_call(
+    event: object,
+    context: ExtensionContext,
+) -> ToolCallHookResult | None:
     del context
+    assert isinstance(event, ToolCallHookEvent)
     if event.tool_name != "bash":
         return None
     command = str(event.arguments.get("command", ""))

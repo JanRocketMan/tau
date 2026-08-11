@@ -109,7 +109,7 @@ def test_sparse_provider_catalogs_declare_model_input_modalities(
 
 
 def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> None:
-    expected = {
+    expected: dict[str, dict[str, tuple[int, int | None]]] = {
         "openai-codex": {
             "gpt-5.6-sol": (272_000, 128_000),
             "gpt-5.6-luna": (272_000, 128_000),

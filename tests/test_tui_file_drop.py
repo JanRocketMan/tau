@@ -1,10 +1,12 @@
 """Tests for drag-and-drop file insertion in the TUI prompt."""
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 from textual import events
 
+from tau_coding import CodingSession
 from tau_coding.tui.app import PromptInput, TauTuiApp
 from tau_coding.tui.file_drop import normalize_dropped_paths
 
@@ -179,7 +181,7 @@ class TestUnfocusedDropRouting:
 
         file = tmp_path / "notes.txt"
         file.touch()
-        app = TauTuiApp(FakeSession())
+        app = TauTuiApp(cast(CodingSession, FakeSession()))
 
         async with app.run_test() as pilot:
             app.post_message(events.AppBlur())
@@ -198,7 +200,7 @@ class TestUnfocusedDropRouting:
 
         file = tmp_path / "notes.txt"
         file.touch()
-        app = TauTuiApp(FakeSession())
+        app = TauTuiApp(cast(CodingSession, FakeSession()))
 
         async with app.run_test() as pilot:
             prompt = app.query_one("#prompt", PromptInput)

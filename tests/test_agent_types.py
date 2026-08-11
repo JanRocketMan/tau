@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from tau_agent import (
+    AgentEvent,
     AgentTool,
     AgentToolResult,
     AssistantMessage,
@@ -119,7 +120,7 @@ def test_tool_result_message_accepts_pi_camel_case_wire_keys() -> None:
 
 def test_models_reject_unknown_fields() -> None:
     with pytest.raises(ValidationError):
-        UserMessage(content="hello", unexpected=True)  # type: ignore[call-arg]
+        UserMessage.model_validate({"content": "hello", "unexpected": True})
 
 
 @pytest.mark.anyio
@@ -145,7 +146,7 @@ async def test_agent_tool_executes_with_pi_arguments() -> None:
         label="Echo",
         description="Echo text.",
         parameters={"type": "object"},
-        execute_fn=execute,  # type: ignore[arg-type]
+        execute_fn=execute,
     )
 
     signal = FakeCancellationToken()
@@ -156,12 +157,12 @@ async def test_agent_tool_executes_with_pi_arguments() -> None:
 
 
 def test_agent_events_have_stable_pi_type_names() -> None:
-    partial = AssistantMessage(content="hello")
+    partial = AssistantMessage(content=[TextContent(text="hello")])
     nested = TextDeltaEvent(content_index=0, delta="hello", partial=partial)
     result = AgentToolResult(content=[TextContent(text="contents")])
-    message = AssistantMessage(content="Done")
+    message = AssistantMessage(content=[TextContent(text="Done")])
 
-    events = [
+    events: list[AgentEvent] = [
         MessageStartEvent(message=partial),
         MessageUpdateEvent(message=partial, assistant_message_event=nested),
         MessageEndEvent(message=message),

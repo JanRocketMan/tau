@@ -13,7 +13,10 @@ from tau_agent import (
     MessageStartEvent,
     TextContent,
     ToolCall,
+    ToolCancellationToken,
     ToolResultMessage,
+    ToolUpdateCallback,
+    message_text,
 )
 from tau_agent.types import JSONValue
 from tau_ai import FakeProvider
@@ -25,7 +28,7 @@ def _texts(harness: AgentHarness) -> list[tuple[str, str]]:
 
 @pytest.mark.anyio
 async def test_prompt_appends_user_and_assistant_with_pi_lifecycle() -> None:
-    assistant = AssistantMessage(content="Hello")
+    assistant = AssistantMessage(content=[TextContent(text="Hello")])
     harness = AgentHarness(
         AgentHarnessConfig(
             provider=FakeProvider([[assistant_start(), assistant_done(assistant)]]),
@@ -53,7 +56,7 @@ async def test_prompt_appends_user_and_assistant_with_pi_lifecycle() -> None:
 
 @pytest.mark.anyio
 async def test_subscribers_receive_nested_message_updates_and_unsubscribe() -> None:
-    assistant = AssistantMessage(content="Hello")
+    assistant = AssistantMessage(content=[TextContent(text="Hello")])
     provider = FakeProvider(
         [
             [assistant_start(), text_delta("Hello"), assistant_done(assistant)],
@@ -83,8 +86,8 @@ async def test_subscribers_receive_nested_message_updates_and_unsubscribe() -> N
 
 @pytest.mark.anyio
 async def test_harness_rejects_overlap_and_drains_followups() -> None:
-    first = AssistantMessage(content="First")
-    second = AssistantMessage(content="Second")
+    first = AssistantMessage(content=[TextContent(text="First")])
+    second = AssistantMessage(content=[TextContent(text="Second")])
     provider = FakeProvider(
         [
             [assistant_start(), assistant_done(first)],
@@ -117,8 +120,8 @@ async def test_harness_rejects_overlap_and_drains_followups() -> None:
 
 @pytest.mark.anyio
 async def test_harness_queue_mode_all_drains_messages_together() -> None:
-    first = AssistantMessage(content="First")
-    second = AssistantMessage(content="Second")
+    first = AssistantMessage(content=[TextContent(text="First")])
+    second = AssistantMessage(content=[TextContent(text="Second")])
     harness = AgentHarness(
         AgentHarnessConfig(
             provider=FakeProvider(
@@ -154,11 +157,11 @@ async def test_harness_passes_canonical_tools_to_loop() -> None:
     async def execute(
         tool_call_id: str,
         arguments: Mapping[str, JSONValue],
-        signal=None,  # noqa: ANN001
-        on_update=None,  # noqa: ANN001
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
         del tool_call_id, signal, on_update
-        return AgentToolResult(content=str(arguments["text"]))
+        return AgentToolResult(content=[TextContent(text=str(arguments["text"]))])
 
     tool = AgentTool(
         name="echo",
@@ -169,7 +172,7 @@ async def test_harness_passes_canonical_tools_to_loop() -> None:
     )
     call = ToolCall(id="call-1", name="echo", arguments={"text": "hi"})
     first = AssistantMessage(content=[call])
-    final = AssistantMessage(content="Done")
+    final = AssistantMessage(content=[TextContent(text="Done")])
     provider = FakeProvider(
         [
             [assistant_start(), tool_call_end(call), assistant_done(first, "toolUse")],
@@ -198,10 +201,10 @@ def test_queue_mutators_return_canonical_snapshots() -> None:
     later = harness.follow_up("Later").follow_up[-1]
     assert harness.pop_latest_steering() == second
     assert harness.pop_latest_follow_up() == later
-    assert [message.text for message in harness.queued_messages.steering] == ["First"]
+    assert [message_text(message) for message in harness.queued_messages.steering] == ["First"]
 
     cleared = harness.clear_queues()
-    assert [message.text for message in cleared.steering] == ["First"]
+    assert [message_text(message) for message in cleared.steering] == ["First"]
     assert harness.pending_message_count == 0
 
 

@@ -16,7 +16,7 @@ class FakeSession:
         self.provider_name = "openai"
         self.inference_provider: str | None = None
         self.model = "fake-model"
-        self.available_models = ("fake-model", "other-model")
+        self.available_models: tuple[str, ...] = ("fake-model", "other-model")
         self.available_model_choices = (
             ModelChoice(provider_name="openai", model="fake-model"),
             ModelChoice(provider_name="openai", model="other-model"),
@@ -40,7 +40,14 @@ class FakeSession:
         self.auto_compact_token_threshold = 200
         self.context_window_tokens = 584
         self.thinking_level = "medium"
-        self.available_thinking_levels = ("off", "minimal", "low", "medium", "high", "xhigh")
+        self.available_thinking_levels: tuple[str, ...] = (
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        )
         self.thinking_unavailable_reason: str | None = None
         self.tui_theme = "tau-dark"
         self.resource_diagnostics = ()

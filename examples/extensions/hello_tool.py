@@ -5,12 +5,25 @@ Install by copying into `~/.tau/extensions/`, or run:
     tau -e examples/extensions/hello_tool.py
 """
 
+from collections.abc import Mapping
+
 from tau_agent.messages import TextContent
-from tau_agent.tools import AgentTool, AgentToolResult
+from tau_agent.tools import (
+    AgentTool,
+    AgentToolResult,
+    ToolCancellationToken,
+    ToolUpdateCallback,
+)
+from tau_agent.types import JSONValue
 from tau_coding.extensions import ExtensionAPI
 
 
-async def _run_hello(tool_call_id, arguments, signal=None, on_update=None):  # noqa: ANN001, ANN202
+async def _run_hello(
+    tool_call_id: str,
+    arguments: Mapping[str, JSONValue],
+    signal: ToolCancellationToken | None = None,
+    on_update: ToolUpdateCallback | None = None,
+) -> AgentToolResult:
     del tool_call_id, signal, on_update
     who = str(arguments.get("who", "world"))
     return AgentToolResult(content=[TextContent(text=f"Hello, {who}!")])

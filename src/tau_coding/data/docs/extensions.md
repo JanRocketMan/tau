@@ -32,5 +32,5 @@ a process/filesystem/network/tool/model sandbox.
 5. Keep extension behavior out of `tau_agent`; extensions belong to `tau_coding`. Use `tau_agent` types for portable messages and tools, and keep Textual behind Tau's UI adapter APIs.
 6. Put user extensions in `~/.tau/extensions/`. Project extensions require explicit trust through `--project-extensions`; never enable one from an untrusted repository. Use `tau -e PATH` for isolated testing.
 7. Test through the real extension runtime so discovery, imports, and `setup` registration are exercised. For Tau core changes, add deterministic tests with fake providers/tools and cover reload and lifecycle behavior when applicable.
-8. Run focused tests followed by the repository's full pytest, Ruff, formatting, and mypy checks.
+8. Run focused tests followed by the repository's full pytest, Ruff, and formatting checks. Then run `uv run ty check` and `uv run mypy`.
 9. Update `website/content/guides/extensions.md` and add a development note for user-facing architectural changes.

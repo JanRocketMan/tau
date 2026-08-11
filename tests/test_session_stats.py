@@ -71,7 +71,7 @@ def test_calculate_session_stats_uses_latest_tool_continuation_cache_rate() -> N
         message=ToolResultMessage(
             tool_call_id="call-1",
             tool_name="read",
-            content="result",
+            content=[TextContent(text="result")],
         ),
     )
     continuation = MessageEntry(

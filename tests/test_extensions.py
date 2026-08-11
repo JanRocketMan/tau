@@ -3,32 +3,61 @@
 import asyncio
 import sys
 import time
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 from pi_event_helpers import assistant_done, assistant_start
-from tau_agent import AssistantMessage, ToolCall, UserMessage
+from tau_agent import (
+    AgentEvent,
+    AssistantMessage,
+    CustomMessage,
+    EventListener,
+    TextContent,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+    message_text,
+)
 from tau_agent.messages import AgentMessage, assistant_content
 from tau_agent.session import CustomEntry, JsonlSessionStorage, LeafEntry, MessageEntry
-from tau_agent.tools import AgentTool, AgentToolResult
+from tau_agent.tools import (
+    AgentTool,
+    AgentToolResult,
+    ToolCallRenderer,
+    ToolCancellationToken,
+    ToolResultRenderer,
+    ToolUpdateCallback,
+)
 from tau_agent.types import JSONValue
 from tau_ai import FakeProvider
 from tau_coding import CodingSession, CodingSessionConfig, ResourceError, TauResourcePaths
+from tau_coding.commands import CommandContext, CommandRegistry, CommandSession
 from tau_coding.extensions import (
     CustomMessageView,
     ExtensionAPI,
     ExtensionError,
+    ExtensionHandler,
     ExtensionRuntime,
     InputEvent,
     InputHookResult,
+    KeyInterceptor,
+    MainViewFactory,
+    MainViewHandle,
+    MessageRenderer,
     MessageRenderOptions,
+    Placement,
+    SlotWidgetContent,
+    SlotWidgetFactory,
+    ToolCallHookEvent,
     ToolCallHookResult,
     ToolResultHookResult,
     discover_extensions,
     load_extensions,
 )
+from tau_coding.tui.config import TuiTheme
 
 pytestmark = pytest.mark.anyio
 
@@ -36,6 +65,24 @@ pytestmark = pytest.mark.anyio
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+async def _dispatch(listener: EventListener, event: AgentEvent) -> None:
+    result = listener(event)
+    if result is not None:
+        await result
+
+
+def _agent_tool_result(
+    content: str,
+    *,
+    details: JSONValue = None,
+) -> AgentToolResult:
+    return AgentToolResult(content=[TextContent(text=content)], details=details)
+
+
+def _function_value(function: Callable[..., object]) -> object:
+    return vars(function)["value"]
 
 
 def _paths(tmp_path: Path) -> TauResourcePaths:
@@ -207,7 +254,7 @@ def test_package_extension_loads_with_relative_import(tmp_path: Path) -> None:
     assert [ext.name for ext in result.extensions] == ["pkg_ext"]
     assert result.diagnostics == ()
     result.extensions[0].setup(object())
-    assert result.extensions[0].setup.value == 42  # type: ignore[attr-defined]
+    assert _function_value(result.extensions[0].setup) == 42
 
 
 def _write_src_layout_extension(repo: Path, *, entry_name: str = "extension") -> Path:
@@ -235,7 +282,7 @@ def test_manifest_declares_src_layout_entry(tmp_path: Path) -> None:
     assert [ext.name for ext in result.extensions] == ["my_ext"]
     assert result.diagnostics == ()
     result.extensions[0].setup(object())
-    assert result.extensions[0].setup.value == 42  # type: ignore[attr-defined]
+    assert _function_value(result.extensions[0].setup) == 42
 
 
 def test_manifest_wins_over_root_extension_py(tmp_path: Path) -> None:
@@ -538,7 +585,7 @@ async def test_extension_tool_overrides_builtin_by_name(tmp_path: Path) -> None:
     async def builtin_read(
         tool_call_id: str, arguments: object, signal: object = None, on_update: object = None
     ) -> AgentToolResult:
-        return AgentToolResult(content="builtin")
+        return _agent_tool_result("builtin")
 
     builtin = AgentTool(
         name="read", label="read", description="builtin", parameters={}, execute_fn=builtin_read
@@ -629,10 +676,19 @@ def test_extension_command_errors_are_contained(tmp_path: Path) -> None:
     assert any("command:/boom" in diag.message for diag in runtime.diagnostics)
 
 
-def _command_context(registry: object, text: str, name: str, args: str) -> object:
-    from tau_coding.commands import CommandContext
-
-    return CommandContext(session=None, registry=registry, text=text, name=name, args=args)  # type: ignore[arg-type]
+def _command_context(
+    registry: CommandRegistry,
+    text: str,
+    name: str,
+    args: str,
+) -> CommandContext:
+    return CommandContext(
+        session=cast(CommandSession, None),
+        registry=registry,
+        text=text,
+        name=name,
+        args=args,
+    )
 
 
 def test_prompt_guideline_registration(tmp_path: Path) -> None:
@@ -669,7 +725,7 @@ async def test_tool_call_hook_can_block(tmp_path: Path) -> None:
         "tool_call",
         lambda event, context: (
             ToolCallHookResult(block=True, reason="not allowed")
-            if event.tool_name == "danger"
+            if cast(ToolCallHookEvent, event).tool_name == "danger"
             else None
         ),
     )
@@ -687,13 +743,16 @@ async def test_tool_call_hook_can_rewrite_arguments(tmp_path: Path) -> None:
     api = _register_inline_extension(runtime, "rewrite")
     api.on("tool_call", lambda event, context: ToolCallHookResult(arguments={"who": "tau"}))
 
-    seen: list[dict[str, object]] = []
+    seen: list[dict[str, JSONValue]] = []
 
     async def executor(
-        tool_call_id: str, arguments: object, signal: object = None, on_update: object = None
+        tool_call_id: str,
+        arguments: Mapping[str, JSONValue],
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
-        seen.append(dict(arguments))  # type: ignore[call-overload]
-        return AgentToolResult(content="ok")
+        seen.append(dict(arguments))
+        return _agent_tool_result("ok")
 
     tool = AgentTool(name="echo", label="echo", description="d", parameters={}, execute_fn=executor)
     wrapped = runtime.compose_tools([tool])[0]
@@ -707,13 +766,16 @@ async def test_tool_call_hook_can_clear_arguments(tmp_path: Path) -> None:
     api = _register_inline_extension(runtime, "clearer")
     api.on("tool_call", lambda event, context: ToolCallHookResult(arguments={}))
 
-    seen: list[dict[str, object]] = []
+    seen: list[dict[str, JSONValue]] = []
 
     async def executor(
-        tool_call_id: str, arguments: object, signal: object = None, on_update: object = None
+        tool_call_id: str,
+        arguments: Mapping[str, JSONValue],
+        signal: ToolCancellationToken | None = None,
+        on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
-        seen.append(dict(arguments))  # type: ignore[call-overload]
-        return AgentToolResult(content="ok")
+        seen.append(dict(arguments))
+        return _agent_tool_result("ok")
 
     tool = AgentTool(name="echo", label="echo", description="d", parameters={}, execute_fn=executor)
     wrapped = runtime.compose_tools([tool])[0]
@@ -732,11 +794,11 @@ async def test_wrapped_tool_forwards_on_update(tmp_path: Path) -> None:
         tool_call_id: str,
         arguments: object,
         signal: object = None,
-        on_update: object = None,
+        on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
         assert on_update is not None
-        on_update(AgentToolResult(content="halfway", details={"pct": 50}))  # type: ignore[operator]
-        return AgentToolResult(content="done")
+        on_update(_agent_tool_result("halfway", details={"pct": 50}))
+        return _agent_tool_result("done")
 
     tool = AgentTool(name="work", label="work", description="d", parameters={}, execute_fn=executor)
     wrapped = runtime.compose_tools([tool])[0]
@@ -759,14 +821,14 @@ async def test_wrapped_tool_drops_on_update_for_inner_without_seam(tmp_path: Pat
     async def executor(
         tool_call_id: str, arguments: object, signal: object = None, on_update: object = None
     ) -> AgentToolResult:
-        return AgentToolResult(content="ran")
+        return _agent_tool_result("ran")
 
     tool = AgentTool(
         name="plain", label="plain", description="d", parameters={}, execute_fn=executor
     )
     wrapped = runtime.compose_tools([tool])[0]
 
-    def collect(message: str, data: object = None) -> None:
+    def collect(result: AgentToolResult) -> None:
         raise AssertionError("on_update should not reach an executor without the seam")
 
     result = await wrapped.execute("call-1", {}, on_update=collect)
@@ -822,11 +884,15 @@ async def test_input_hooks_chain_transforms(tmp_path: Path) -> None:
     api = _register_inline_extension(runtime, "chain")
     api.on(
         "input",
-        lambda event, context: InputHookResult(action="transform", text=event.text + " one"),
+        lambda event, context: InputHookResult(
+            action="transform", text=cast(InputEvent, event).text + " one"
+        ),
     )
     api.on(
         "input",
-        lambda event, context: InputHookResult(action="transform", text=event.text + " two"),
+        lambda event, context: InputHookResult(
+            action="transform", text=cast(InputEvent, event).text + " two"
+        ),
     )
 
     outcome = await runtime.run_input_hooks("base")
@@ -867,7 +933,7 @@ async def test_input_hook_defaults_to_interactive_idle(tmp_path: Path) -> None:
     def _hook(event: InputEvent, context: object) -> None:
         seen.append(event)
 
-    api.on("input", _hook)  # type: ignore[attr-defined]
+    api.on("input", cast(ExtensionHandler, _hook))
 
     await runtime.run_input_hooks("hi")
 
@@ -880,7 +946,7 @@ async def test_input_hook_receives_source_and_streaming_behavior(tmp_path: Path)
     runtime = ExtensionRuntime()
     api = _register_inline_extension(runtime, "capture")
     seen: list[InputEvent] = []
-    api.on("input", lambda event, context: seen.append(event))  # type: ignore[attr-defined]
+    api.on("input", lambda event, context: seen.append(cast(InputEvent, event)))
 
     await runtime.run_input_hooks("go", source="extension", streaming_behavior="steer")
 
@@ -897,17 +963,20 @@ async def test_agent_event_fan_out_and_wildcard(tmp_path: Path) -> None:
     api.on("tool_execution_start", lambda event, context: specific.append(event))
     api.on("agent_event", lambda event, context: wildcard.append(event))
 
-    listeners: list[object] = []
+    listeners: list[EventListener] = []
 
-    def subscribe(listener: object) -> object:
+    def subscribe(listener: EventListener) -> Callable[[], None]:
         listeners.append(listener)
         return lambda: listeners.remove(listener)
 
-    runtime.attach_harness_listener(subscribe)  # type: ignore[arg-type]
+    runtime.attach_harness_listener(subscribe)
     from tau_agent.events import ToolExecutionStartEvent, TurnStartEvent
 
-    await listeners[0](ToolExecutionStartEvent(tool_call_id="1", tool_name="x", args={}))  # type: ignore[operator]
-    await listeners[0](TurnStartEvent())  # type: ignore[operator]
+    await _dispatch(
+        listeners[0],
+        ToolExecutionStartEvent(tool_call_id="1", tool_name="x", args={}),
+    )
+    await _dispatch(listeners[0], TurnStartEvent())
 
     assert len(specific) == 1
     assert len(wildcard) == 2
@@ -928,24 +997,27 @@ async def test_extension_turn_events_include_pi_session_metadata(tmp_path: Path)
     api.on("turn_end", lambda event, context: specific.append(event))
     api.on("agent_event", lambda event, context: wildcard.append(event))
 
-    listeners: list[object] = []
-    runtime.attach_harness_listener(  # type: ignore[arg-type]
-        lambda listener: (listeners.append(listener), lambda: None)[1]
-    )
+    listeners: list[EventListener] = []
+
+    def subscribe(listener: EventListener) -> Callable[[], None]:
+        listeners.append(listener)
+        return lambda: None
+
+    runtime.attach_harness_listener(subscribe)
     dispatch = listeners[0]
     message = UserMessage(content="done")
 
-    await dispatch(AgentStartEvent())  # type: ignore[operator]
+    await _dispatch(dispatch, AgentStartEvent())
     before_ms = time.time_ns() // 1_000_000
-    await dispatch(AgentTurnStartEvent())  # type: ignore[operator]
-    await dispatch(AgentTurnEndEvent(message=message))  # type: ignore[operator]
-    await dispatch(AgentTurnStartEvent())  # type: ignore[operator]
+    await _dispatch(dispatch, AgentTurnStartEvent())
+    await _dispatch(dispatch, AgentTurnEndEvent(message=message))
+    await _dispatch(dispatch, AgentTurnStartEvent())
 
     first_start, first_end, second_start = specific
     assert isinstance(first_start, TurnStartEvent)
     assert before_ms <= first_start.timestamp <= time.time_ns() // 1_000_000
-    assert first_start.turn_index == first_end.turn_index == 0
     assert isinstance(first_end, TurnEndEvent)
+    assert first_start.turn_index == first_end.turn_index == 0
     assert first_end.message == message
     assert first_end.tool_results == []
     assert isinstance(second_start, TurnStartEvent)
@@ -963,46 +1035,48 @@ async def test_extension_turn_index_resets_for_each_agent_run(tmp_path: Path) ->
     runtime = ExtensionRuntime()
     api = _register_inline_extension(runtime, "turn_observer")
     seen: list[TurnStartEvent] = []
-    api.on("turn_start", lambda event, context: seen.append(event))
-    listeners: list[object] = []
-    runtime.attach_harness_listener(  # type: ignore[arg-type]
-        lambda listener: (listeners.append(listener), lambda: None)[1]
-    )
+    api.on("turn_start", lambda event, context: seen.append(cast(TurnStartEvent, event)))
+    listeners: list[EventListener] = []
+
+    def subscribe(listener: EventListener) -> Callable[[], None]:
+        listeners.append(listener)
+        return lambda: None
+
+    runtime.attach_harness_listener(subscribe)
     dispatch = listeners[0]
     message = UserMessage(content="done")
 
-    await dispatch(AgentStartEvent())  # type: ignore[operator]
-    await dispatch(AgentTurnStartEvent())  # type: ignore[operator]
-    await dispatch(AgentTurnEndEvent(message=message))  # type: ignore[operator]
-    await dispatch(AgentStartEvent())  # type: ignore[operator]
-    await dispatch(AgentTurnStartEvent())  # type: ignore[operator]
+    await _dispatch(dispatch, AgentStartEvent())
+    await _dispatch(dispatch, AgentTurnStartEvent())
+    await _dispatch(dispatch, AgentTurnEndEvent(message=message))
+    await _dispatch(dispatch, AgentStartEvent())
+    await _dispatch(dispatch, AgentTurnStartEvent())
 
     assert [event.turn_index for event in seen] == [0, 0]
 
 
 async def test_message_end_event_surfaces_provider_usage(tmp_path: Path) -> None:
-    from typing import cast
 
     from tau_agent import Usage
     from tau_agent.events import MessageEndEvent
-    from tau_coding.extensions.api import ExtensionAPI
 
     runtime = ExtensionRuntime()
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "usage_observer"))
+    api = _register_inline_extension(runtime, "usage_observer")
     seen: list[object] = []
     api.on("message_end", lambda event, context: seen.append(event))
 
-    listeners: list[object] = []
+    listeners: list[EventListener] = []
 
-    def subscribe(listener: object) -> object:
+    def subscribe(listener: EventListener) -> Callable[[], None]:
         listeners.append(listener)
         return lambda: listeners.remove(listener)
 
-    runtime.attach_harness_listener(subscribe)  # type: ignore[arg-type]
+    runtime.attach_harness_listener(subscribe)
 
     usage = Usage(input=20, output=5, cache_read=10, reasoning=2, total_tokens=35)
-    await listeners[0](  # type: ignore[operator]
-        MessageEndEvent(message=AssistantMessage(content="done", usage=usage))
+    await _dispatch(
+        listeners[0],
+        MessageEndEvent(message=AssistantMessage(content=[TextContent(text="done")], usage=usage)),
     )
 
     assert len(seen) == 1
@@ -1026,12 +1100,17 @@ async def test_raising_event_handler_is_recorded(tmp_path: Path) -> None:
         raise RuntimeError("listener exploded")
 
     api.on("turn_start", handler)
-    listeners: list[object] = []
-    runtime.attach_harness_listener(lambda fn: (listeners.append(fn), lambda: None)[1])  # type: ignore[arg-type]
+    listeners: list[EventListener] = []
+
+    def subscribe(listener: EventListener) -> Callable[[], None]:
+        listeners.append(listener)
+        return lambda: None
+
+    runtime.attach_harness_listener(subscribe)
 
     from tau_agent.events import TurnStartEvent
 
-    await listeners[0](TurnStartEvent())  # type: ignore[operator]
+    await _dispatch(listeners[0], TurnStartEvent())
 
     assert any("turn_start" in diag.message for diag in runtime.diagnostics)
 
@@ -1110,7 +1189,7 @@ def test_transcript_is_empty_at_session_start(tmp_path: Path) -> None:
     session = RecordingSession(tmp_path)
     runtime.bind(session)
 
-    assert api.context.transcript == ()  # type: ignore[attr-defined]
+    assert api.context.transcript == ()
 
 
 def test_transcript_exposes_prior_messages_in_order(tmp_path: Path) -> None:
@@ -1119,14 +1198,14 @@ def test_transcript_exposes_prior_messages_in_order(tmp_path: Path) -> None:
     session = RecordingSession(tmp_path)
     session.messages = (
         UserMessage(content="what does foo do?"),
-        AssistantMessage(content="foo returns bar"),
+        AssistantMessage(content=[TextContent(text="foo returns bar")]),
     )
     runtime.bind(session)
 
-    transcript = api.context.transcript  # type: ignore[attr-defined]
+    transcript = api.context.transcript
 
     assert [message.role for message in transcript] == ["user", "assistant"]
-    assert [message.text for message in transcript] == [
+    assert [message_text(message) for message in transcript] == [
         "what does foo do?",
         "foo returns bar",
     ]
@@ -1139,7 +1218,8 @@ def test_transcript_returns_copies_so_mutation_cannot_corrupt_session(tmp_path: 
     session.messages = (UserMessage(content="original"),)
     runtime.bind(session)
 
-    transcript = api.context.transcript  # type: ignore[attr-defined]
+    transcript = api.context.transcript
+    assert isinstance(transcript[0], UserMessage)
     transcript[0].content = "tampered"
 
     assert session.messages[0].content == "original"
@@ -1182,7 +1262,7 @@ class RecordingUiBridge:
         return self._has_ui
 
     @property
-    def theme(self):  # noqa: ANN202 - TuiTheme, imported lazily by the default
+    def theme(self) -> TuiTheme:
         from tau_coding.tui.config import TAU_DARK_THEME
 
         return TAU_DARK_THEME
@@ -1193,10 +1273,16 @@ class RecordingUiBridge:
     def request_render(self) -> None:
         self.calls.append(("request_render", (), {}))
 
-    def set_slot_widget(self, key, factory, *, placement="above_prompt"):  # noqa: ANN001
+    def set_slot_widget(
+        self,
+        key: str,
+        content: SlotWidgetContent | None,
+        *,
+        placement: Placement = "above_prompt",
+    ) -> None:
         self.calls.append(("set_slot_widget", (key,), {"placement": placement}))
 
-    def open_main_view(self, factory):  # noqa: ANN001
+    def open_main_view(self, factory: MainViewFactory) -> MainViewHandle:
         self.calls.append(("open_main_view", (), {}))
         from tau_coding.extensions.api import _DeadMainViewHandle
 
@@ -1205,7 +1291,7 @@ class RecordingUiBridge:
     def clear_components(self) -> None:
         self.calls.append(("clear_components", (), {}))
 
-    def register_key_interceptor(self, handler):  # noqa: ANN001
+    def register_key_interceptor(self, handler: KeyInterceptor) -> Callable[[], None]:
         self.interceptors.append(handler)
         return lambda: self.interceptors.remove(handler)
 
@@ -1215,11 +1301,11 @@ class RecordingUiBridge:
     async def select(
         self,
         title: str,
-        options: object,
+        options: Sequence[str],
         *,
         timeout: float | None = None,
     ) -> str | None:
-        self.calls.append(("select", (title, tuple(options)), {"timeout": timeout}))  # type: ignore[arg-type]
+        self.calls.append(("select", (title, tuple(options)), {"timeout": timeout}))
         return self._select_result
 
     async def confirm(
@@ -1244,13 +1330,10 @@ class RecordingUiBridge:
 
 
 async def test_context_ui_round_trips_dialogs(tmp_path: Path) -> None:
-    from typing import cast
-
-    from tau_coding.extensions.api import ExtensionAPI
 
     ui = RecordingUiBridge(select_result="b", confirm_result=True, input_result="typed")
     runtime = ExtensionRuntime(ui=ui)
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "dialogs"))
+    api = _register_inline_extension(runtime, "dialogs")
 
     context = api.context
     assert context.ui.has_ui is True
@@ -1268,13 +1351,10 @@ async def test_context_ui_round_trips_dialogs(tmp_path: Path) -> None:
 
 
 async def test_context_ui_cancel_returns_pi_defaults(tmp_path: Path) -> None:
-    from typing import cast
-
-    from tau_coding.extensions.api import ExtensionAPI
 
     ui = RecordingUiBridge()  # select None, confirm False, input None
     runtime = ExtensionRuntime(ui=ui)
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "cancel"))
+    api = _register_inline_extension(runtime, "cancel")
 
     assert await api.context.ui.select("t", ["x"]) is None
     assert await api.context.ui.confirm("t", "m") is False
@@ -1301,8 +1381,12 @@ async def test_headless_ui_bridges_component_seam_are_noops(tmp_path: Path) -> N
         assert bridge.theme.name
         assert bridge.get_prompt_text() == ""
         bridge.request_render()  # no-op, must not raise
-        bridge.set_slot_widget("k", lambda theme: None, placement="above_prompt")
-        handle = bridge.open_main_view(lambda h, theme: None)
+        bridge.set_slot_widget(
+            "k",
+            cast(SlotWidgetFactory, lambda theme: None),
+            placement="above_prompt",
+        )
+        handle = bridge.open_main_view(cast(MainViewFactory, lambda h, theme: None))
         assert handle.is_open is False
         handle.close("ignored")  # accepts a result, does nothing with it
         handle.close()  # idempotent no-op
@@ -1314,19 +1398,20 @@ async def test_headless_ui_bridges_component_seam_are_noops(tmp_path: Path) -> N
 
 
 async def test_context_ui_components_pass_through(tmp_path: Path) -> None:
-    from typing import cast
-
-    from tau_coding.extensions.api import ExtensionAPI
 
     ui = RecordingUiBridge()
     runtime = ExtensionRuntime(ui=ui)
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "components"))
+    api = _register_inline_extension(runtime, "components")
 
     components = api.context.ui.components
     assert components is ui  # straight pass-through to the installed bridge
     assert components.supports_components is True
 
-    components.set_slot_widget("fleet", lambda theme: None, placement="below_prompt")
+    components.set_slot_widget(
+        "fleet",
+        cast(SlotWidgetFactory, lambda theme: None),
+        placement="below_prompt",
+    )
     unsubscribe = components.register_key_interceptor(lambda event, text: False)
     assert ("set_slot_widget", ("fleet",), {"placement": "below_prompt"}) in ui.calls
     assert len(ui.interceptors) == 1
@@ -1335,23 +1420,17 @@ async def test_context_ui_components_pass_through(tmp_path: Path) -> None:
 
 
 async def test_context_ui_components_headless_reports_unsupported(tmp_path: Path) -> None:
-    from typing import cast
-
-    from tau_coding.extensions.api import ExtensionAPI
 
     runtime = ExtensionRuntime()  # defaults to NullUiBridge
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "headless-components"))
+    api = _register_inline_extension(runtime, "headless-components")
 
     assert api.context.ui.components.supports_components is False
 
 
 async def test_default_runtime_ui_is_headless(tmp_path: Path) -> None:
-    from typing import cast
-
-    from tau_coding.extensions.api import ExtensionAPI
 
     runtime = ExtensionRuntime()  # defaults to NullUiBridge
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "headless"))
+    api = _register_inline_extension(runtime, "headless")
 
     assert api.context.ui.has_ui is False
     assert await api.context.ui.select("t", ["a"]) is None
@@ -1391,13 +1470,13 @@ async def test_sync_command_spawns_task_that_awaits_dialog(tmp_path: Path) -> No
     runtime = ExtensionRuntime(ui=ui)
     runtime.load(paths)
     session = RecordingSession(tmp_path, running=True)
-    runtime.bind(session)  # type: ignore[arg-type]
+    runtime.bind(session)
     registry = runtime.build_command_registry()
 
     command = registry.get("menu")
     assert command is not None
 
-    result = command.handler(_command_context(registry, "/menu", "menu", ""))  # type: ignore[arg-type]
+    result = command.handler(_command_context(registry, "/menu", "menu", ""))
     assert result.handled is True
     assert result.message == "opening menu..."
 
@@ -1409,12 +1488,12 @@ async def test_sync_command_spawns_task_that_awaits_dialog(tmp_path: Path) -> No
     assert session.followed_up == ["run deploy"]
 
 
-def _register_inline_extension(runtime: ExtensionRuntime, name: str) -> object:
+def _register_inline_extension(runtime: ExtensionRuntime, name: str) -> ExtensionAPI:
     from tau_coding.extensions.loader import LoadedExtension
 
-    captured: dict[str, object] = {}
+    captured: dict[str, ExtensionAPI] = {}
 
-    def setup(api: object) -> None:
+    def setup(api: ExtensionAPI) -> None:
         captured["api"] = api
 
     runtime._setup_extension(  # noqa: SLF001 - test seam
@@ -1427,7 +1506,7 @@ def _make_tool(name: str, *, content: str) -> AgentTool:
     async def executor(
         tool_call_id: str, arguments: object, signal: object = None, on_update: object = None
     ) -> AgentToolResult:
-        return AgentToolResult(content=content)
+        return _agent_tool_result(content)
 
     return AgentTool(name=name, label=name, description="d", parameters={}, execute_fn=executor)
 
@@ -1518,17 +1597,18 @@ async def test_session_start_deferred_until_host_emits(tmp_path: Path) -> None:
     module = _loaded_extension_module("integration")
 
     # load defers session_start so hosts can attach a UI bridge first.
-    assert module.EVENTS == []  # type: ignore[attr-defined]
+    assert _module_values(module, "EVENTS") == []
 
     await session.emit_pending_session_start()
-    assert module.EVENTS == ["startup"]  # type: ignore[attr-defined]
+    assert _module_values(module, "EVENTS") == ["startup"]
 
     # Idempotent: a second host call must not re-fire the event.
     await session.emit_pending_session_start()
-    assert module.EVENTS == ["startup"]  # type: ignore[attr-defined]
+    assert _module_values(module, "EVENTS") == ["startup"]
 
     await session.aclose()
-    assert module.EVENTS == ["startup", "quit"] or module.EVENTS == ["startup"]
+    events = _module_values(module, "EVENTS")
+    assert events == ["startup", "quit"] or events == ["startup"]
 
 
 async def test_session_start_handler_can_notify_through_attached_bridge(
@@ -1586,7 +1666,7 @@ async def test_prompt_input_hook_defaults_to_interactive(tmp_path: Path) -> None
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="ok")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="ok")])),
             ]
         ]
     )
@@ -1612,7 +1692,7 @@ async def test_prompt_input_hook_source_extension(tmp_path: Path) -> None:
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="ok")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="ok")])),
             ]
         ]
     )
@@ -1652,7 +1732,7 @@ async def test_agent_events_reach_extension_after_interrupted_tool_repair(
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="Recovered.")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="Recovered.")])),
             ]
         ]
     )
@@ -1661,8 +1741,9 @@ async def test_agent_events_reach_extension_after_interrupted_tool_repair(
 
     _ = [event async for event in session.prompt("continue")]
 
-    assert "agent_start" in module.EVENTS  # type: ignore[attr-defined]
-    assert "agent_end" in module.EVENTS  # type: ignore[attr-defined]
+    events = _module_values(module, "EVENTS")
+    assert "agent_start" in events
+    assert "agent_end" in events
 
 
 async def test_extension_tool_call_block_reaches_model(tmp_path: Path) -> None:
@@ -1689,7 +1770,7 @@ async def test_extension_tool_call_block_reaches_model(tmp_path: Path) -> None:
             ],
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="done")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="done")])),
             ],
         ]
     )
@@ -1698,7 +1779,7 @@ async def test_extension_tool_call_block_reaches_model(tmp_path: Path) -> None:
     [event async for event in session.prompt("run ls")]
 
     tool_results = [
-        message for message in session.messages if getattr(message, "role", None) == "toolResult"
+        message for message in session.messages if isinstance(message, ToolResultMessage)
     ]
     assert len(tool_results) == 1
     assert tool_results[0].is_error is False
@@ -1710,7 +1791,7 @@ async def test_custom_message_metadata_survives_session_reload(tmp_path: Path) -
         [
             [
                 assistant_start(model="fake"),
-                assistant_done(message=AssistantMessage(content="ack")),
+                assistant_done(message=AssistantMessage(content=[TextContent(text="ack")])),
             ],
         ]
     )
@@ -1731,8 +1812,7 @@ async def test_custom_message_metadata_survives_session_reload(tmp_path: Path) -
     custom = [
         message
         for message in reopened.messages
-        if getattr(message, "role", None) == "custom"
-        and message.custom_type == "subagent-notification"
+        if isinstance(message, CustomMessage) and message.custom_type == "subagent-notification"
     ]
 
     assert len(custom) == 1
@@ -1800,8 +1880,8 @@ async def test_runtime_survives_new_session_swap(tmp_path: Path) -> None:
 
     module_after = _loaded_extension_module("integration")
     assert session.extension_runtime is not runtime_before
-    assert ("stop", "new") in module_before.EVENTS
-    assert ("start", "new") in module_after.EVENTS
+    assert ("stop", "new") in _module_values(module_before, "EVENTS")
+    assert ("start", "new") in _module_values(module_after, "EVENTS")
 
 
 async def test_session_swap_clears_host_extension_components(tmp_path: Path) -> None:
@@ -1843,7 +1923,7 @@ def test_reset_for_reload_clears_host_extension_components() -> None:
 
 def test_reset_for_reload_invalidates_only_after_component_cleanup() -> None:
     runtime = ExtensionRuntime()
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "old"))
+    api = _register_inline_extension(runtime, "old")
     observed_active: list[bool] = []
 
     class CleanupBridge(RecordingUiBridge):
@@ -1868,7 +1948,7 @@ API_CAPTURING_EXTENSION = "APIS = []\n\n\ndef setup(tau):\n    APIS.append(tau)\
 
 def test_reset_for_reload_invalidates_prior_api_actions(tmp_path: Path) -> None:
     runtime = ExtensionRuntime()
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "old"))
+    api = _register_inline_extension(runtime, "old")
     runtime.bind(RecordingSession(tmp_path))
 
     runtime.reset_for_reload()
@@ -1885,7 +1965,7 @@ def test_reset_for_reload_invalidates_prior_api_actions(tmp_path: Path) -> None:
 
 async def test_reset_for_reload_invalidates_prior_context_and_ui(tmp_path: Path) -> None:
     runtime = ExtensionRuntime(ui=RecordingUiBridge())
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "old"))
+    api = _register_inline_extension(runtime, "old")
     runtime.bind(RecordingSession(tmp_path))
     context = api.context
     ui = context.ui
@@ -1918,7 +1998,7 @@ async def test_reload_invalidates_old_instance_and_new_instance_works(
         _session_config(tmp_path, provider, extension_body=API_CAPTURING_EXTENSION)
     )
     old_module = _loaded_extension_module("integration")
-    old_api = cast(ExtensionAPI, old_module.APIS[-1])  # type: ignore[attr-defined]
+    old_api = cast(ExtensionAPI, _module_values(old_module, "APIS")[-1])
     assert old_api.context.cwd == session.cwd
 
     await session.reload()
@@ -1929,7 +2009,7 @@ async def test_reload_invalidates_old_instance_and_new_instance_works(
         _ = old_api.context
 
     new_module = _loaded_extension_module("integration")
-    new_api = cast(ExtensionAPI, new_module.APIS[-1])  # type: ignore[attr-defined]
+    new_api = cast(ExtensionAPI, _module_values(new_module, "APIS")[-1])
     assert new_api is not old_api
     assert new_api.context.cwd == session.cwd
     new_api.send_user_message("fresh")  # the reloaded instance works normally
@@ -1955,7 +2035,7 @@ async def test_failed_resource_reload_does_not_emit_extension_shutdown(tmp_path:
     with pytest.raises(ResourceError, match="Could not read replacement system prompt file"):
         await session.reload()
 
-    assert module.EVENTS == []  # type: ignore[attr-defined]
+    assert _module_values(module, "EVENTS") == []
 
 
 async def test_reload_awaits_shutdown_before_invalidation_and_starts_new_generation(
@@ -1980,14 +2060,18 @@ async def test_reload_awaits_shutdown_before_invalidation_and_starts_new_generat
     old_module = _loaded_extension_module("integration")
 
     await session.emit_pending_session_start()
-    assert old_module.EVENTS == [("start", "startup", "integration")]  # type: ignore[attr-defined]
+    assert _module_values(old_module, "EVENTS") == [("start", "startup", "integration")]
 
     await session.reload()
 
     # The outgoing async shutdown completed while its API was active.
-    assert old_module.EVENTS[-1] == ("stop", "reload", "integration")  # type: ignore[attr-defined]
+    assert _module_values(old_module, "EVENTS")[-1] == (
+        "stop",
+        "reload",
+        "integration",
+    )
     new_module = _loaded_extension_module("integration")
-    assert new_module.EVENTS == [("start", "reload", "integration")]  # type: ignore[attr-defined]
+    assert _module_values(new_module, "EVENTS") == [("start", "reload", "integration")]
     assert ui.calls[-2:] == [
         ("clear_components", (), {}),
         ("set_slot_widget", ("status",), {"placement": "above_prompt"}),
@@ -2010,12 +2094,12 @@ async def test_session_replacement_rebuilds_and_invalidates_source_extensions(
     config = dataclass_replace(config, session_manager=manager, session_id=record.id)
     session = await CodingSession.load(config)
     module = _loaded_extension_module("integration")
-    api = cast(ExtensionAPI, module.APIS[-1])  # type: ignore[attr-defined]
+    api = cast(ExtensionAPI, _module_values(module, "APIS")[-1])
 
     await session.new_session()
 
     new_module = _loaded_extension_module("integration")
-    new_api = cast(ExtensionAPI, new_module.APIS[-1])  # type: ignore[attr-defined]
+    new_api = cast(ExtensionAPI, _module_values(new_module, "APIS")[-1])
     with pytest.raises(ExtensionError, match="stale after reload"):
         _ = api.context
     assert new_api.context.session_id == session.session_id
@@ -2027,7 +2111,7 @@ async def test_inflight_handler_touching_stale_api_records_diagnostic(
     import asyncio
 
     runtime = ExtensionRuntime()
-    api = cast(ExtensionAPI, _register_inline_extension(runtime, "background"))
+    api = _register_inline_extension(runtime, "background")
     runtime.bind(RecordingSession(tmp_path))
     release = asyncio.Event()
 
@@ -2054,7 +2138,7 @@ async def test_inflight_handler_touching_stale_api_records_diagnostic(
 
 
 def _inline_api(runtime: ExtensionRuntime, name: str) -> ExtensionAPI:
-    return cast(ExtensionAPI, _register_inline_extension(runtime, name))
+    return _register_inline_extension(runtime, name)
 
 
 def test_render_custom_message_uses_registered_renderer(tmp_path: Path) -> None:
@@ -2127,11 +2211,21 @@ def test_render_custom_message_reports_failure_once_per_custom_type(tmp_path: Pa
 # -- tool-call renderers --------------------------------------------------------
 
 
-async def _idle_executor(tool_call_id, arguments, signal=None, on_update=None):  # noqa: ANN001, ANN202
-    return AgentToolResult(content="")
+async def _idle_executor(
+    tool_call_id: str,
+    arguments: Mapping[str, JSONValue],
+    signal: ToolCancellationToken | None = None,
+    on_update: ToolUpdateCallback | None = None,
+) -> AgentToolResult:
+    del tool_call_id, arguments, signal, on_update
+    return _agent_tool_result("")
 
 
-def _renderable_tool(name: str, render_call=None, render_result=None) -> AgentTool:  # noqa: ANN001
+def _renderable_tool(
+    name: str,
+    render_call: ToolCallRenderer | None = None,
+    render_result: ToolResultRenderer | None = None,
+) -> AgentTool:
     return AgentTool(
         name=name,
         label=name,
@@ -2148,7 +2242,7 @@ def test_render_tool_call_uses_tool_renderer(tmp_path: Path) -> None:
     api = _inline_api(runtime, "subagents")
     seen: list[dict[str, JSONValue]] = []
 
-    def render(arguments) -> str:  # noqa: ANN001
+    def render(arguments: Mapping[str, JSONValue]) -> str:
         seen.append(dict(arguments))
         return f"▸ agent · {arguments.get('description')}"
 
@@ -2173,7 +2267,7 @@ def test_render_tool_call_swallows_errors_and_reports_once(tmp_path: Path) -> No
     runtime = ExtensionRuntime()
     api = _inline_api(runtime, "boom")
 
-    def render(arguments) -> str:  # noqa: ANN001
+    def render(arguments: Mapping[str, JSONValue]) -> str:
         raise RuntimeError("renderer exploded")
 
     api.register_tool(_renderable_tool("boom-tool", render))
@@ -2188,15 +2282,15 @@ def test_render_tool_call_swallows_errors_and_reports_once(tmp_path: Path) -> No
 def test_render_tool_call_rejects_non_string_result(tmp_path: Path) -> None:
     runtime = ExtensionRuntime()
     api = _inline_api(runtime, "subagents")
-    api.register_tool(_renderable_tool("agent", lambda arguments: 42))
+    api.register_tool(_renderable_tool("agent", cast(ToolCallRenderer, lambda arguments: 42)))
 
     assert runtime.render_tool_call("agent", {}) is None
     assert any("render_call:agent" in d.message for d in runtime.diagnostics)
 
 
 def _tool_result(name: str, *, ok: bool = True) -> AgentToolResult:
-    return AgentToolResult(
-        content="raw result",
+    return _agent_tool_result(
+        "raw result",
         details={"description": "Summarize codebase"},
     )
 
@@ -2206,7 +2300,8 @@ def test_render_tool_result_uses_tool_renderer(tmp_path: Path) -> None:
     api = _inline_api(runtime, "subagents")
     seen: list[tuple[str, bool]] = []
 
-    def render(result, *, expanded) -> str:  # noqa: ANN001
+    def render(result: AgentToolResult, *, expanded: bool) -> str:
+        assert isinstance(result.details, dict)
         seen.append((str(result.details["description"]), expanded))
         return "✓ completed · 3 tool uses"
 
@@ -2233,7 +2328,7 @@ def test_render_tool_result_swallows_errors_and_reports_once(tmp_path: Path) -> 
     runtime = ExtensionRuntime()
     api = _inline_api(runtime, "boom")
 
-    def render(result, *, expanded) -> str:  # noqa: ANN001
+    def render(result: AgentToolResult, *, expanded: bool) -> str:
         raise RuntimeError("renderer exploded")
 
     api.register_tool(_renderable_tool("boom-tool", render_result=render))
@@ -2248,7 +2343,12 @@ def test_render_tool_result_swallows_errors_and_reports_once(tmp_path: Path) -> 
 def test_render_tool_result_rejects_non_string_result(tmp_path: Path) -> None:
     runtime = ExtensionRuntime()
     api = _inline_api(runtime, "subagents")
-    api.register_tool(_renderable_tool("agent", render_result=lambda result, *, expanded: 42))
+    api.register_tool(
+        _renderable_tool(
+            "agent",
+            render_result=cast(ToolResultRenderer, lambda result, *, expanded: 42),
+        )
+    )
 
     assert runtime.render_tool_result("agent", _tool_result("agent"), False) is None
     assert any("render_result:agent" in d.message for d in runtime.diagnostics)
@@ -2260,10 +2360,10 @@ def test_render_tool_result_failures_do_not_shadow_render_call(tmp_path: Path) -
     runtime = ExtensionRuntime()
     api = _inline_api(runtime, "boom")
 
-    def bad_call(arguments) -> str:  # noqa: ANN001
+    def bad_call(arguments: Mapping[str, JSONValue]) -> str:
         raise RuntimeError("call renderer exploded")
 
-    def bad_result(result, *, expanded) -> str:  # noqa: ANN001
+    def bad_result(result: AgentToolResult, *, expanded: bool) -> str:
         raise RuntimeError("result renderer exploded")
 
     api.register_tool(_renderable_tool("agent", render_call=bad_call, render_result=bad_result))
@@ -2280,7 +2380,7 @@ def test_render_custom_message_rejects_non_string_result(tmp_path: Path) -> None
     # A renderer that returns a non-string (e.g. a widget) must not reach the UI.
     api.register_message_renderer(
         "wrong",
-        cast("object", lambda view, options: 123),  # type: ignore[arg-type]
+        cast(MessageRenderer, lambda view, options: 123),
     )
 
     assert runtime.render_custom_message("wrong", "raw", None, False) is None
@@ -2353,6 +2453,12 @@ def test_send_custom_message_without_trigger_turn_queues(tmp_path: Path) -> None
     api.send_custom_message("body", custom_type="c", trigger_turn=False)
 
     assert session.queued_custom == [("body", "c", None)]
+
+
+def _module_values(module: object, name: str) -> list[object]:
+    values = getattr(module, name)
+    assert isinstance(values, list)
+    return values
 
 
 def _loaded_extension_module(name: str) -> object:
