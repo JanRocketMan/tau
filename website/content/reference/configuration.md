@@ -374,6 +374,7 @@ The built-in frontend reads optional settings from `~/.tau/tui.json`:
     "cancel": "escape",
     "command_palette": "ctrl+k",
     "session_picker": "ctrl+r",
+    "open_context": "ctrl+l",
     "queue_follow_up": "alt+enter",
     "accept_completion": "tab",
     "completion_next": "down",

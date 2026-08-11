@@ -22,7 +22,7 @@ from tau_agent.harness import (
     QueuedMessages,
     SimpleCancellationToken,
 )
-from tau_agent.loop import run_agent_loop
+from tau_agent.loop import provider_context_messages, run_agent_loop
 from tau_agent.messages import (
     AgentMessage,
     AssistantMessage,
@@ -119,5 +119,6 @@ __all__ = [
     "UserMessage",
     "content_text",
     "message_text",
+    "provider_context_messages",
     "run_agent_loop",
 ]

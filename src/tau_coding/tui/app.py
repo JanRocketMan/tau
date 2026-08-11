@@ -18,7 +18,7 @@ from rich.console import Console, Group
 from rich.style import Style
 from rich.text import Text
 from textual import events, on
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding, BindingsMap
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
@@ -89,6 +89,7 @@ from tau_coding.extensions.api import (
     SlotWidgetContent,
     SlotWidgetFactory,
 )
+from tau_coding.model_context import format_model_context
 from tau_coding.oauth import login_openai_codex
 from tau_coding.oauth_registry import get_oauth_provider, oauth_provider_ids
 from tau_coding.oauth_types import (
@@ -150,6 +151,7 @@ from tau_coding.tui.config import (
     load_tui_settings,
     save_tui_settings,
 )
+from tau_coding.tui.external_editor import ExternalEditorError, open_text_in_editor
 from tau_coding.tui.file_drop import normalize_dropped_paths
 from tau_coding.tui.project_trust import ProjectTrustScreen, prompt_project_trust
 from tau_coding.tui.state import TuiState, format_terminal_command_result_block
@@ -453,6 +455,8 @@ class CompletionActionTarget(Protocol):
 
     def action_open_session_picker(self) -> None: ...
 
+    def action_open_context(self) -> None: ...
+
     def action_cycle_thinking(self) -> None: ...
 
     def action_cycle_model(self) -> None: ...
@@ -572,6 +576,10 @@ class PromptInput(TextArea):
     def action_open_session_picker(self) -> None:
         """Open the app-level session picker."""
         self._completion_target().action_open_session_picker()
+
+    def action_open_context(self) -> None:
+        """Open the active model context through the app-level action."""
+        self._completion_target().action_open_context()
 
     def action_cycle_thinking(self) -> None:
         """Cycle the app-level thinking mode."""
@@ -752,6 +760,9 @@ class PromptInput(TextArea):
         elif event.key == keybindings.session_picker:
             event.stop()
             self._completion_target().action_open_session_picker()
+        elif event.key == keybindings.open_context:
+            event.stop()
+            self._completion_target().action_open_context()
         elif _is_thinking_cycle_key(event.key, keybindings.thinking_cycle):
             event.stop()
             self._completion_target().action_cycle_thinking()
@@ -3809,6 +3820,17 @@ class TauTuiApp(App[None]):
                     command = replace(command, message=format_reload_summary(summary))
             if command.new_session_requested:
                 await self._new_session()
+            if command.context_editor_requested:
+                if self._is_agent_or_queue_active():
+                    prompt.text = raw_text
+                    prompt.move_cursor(_text_end_location(raw_text))
+                    self._notify(
+                        "Wait for the current agent turn and queued messages to finish before "
+                        "opening context.",
+                        severity="warning",
+                    )
+                    return
+                self.action_open_context()
             if command.compact_summary is not None:
                 if self._is_compaction_active():
                     self._notify("A compaction is already running.", severity="warning")
@@ -5038,6 +5060,20 @@ class TauTuiApp(App[None]):
             callback=self._handle_session_picker_result,
         )
 
+    def action_open_context(self) -> None:
+        """Open a snapshot of the active model context in an external editor."""
+        if self._is_agent_or_queue_active():
+            self._notify(
+                "Wait for the current agent turn and queued messages to finish before "
+                "opening context.",
+                severity="warning",
+            )
+            return
+        try:
+            self._open_model_context_in_editor()
+        except (ExternalEditorError, SuspendNotSupported) as exc:
+            self._notify(f"Could not open model context: {exc}", severity="error")
+
     def _open_prompt_template_picker(self) -> None:
         self.push_screen(
             PromptTemplatePickerScreen(self.session.prompt_templates),
@@ -5239,6 +5275,19 @@ class TauTuiApp(App[None]):
                 auto_copy_selection=command_text.strip().split(maxsplit=1)[0] == "/session",
             )
         )
+
+    def _open_model_context_in_editor(self) -> None:
+        """Suspend Textual and open a temporary active-context snapshot."""
+        context = format_model_context(
+            system=self.session.system_prompt,
+            messages=self.session.messages,
+            tools=self.session.tools,
+            total_tokens=self.session.context_token_estimate,
+            cwd=self.session.cwd,
+            context_files=self.session.context_files,
+        )
+        with self.suspend():
+            open_text_in_editor(context, cwd=self.session.cwd)
 
     def _open_login_picker(self) -> None:
         self.push_screen(
@@ -6398,6 +6447,7 @@ def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
         Binding(keybindings.cancel, "cancel", "Cancel"),
         Binding(keybindings.command_palette, "open_command_palette", "Commands"),
         Binding(keybindings.session_picker, "open_session_picker", "Sessions"),
+        Binding(keybindings.open_context, "open_context", "Context"),
         Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking"),
         Binding(keybindings.model_cycle, "cycle_model", "Model"),
         Binding(
@@ -6482,6 +6532,7 @@ def _prompt_bindings(
         Binding("shift+enter", "insert_newline", "Newline", priority=True),
         Binding(keybindings.command_palette, "open_command_palette", "Commands", priority=True),
         Binding(keybindings.session_picker, "open_session_picker", "Sessions", priority=True),
+        Binding(keybindings.open_context, "open_context", "Context", priority=True),
         Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking", priority=True),
         Binding(keybindings.model_cycle, "cycle_model", "Model", priority=True),
         Binding(
@@ -6504,6 +6555,7 @@ def _hidden_prompt_bindings(
     candidates = (
         (keybindings.command_palette, "open_command_palette"),
         (keybindings.session_picker, "open_session_picker"),
+        (keybindings.open_context, "open_context"),
         (keybindings.queue_follow_up, "submit_follow_up"),
         (keybindings.thinking_cycle, "cycle_thinking"),
         (keybindings.model_cycle, "cycle_model"),

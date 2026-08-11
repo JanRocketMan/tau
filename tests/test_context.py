@@ -1,8 +1,18 @@
 from pathlib import Path
 
-from tau_coding.context import discover_project_context
+from tau_coding.context import discover_project_context, find_repository_root
 from tau_coding.paths import TauPaths
 from tau_coding.resources import TauResourcePaths
+
+
+def test_find_repository_root_prefers_vcs_over_nested_package(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    package = repository / "packages" / "demo"
+    package.mkdir(parents=True)
+    (repository / ".git").mkdir()
+    (package / "pyproject.toml").write_text("[project]", encoding="utf-8")
+
+    assert find_repository_root(package) == repository
 
 
 def test_discovers_user_project_and_agents_context_files(tmp_path: Path) -> None:

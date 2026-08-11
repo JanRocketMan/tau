@@ -39,6 +39,18 @@ This active count is not a cumulative billing total. It describes only what Tau
 expects to send next, so it can decrease after compaction even though the
 provider has processed more tokens over the life of the session.
 
+Run `/context` or press **Ctrl+L** while the agent is idle to inspect a temporary
+Markdown snapshot of that active context in your default editor. Below the total,
+the `Usage:` line
+estimates tokens for System content and tool schemas, User instruction files
+outside the repository, Project instruction files inside it, user Input, Tools
+output, and assistant Out. `Out` includes assistant text, thinking, and tool
+calls. Every count uses K units and rounds to the nearest whole K. Values below
+200 tokens display as `0K`; values from 200 through 999 tokens display as `1K`.
+The file then shows the system prompt, tool schemas, and active messages after
+compaction or branch selection.
+Editing the file does not change the session
+
 ## Automatic compaction
 
 By default, Tau compacts automatically when the estimate gets close to the

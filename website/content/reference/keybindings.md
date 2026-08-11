@@ -24,6 +24,7 @@ These are the default keys in the interactive [TUI]({{< relref "../guides/tui.md
 | --- | --- |
 | `Ctrl+K` | Open the command palette |
 | `Ctrl+R` | Open the session picker |
+| `Ctrl+L` | Open the active model context in the default editor |
 | `Tab` | Accept the highlighted completion |
 | `Down` / `Up` | Move through completions |
 

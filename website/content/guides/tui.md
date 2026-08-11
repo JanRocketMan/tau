@@ -55,6 +55,7 @@ In-session commands start with `/`. Open the **command palette** with **Ctrl+K**
 to search and run them. Common ones:
 
 - `/session` — show model, tools, skills, and context usage for the session. Text selected in this modal is copied to the clipboard automatically.
+- `/context` - open the active model context in `$VISUAL`, `$EDITOR`, or the platform fallback editor. **Ctrl+L** opens it directly
 - `/model` — pick the active model
 - `/tools` — search active tools by origin and open their full descriptions
 - `/compact` — summarize and shrink the context

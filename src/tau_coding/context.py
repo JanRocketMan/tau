@@ -7,7 +7,8 @@ from pathlib import Path
 from tau_coding.resources import ResourceDiagnostic, TauResourcePaths
 from tau_coding.system_prompt import ProjectContextFile
 
-PROJECT_MARKERS = (".git", "pyproject.toml", "uv.lock", "setup.py", "package.json")
+VCS_MARKERS = (".git", ".jj")
+PROJECT_MARKERS = (*VCS_MARKERS, "pyproject.toml", "uv.lock", "setup.py", "package.json")
 
 
 def discover_project_context(
@@ -70,6 +71,16 @@ def _context_file_candidates(paths: TauResourcePaths) -> tuple[Path, ...]:
 
     existing = [path for path in candidates if path.is_file()]
     return tuple(_dedupe_resolved_paths(existing))
+
+
+def find_repository_root(cwd: Path) -> Path:
+    """Return the VCS root, or the nearest project root when no VCS marker exists."""
+    resolved_cwd = cwd.expanduser().resolve()
+    candidates = (resolved_cwd, *resolved_cwd.parents)
+    for path in candidates:
+        if any((path / marker).exists() for marker in VCS_MARKERS):
+            return path
+    return _find_project_root(resolved_cwd)
 
 
 def _find_project_root(cwd: Path) -> Path:

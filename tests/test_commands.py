@@ -131,6 +131,7 @@ def test_registered_commands_are_pi_aligned(tmp_path: Path) -> None:
 
     assert [command.name for command in commands] == [
         "compact",
+        "context",
         "effort",
         "export",
         "hotkeys",
@@ -172,6 +173,18 @@ def test_system_command_returns_active_prompt(tmp_path: Path) -> None:
     assert result.handled is True
     assert result.message == "You are Tau.\nFollow project instructions."
     assert registry.execute(session, "/system extra").message == "Usage: /system"
+
+
+def test_context_command_requests_external_editor(tmp_path: Path) -> None:
+    registry = create_default_command_registry()
+    session = FakeSession(tmp_path)
+
+    result = registry.execute(session, "/context")
+
+    assert result.handled is True
+    assert result.context_editor_requested is True
+    assert result.message is None
+    assert registry.execute(session, "/context extra").message == "Usage: /context"
 
 
 def test_quit_and_new_return_control_flags(tmp_path: Path) -> None:
@@ -307,6 +320,7 @@ def test_hotkeys_command_lists_common_tui_shortcuts(tmp_path: Path) -> None:
     assert "Common keyboard shortcuts:" in result.message
     assert "Ctrl+K: open slash-command completions" in result.message
     assert "Ctrl+R: open session picker" in result.message
+    assert "Ctrl+L: open active model context" in result.message
     assert "Shift+Tab: cycle thinking mode" in result.message
 
 
@@ -415,7 +429,7 @@ def test_non_pi_commands_are_not_registered(tmp_path: Path) -> None:
     registry = create_default_command_registry()
     session = FakeSession(tmp_path)
 
-    for command in ("/provider", "/resources", "/context", "/help"):
+    for command in ("/provider", "/resources", "/help"):
         result = registry.execute(session, command)
         assert result.handled is False
         assert result.message is None

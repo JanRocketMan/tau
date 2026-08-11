@@ -305,6 +305,8 @@ class FakeSession:
             )
         if text == "/system":
             return CommandResult(handled=True, message=self.system_prompt)
+        if text == "/context":
+            return CommandResult(handled=True, context_editor_requested=True)
         if text == "/skills":
             return CommandResult(handled=True, skills_picker_requested=True)
         if text == "/new":
@@ -2421,6 +2423,7 @@ async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
             "Submit": "enter",
             "Newline": "shift+enter",
             "Sessions": "ctrl+r",
+            "Context": "ctrl+l",
             "Thinking": "shift+tab",
             "Model": "ctrl+p",
             "Cancel": "escape",
@@ -4130,6 +4133,76 @@ async def test_tui_app_export_command_runs_session_export() -> None:
             text="/export\nExported session to /workspace/project/session.html",
         )
         assert session.prompt_texts == []
+
+
+@pytest.mark.anyio
+async def test_tui_app_context_command_opens_external_editor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession(messages=[UserMessage(content="Earlier")])
+    app = _tui_app(session)
+    opened = 0
+
+    def fake_open() -> None:
+        nonlocal opened
+        opened += 1
+
+    monkeypatch.setattr(app, "_open_model_context_in_editor", fake_open)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "/context"
+        await pilot.press("enter")
+
+        assert opened == 1
+        assert session.prompt_texts == []
+        assert app.state.items == [ChatItem(role="user", text="Earlier")]
+
+
+@pytest.mark.anyio
+async def test_tui_app_context_hotkey_opens_external_editor_without_clearing_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _tui_app(FakeSession(messages=[UserMessage(content="Earlier")]))
+    opened = 0
+
+    def fake_open() -> None:
+        nonlocal opened
+        opened += 1
+
+    monkeypatch.setattr(app, "_open_model_context_in_editor", fake_open)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "draft prompt"
+        await pilot.press("ctrl+l")
+
+        assert opened == 1
+        assert prompt.value == "draft prompt"
+
+
+@pytest.mark.anyio
+async def test_tui_app_uses_configured_context_keybinding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _tui_app(
+        FakeSession(),
+        tui_settings=TuiSettings(keybindings=TuiKeybindings(open_context="f7")),
+    )
+    opened = 0
+
+    def fake_open() -> None:
+        nonlocal opened
+        opened += 1
+
+    monkeypatch.setattr(app, "_open_model_context_in_editor", fake_open)
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+l")
+        assert opened == 0
+
+        await pilot.press("f7")
+        assert opened == 1
 
 
 @pytest.mark.anyio

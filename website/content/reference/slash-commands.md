@@ -12,6 +12,7 @@ command palette with **Ctrl+K**.
 | `/new` | Start a new session |
 | `/session` | Show session info and stats (model, cwd, tools, skills, context) |
 | `/system` | Show the active system prompt without adding it to context or session history |
+| `/context` | Open a temporary snapshot of the active model context in the default editor |
 | `/compact [instructions]` | Summarize and compact the active context |
 | `/export [--format html\|jsonl] [dest]` | Export the current session |
 | `/resume [session-id]` | Resume a previous session, or open the picker |
@@ -43,6 +44,31 @@ the named skill into your prompt and runs it as a turn. Its optional request may
 start on the same line or on following lines. See
 [Skills & prompt templates]({{< relref "../guides/skills-and-prompts.md" >}}).
 {{% /note %}}
+
+`/context` and its **Ctrl+L** shortcut use `$VISUAL`, then `$EDITOR`, with `vi`
+as the Unix fallback and Notepad as the Windows fallback. The temporary Markdown
+file starts with the
+best available total token count and an estimated `Usage:` breakdown for System,
+User, Project, Input, Tools, and Out. `System` combines the base system estimate
+with active tool schemas. `User` counts active instruction-file contents outside
+the current repository. `Project` counts those inside the repository. Generated
+instruction wrappers remain part of `System`. `Input` counts active provider
+input messages other than tool results. `Tools` counts tool-result messages.
+`Out` counts assistant text, thinking, and tool calls. All counts use K units and
+round to the nearest whole K. Values below 200 tokens display as `0K`; values
+from 200 through 999 tokens display as `1K`. The rest of the file shows the
+system prompt, tool definitions, and active compacted messages. It is
+a snapshot: edits are discarded and do not enter session history or change later
+model requests. Wait for the editor to close to return to Tau. For a graphical
+editor, configure its wait option when needed, for example
+`EDITOR="code --wait"`
+
+The snapshot includes stored assistant thinking blocks when present. Tau replays
+those blocks as reasoning content for some Chat Completions providers. Responses
+API providers can instead replay signed or encrypted reasoning metadata, so the
+exact wire representation remains provider-specific. A provider-anchored
+`Total` can differ from the estimated category sum because providers do not
+report token use by source
 
 Only registered commands are consumed locally. Other slash-prefixed input, including
 absolute paths such as `/tmp` or `/Users/me/file.png`, is sent to the model as a normal

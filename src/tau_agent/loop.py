@@ -115,7 +115,7 @@ async def run_agent_loop(
                 provider=provider,
                 model=model,
                 system=system,
-                messages=_provider_context(messages),
+                messages=provider_context_messages(messages),
                 tools=tools,
                 signal=signal,
                 session_id=session_id,
@@ -170,7 +170,7 @@ async def run_agent_loop(
     yield AgentEndEvent(messages=new_messages)
 
 
-def _provider_context(messages: list[AgentMessage]) -> list[AgentMessage]:
+def provider_context_messages(messages: Sequence[AgentMessage]) -> list[AgentMessage]:
     """Return replayable messages while retaining failures in durable history.
 
     Providers cannot consistently accept an assistant turn with no content. Tau

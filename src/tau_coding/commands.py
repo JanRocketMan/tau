@@ -102,6 +102,7 @@ class CommandResult:
     reload_requested: bool = False
     new_session_requested: bool = False
     compact_summary: str | None = None
+    context_editor_requested: bool = False
     export_requested: bool = False
     export_destination: Path | None = None
     export_format: str | None = None
@@ -233,6 +234,15 @@ def create_default_command_registry() -> CommandRegistry:
             usage="/compact [instructions]",
             description="Summarize and compact active context.",
             handler=_compact_command,
+        )
+    )
+    registry.register(
+        SlashCommand(
+            name="context",
+            usage="/context",
+            description="Open the active model context in your editor.",
+            handler=_context_command,
+            search_terms=("tokens", "prompt", "messages"),
         )
     )
     registry.register(
@@ -514,6 +524,7 @@ def _hotkeys_command(context: CommandContext) -> CommandResult:
         "- Esc: cancel active run",
         "- Ctrl+K: open slash-command completions",
         "- Ctrl+R: open session picker",
+        "- Ctrl+L: open active model context",
         "- Shift+Tab: cycle thinking mode",
         "- Ctrl+T: toggle thinking tokens",
         "- Ctrl+O: collapse or expand tool output",
@@ -551,20 +562,9 @@ def _reload_command(context: CommandContext) -> CommandResult:
 
 
 def _context_command(context: CommandContext) -> CommandResult:
-    session = context.session
-    if not session.context_files:
-        lines = ["No project context files loaded."]
-        if session.resource_diagnostics:
-            lines.append("")
-            lines.extend(_format_diagnostics(session.resource_diagnostics, kind="context"))
-        return CommandResult(handled=True, message="\n".join(lines))
-
-    lines = ["Active project context files:"]
-    lines.extend(f"- {context_file.path}" for context_file in session.context_files)
-    if session.resource_diagnostics:
-        lines.append("")
-        lines.extend(_format_diagnostics(session.resource_diagnostics, kind="context"))
-    return CommandResult(handled=True, message="\n".join(lines))
+    if context.args:
+        return CommandResult(handled=True, message="Usage: /context")
+    return CommandResult(handled=True, context_editor_requested=True)
 
 
 def _skill_command(context: CommandContext) -> CommandResult:

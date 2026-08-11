@@ -55,6 +55,7 @@ class TuiKeybindings:
     cancel: str = "escape"
     command_palette: str = "ctrl+k"
     session_picker: str = "ctrl+r"
+    open_context: str = "ctrl+l"
     queue_follow_up: str = "alt+enter"
     accept_completion: str = "tab"
     completion_next: str = "down"
@@ -72,6 +73,7 @@ class TuiKeybindings:
             "cancel": self.cancel,
             "command_palette": self.command_palette,
             "session_picker": self.session_picker,
+            "open_context": self.open_context,
             "queue_follow_up": self.queue_follow_up,
             "accept_completion": self.accept_completion,
             "completion_next": self.completion_next,
