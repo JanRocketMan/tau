@@ -359,6 +359,55 @@ async def test_prompt_logs_error_event_diagnostic_data(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_prompt_logs_safe_transport_error_details(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    error = AssistantMessage(
+        stop_reason="error",
+        error_message=(
+            "openai-codex stream received no data for 600 seconds (ReadTimeout) after 3 attempts."
+        ),
+        diagnostics=[
+            AssistantMessageDiagnostic(
+                type="provider_error",
+                details={
+                    "attempts": 3,
+                    "error_type": "ReadTimeout",
+                    "phase": "response_stream",
+                    "stream_idle_timeout_seconds": 600,
+                    "error": "secret upstream detail",
+                },
+            )
+        ],
+    )
+    provider = FakeProvider([[AssistantErrorEvent(reason="error", error=error)]])
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="openai-codex",
+            session_id="session-1",
+            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    log_path = tau_paths.agent_calls_log_path
+    entry = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["error"]["provider"] == {
+        "attempts": 3,
+        "error_type": "ReadTimeout",
+        "phase": "response_stream",
+        "stream_idle_timeout_seconds": 600,
+    }
+    assert "secret upstream detail" not in log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
 async def test_prompt_logs_safe_provider_stream_error_details(tmp_path: Path) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")

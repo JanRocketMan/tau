@@ -146,6 +146,7 @@ docs_url = "http://localhost:11434/v1"
                         "default_model": "qwen",
                         "headers": {"X-Test": "yes"},
                         "timeout_seconds": 12.0,
+                        "stream_idle_timeout_seconds": 300.0,
                         "max_retries": 1,
                         "max_retry_delay_seconds": 0.5,
                         "thinking_defaults": {},
@@ -165,6 +166,7 @@ docs_url = "http://localhost:11434/v1"
     assert provider.default_model == "qwen"
     assert provider.headers == {"X-Test": "yes"}
     assert provider.timeout_seconds == 12.0
+    assert provider.stream_idle_timeout_seconds == 300.0
     assert settings.scoped_models == (ScopedModelConfig(provider="local", model="qwen"),)
 
 
@@ -265,6 +267,7 @@ def test_save_and_load_provider_settings_round_trip(
                 context_windows={"qwen": 64_000},
                 headers={"X-Test": "enabled"},
                 timeout_seconds=120,
+                stream_idle_timeout_seconds=900,
                 max_retries=2,
                 max_retry_delay_seconds=0.5,
             ),
@@ -731,6 +734,7 @@ def test_openai_compatible_config_from_provider_uses_configured_env_var(
     assert config.base_url == "http://localhost:11434/v1"
     assert config.headers == {}
     assert config.timeout_seconds == 60.0
+    assert config.stream_idle_timeout_seconds == 600.0
     assert config.max_retries == 2
     assert config.max_retry_delay_seconds == 1.0
     assert config.response_provider_header is None
@@ -764,6 +768,7 @@ def test_openai_compatible_config_from_provider_uses_configured_timeout(
         models=("qwen",),
         default_model="qwen",
         timeout_seconds=180,
+        stream_idle_timeout_seconds=1200,
         max_retries=3,
         max_retry_delay_seconds=0.25,
     )
@@ -771,6 +776,7 @@ def test_openai_compatible_config_from_provider_uses_configured_timeout(
     config = openai_compatible_config_from_provider(provider)
 
     assert config.timeout_seconds == 180
+    assert config.stream_idle_timeout_seconds == 1200
     assert config.max_retries == 3
     assert config.max_retry_delay_seconds == 0.25
 
@@ -1395,6 +1401,8 @@ def test_provider_settings_from_json_rejects_invalid_timeout() -> None:
 def test_openai_compatible_provider_config_rejects_invalid_timeout() -> None:
     with pytest.raises(ProviderConfigError, match="greater than 0"):
         OpenAICompatibleProviderConfig(name="local", timeout_seconds=0)
+    with pytest.raises(ProviderConfigError, match="stream_idle_timeout_seconds"):
+        OpenAICompatibleProviderConfig(name="local", stream_idle_timeout_seconds=0)
 
 
 def test_provider_settings_from_json_rejects_invalid_retries() -> None:

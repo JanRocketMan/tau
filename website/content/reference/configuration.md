@@ -240,6 +240,7 @@ Provider preferences live in `~/.tau/providers.json`:
       "headers": { "X-Provider-Header": "value" },
       "thinking_defaults": { "qwen-coder": "low" },
       "timeout_seconds": 120,
+      "stream_idle_timeout_seconds": 600,
       "max_retries": 2,
       "max_retry_delay_seconds": 0.5
     }
@@ -266,9 +267,12 @@ Provider preferences live in `~/.tau/providers.json`:
   automatic routing and pins the `x-inference-provider` reported by the first
   successful response. `/session` reports the route; `/route <provider>` selects
   one and `/route automatic` resets automatic resolution for the active session.
-  `timeout_seconds` defaults to `60` (> 0); `max_retries`
-  defaults to `2`; `max_retry_delay_seconds` defaults to `1` (both ≥ 0).
-  Retries cover transient HTTP statuses (`408`, `409`, `425`, `429`, `5xx`),
+  `timeout_seconds` defaults to `60` (> 0) for connection, request-write, and
+  connection-pool inactivity. `stream_idle_timeout_seconds` defaults to `600`
+  (> 0) and limits the interval between chunks on an established response
+  stream; it is not a total turn deadline, and heartbeat chunks reset it.
+  `max_retries` defaults to `2`; `max_retry_delay_seconds` defaults to `1`
+  (both ≥ 0). Retries cover transient HTTP statuses (`408`, `409`, `425`, `429`, `5xx`),
   transport errors, and transient in-stream SSE errors that arrive on an
   otherwise successful HTTP 200 response. Anthropic retries `api_error`,
   `overloaded_error`, and `rate_limit_error`; OpenAI Codex retries transient

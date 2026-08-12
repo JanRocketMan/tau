@@ -397,7 +397,8 @@ tau --provider local-gateway -p "summarize this project" # one-shot print mode
 Catalog TOML is for provider and model metadata. It does **not** accept runtime
 request options such as custom HTTP headers, timeouts, or retry settings. Put
 those in `~/.tau/providers.json` instead. Saved `providers.json` entries support
-`headers`, `timeout_seconds`, `max_retries`, and `max_retry_delay_seconds`. For
+`headers`, `timeout_seconds`, `stream_idle_timeout_seconds`, `max_retries`, and
+`max_retry_delay_seconds`. For
 the full JSON shape, the catalog TOML shape, and `thinking_levels` for custom
 models, see [Configuration]({{< relref "../reference/configuration.md#providers" >}}).
 
@@ -415,6 +416,7 @@ catalog, then add the header to the matching provider preference in
       "headers": { "X-HF-Bill-To": "my-org" },
       "thinking_defaults": { "openai/gpt-oss-120b": "low" },
       "timeout_seconds": 60,
+      "stream_idle_timeout_seconds": 600,
       "max_retries": 2,
       "max_retry_delay_seconds": 1
     }

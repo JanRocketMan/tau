@@ -49,7 +49,13 @@ from tau_ai.content import (
 )
 from tau_ai.env import OpenAICompatibleConfig
 from tau_ai.events import AssistantMessageEvent
-from tau_ai.http import create_async_client
+from tau_ai.http import (
+    aiter_with_cancellation,
+    create_async_client,
+    streaming_timeout,
+    transport_error_data,
+    transport_error_message,
+)
 from tau_ai.http_errors import provider_http_error_message
 from tau_ai.openai_cache import is_direct_openai_url, openai_prompt_cache_key
 from tau_ai.provider import CancellationToken
@@ -264,6 +270,7 @@ class OpenAICompatibleProvider:
             attempt = 0
             while True:
                 parser = parser_factory()
+                response_started = False
                 try:
                     async with client.stream(
                         "POST", request_url, json=payload, headers=headers
@@ -310,15 +317,15 @@ class OpenAICompatibleProvider:
                             )
                             return
 
+                        response_started = True
                         yield ProviderResponseStartEvent(
                             model=model,
                             response_provider=response_provider,
                         )
 
-                        async for line in response.aiter_lines():
-                            if signal is not None and signal.is_cancelled():
-                                return
-
+                        async for line in aiter_with_cancellation(
+                            response.aiter_lines(), signal=signal
+                        ):
                             event = _parse_sse_line(line)
                             if event is None:
                                 continue
@@ -329,6 +336,8 @@ class OpenAICompatibleProvider:
                             if stop:
                                 break
 
+                        if signal is not None and signal.is_cancelled():
+                            return
                         if parser.fatal:
                             return
                         final_events = parser.finalize()
@@ -345,6 +354,12 @@ class OpenAICompatibleProvider:
                             yield parser_event
                         return
                 except httpx.HTTPError as exc:
+                    error_data = transport_error_data(
+                        exc,
+                        attempts=attempt + 1,
+                        response_started=response_started,
+                        stream_idle_timeout_seconds=self._config.stream_idle_timeout_seconds,
+                    )
                     if not parser.emitted_content and self._should_retry(attempt):
                         delay = retry_delay_seconds(
                             attempt,
@@ -355,18 +370,21 @@ class OpenAICompatibleProvider:
                             max_retries=self._config.max_retries,
                             delay_seconds=delay,
                             reason="network error",
-                            data={
-                                "error": str(exc),
-                                "error_type": type(exc).__name__,
-                            },
+                            data=error_data,
                         )
                         attempt += 1
                         if not await wait_for_retry(delay, signal=signal):
                             return
                         continue
                     yield ProviderErrorEvent(
-                        message=str(exc),
-                        data={"attempts": attempt + 1},
+                        message=transport_error_message(
+                            exc,
+                            provider_name=self._config.provider_name,
+                            attempts=attempt + 1,
+                            response_started=response_started,
+                            stream_idle_timeout_seconds=self._config.stream_idle_timeout_seconds,
+                        ),
+                        data=error_data,
                     )
                     return
 
@@ -391,7 +409,12 @@ class OpenAICompatibleProvider:
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = create_async_client(timeout=self._config.timeout_seconds)
+            self._client = create_async_client(
+                timeout=streaming_timeout(
+                    timeout_seconds=self._config.timeout_seconds,
+                    stream_idle_timeout_seconds=self._config.stream_idle_timeout_seconds,
+                )
+            )
         return self._client
 
     def _should_retry(self, attempt: int, *, status_code: int | None = None) -> bool:

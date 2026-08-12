@@ -10,6 +10,7 @@ from tau_agent.types import JSONValue
 
 DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS = 60.0
+DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS = 600.0
 DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES = 2
 DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS = 1.0
 
@@ -44,6 +45,7 @@ class OpenAICompatibleConfig:
     base_url: str = DEFAULT_OPENAI_COMPATIBLE_BASE_URL
     headers: Mapping[str, str] | None = None
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
+    stream_idle_timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
     api: str = "openai-completions"

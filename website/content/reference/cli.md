@@ -111,7 +111,8 @@ Tau's setup mode registers an OpenAI-compatible provider. Put these flags before
 | `--model TEXT` | default model | Default model for the provider |
 | `--base-url TEXT` | OpenAI URL | OpenAI-compatible base URL |
 | `--api-key-env TEXT` | `OPENAI_API_KEY` | Env var holding the API key |
-| `--timeout-seconds FLOAT` | `60.0` | HTTP timeout |
+| `--timeout-seconds FLOAT` | `60.0` | Connect, write, and pool inactivity timeout |
+| `--stream-idle-timeout-seconds FLOAT` | `600.0` | Response-stream inactivity timeout |
 | `--max-retries INT` | `2` | Retry count for transient failures |
 | `--max-retry-delay-seconds FLOAT` | `1.0` | Delay between retries |
 | `--set-default / --no-set-default` | set-default | Make this the default provider |

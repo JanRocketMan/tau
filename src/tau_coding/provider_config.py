@@ -17,6 +17,7 @@ from tau_ai.env import (
     DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
     DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES,
     DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
+    DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
     OpenAICompatibleConfig,
 )
@@ -120,6 +121,7 @@ class OpenAICompatibleProviderConfig:
     compat: dict[str, Any] = field(default_factory=dict)
     model_metadata: dict[str, ProviderModelMetadata] = field(default_factory=dict)
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
+    stream_idle_timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
     thinking_levels: tuple[ThinkingLevel, ...] | None = None
@@ -132,6 +134,7 @@ class OpenAICompatibleProviderConfig:
     def __post_init__(self) -> None:
         _validate_provider_numbers(
             timeout_seconds=self.timeout_seconds,
+            stream_idle_timeout_seconds=self.stream_idle_timeout_seconds,
             max_retries=self.max_retries,
             max_retry_delay_seconds=self.max_retry_delay_seconds,
         )
@@ -165,6 +168,7 @@ class OpenAICompatibleProviderConfig:
                 model: metadata.to_json() for model, metadata in self.model_metadata.items()
             },
             "timeout_seconds": self.timeout_seconds,
+            "stream_idle_timeout_seconds": self.stream_idle_timeout_seconds,
             "max_retries": self.max_retries,
             "max_retry_delay_seconds": self.max_retry_delay_seconds,
             "thinking_levels": (
@@ -199,6 +203,7 @@ class OpenAICodexProviderConfig:
     headers: dict[str, str] = field(default_factory=dict)
     model_metadata: dict[str, ProviderModelMetadata] = field(default_factory=dict)
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
+    stream_idle_timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
     thinking_levels: tuple[ThinkingLevel, ...] | None = None
@@ -210,6 +215,7 @@ class OpenAICodexProviderConfig:
     def __post_init__(self) -> None:
         _validate_provider_numbers(
             timeout_seconds=self.timeout_seconds,
+            stream_idle_timeout_seconds=self.stream_idle_timeout_seconds,
             max_retries=self.max_retries,
             max_retry_delay_seconds=self.max_retry_delay_seconds,
         )
@@ -239,6 +245,7 @@ class OpenAICodexProviderConfig:
                 model: metadata.to_json() for model, metadata in self.model_metadata.items()
             },
             "timeout_seconds": self.timeout_seconds,
+            "stream_idle_timeout_seconds": self.stream_idle_timeout_seconds,
             "max_retries": self.max_retries,
             "max_retry_delay_seconds": self.max_retry_delay_seconds,
             "thinking_levels": (
@@ -755,6 +762,7 @@ def _merge_provider_config(existing: ProviderConfig, incoming: ProviderConfig) -
             ),
             headers={**incoming.headers, **existing.headers},
             timeout_seconds=existing.timeout_seconds,
+            stream_idle_timeout_seconds=existing.stream_idle_timeout_seconds,
             max_retries=existing.max_retries,
             max_retry_delay_seconds=existing.max_retry_delay_seconds,
             context_windows={**incoming.context_windows, **existing.context_windows},
@@ -811,6 +819,7 @@ def _merge_openai_compatible_provider(
             existing.model_metadata,
         ),
         timeout_seconds=existing.timeout_seconds,
+        stream_idle_timeout_seconds=existing.stream_idle_timeout_seconds,
         max_retries=existing.max_retries,
         max_retry_delay_seconds=existing.max_retry_delay_seconds,
         context_windows={**incoming.context_windows, **existing.context_windows},
@@ -902,6 +911,7 @@ def _provider_preference_to_json(provider: ProviderConfig) -> dict[str, Any]:
         "default_model": provider.default_model,
         "headers": dict(provider.headers),
         "timeout_seconds": provider.timeout_seconds,
+        "stream_idle_timeout_seconds": provider.stream_idle_timeout_seconds,
         "max_retries": provider.max_retries,
         "max_retry_delay_seconds": provider.max_retry_delay_seconds,
         "thinking_defaults": dict(provider.thinking_defaults),
@@ -1124,6 +1134,14 @@ def _apply_provider_preference(
         if "timeout_seconds" in value
         else provider.timeout_seconds
     )
+    stream_idle_timeout_seconds = (
+        _positive_float(
+            value.get("stream_idle_timeout_seconds"),
+            f"provider_preferences.{provider.name}.stream_idle_timeout_seconds",
+        )
+        if "stream_idle_timeout_seconds" in value
+        else provider.stream_idle_timeout_seconds
+    )
     max_retries = (
         _non_negative_int(
             value.get("max_retries"),
@@ -1165,6 +1183,7 @@ def _apply_provider_preference(
             default_model=default_model,
             headers=headers,
             timeout_seconds=timeout_seconds,
+            stream_idle_timeout_seconds=stream_idle_timeout_seconds,
             max_retries=max_retries,
             max_retry_delay_seconds=max_retry_delay_seconds,
             thinking_defaults=thinking_defaults,
@@ -1175,6 +1194,7 @@ def _apply_provider_preference(
         default_model=default_model,
         headers=headers,
         timeout_seconds=timeout_seconds,
+        stream_idle_timeout_seconds=stream_idle_timeout_seconds,
         max_retries=max_retries,
         max_retry_delay_seconds=max_retry_delay_seconds,
         thinking_defaults=thinking_defaults,
@@ -1521,6 +1541,7 @@ def openai_compatible_config_from_provider(
         base_url=base_url.rstrip("/"),
         headers=_model_headers(provider, selected_model),
         timeout_seconds=provider.timeout_seconds,
+        stream_idle_timeout_seconds=provider.stream_idle_timeout_seconds,
         max_retries=provider.max_retries,
         max_retry_delay_seconds=provider.max_retry_delay_seconds,
         supports_images=provider_model_supports_images(provider, selected_model),
@@ -1674,6 +1695,13 @@ def _provider_from_json(data: object) -> ProviderConfig:
         data.get("timeout_seconds", DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS),
         f"providers[{name}].timeout_seconds",
     )
+    stream_idle_timeout_seconds = _positive_float(
+        data.get(
+            "stream_idle_timeout_seconds",
+            DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
+        ),
+        f"providers[{name}].stream_idle_timeout_seconds",
+    )
     max_retries = _non_negative_int(
         data.get("max_retries", DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES),
         f"providers[{name}].max_retries",
@@ -1715,6 +1743,7 @@ def _provider_from_json(data: object) -> ProviderConfig:
             headers=headers,
             model_metadata=model_metadata,
             timeout_seconds=timeout_seconds,
+            stream_idle_timeout_seconds=stream_idle_timeout_seconds,
             max_retries=max_retries,
             max_retry_delay_seconds=max_retry_delay_seconds,
             thinking_levels=thinking_levels,
@@ -1736,6 +1765,7 @@ def _provider_from_json(data: object) -> ProviderConfig:
         compat=compat,
         model_metadata=model_metadata,
         timeout_seconds=timeout_seconds,
+        stream_idle_timeout_seconds=stream_idle_timeout_seconds,
         max_retries=max_retries,
         max_retry_delay_seconds=max_retry_delay_seconds,
         thinking_levels=thinking_levels,
@@ -1773,11 +1803,14 @@ def _api_key_from_provider(
 def _validate_provider_numbers(
     *,
     timeout_seconds: float,
+    stream_idle_timeout_seconds: float,
     max_retries: int,
     max_retry_delay_seconds: float,
 ) -> None:
     if isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
         raise ProviderConfigError("Provider timeout_seconds must be greater than 0")
+    if isinstance(stream_idle_timeout_seconds, bool) or stream_idle_timeout_seconds <= 0:
+        raise ProviderConfigError("Provider stream_idle_timeout_seconds must be greater than 0")
     if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
         raise ProviderConfigError("Provider max_retries must be 0 or greater")
     if (

@@ -105,6 +105,17 @@ def _provider_error_details(message: AssistantMessage) -> dict[str, Any]:
         attempts = diagnostic.details.get("attempts")
         if isinstance(attempts, int) and not isinstance(attempts, bool):
             details["attempts"] = attempts
+        for key in ("error_type", "phase"):
+            value = diagnostic.details.get(key)
+            if isinstance(value, str) and value:
+                details[key] = value
+        stream_idle_timeout_seconds = diagnostic.details.get("stream_idle_timeout_seconds")
+        if (
+            isinstance(stream_idle_timeout_seconds, int | float)
+            and not isinstance(stream_idle_timeout_seconds, bool)
+            and stream_idle_timeout_seconds > 0
+        ):
+            details["stream_idle_timeout_seconds"] = stream_idle_timeout_seconds
         event = diagnostic.details.get("event")
         if isinstance(event, dict):
             event_details = _safe_stream_event_details(event)

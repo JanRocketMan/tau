@@ -78,6 +78,7 @@ def create_model_provider(
                 provider_name=provider.name,
                 headers=provider.headers,
                 timeout_seconds=provider.timeout_seconds,
+                stream_idle_timeout_seconds=provider.stream_idle_timeout_seconds,
                 max_retries=provider.max_retries,
                 max_retry_delay_seconds=provider.max_retry_delay_seconds,
                 reasoning_effort=_codex_reasoning_effort(

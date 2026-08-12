@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator, Mapping
 from json import loads
 
@@ -39,6 +40,29 @@ from tau_ai import (
 
 async def _collect[T](stream: AsyncIterator[T]) -> list[T]:
     return [event async for event in stream]
+
+
+class _ReadTimeoutStream(httpx.AsyncByteStream):
+    def __init__(self, request: httpx.Request) -> None:
+        self.request = request
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        raise httpx.ReadTimeout("", request=self.request)
+        yield b""  # pragma: no cover - make this an async generator
+
+
+class _QuietStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.read_started = asyncio.Event()
+        self.read_closed = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            self.read_started.set()
+            await asyncio.Event().wait()
+            yield b""  # pragma: no cover - make this an async generator
+        finally:
+            self.read_closed.set()
 
 
 def _diagnostic_details(event: AssistantErrorEvent) -> dict[str, JSONValue]:
@@ -118,7 +142,9 @@ async def test_openai_compatible_provider_uses_configured_timeout() -> None:
         client = provider._get_client()
 
         assert client.timeout.connect == 7.5
-        assert client.timeout.read == 7.5
+        assert client.timeout.write == 7.5
+        assert client.timeout.pool == 7.5
+        assert client.timeout.read == 600
     finally:
         await provider.aclose()
 
@@ -646,6 +672,143 @@ async def test_openai_compatible_provider_includes_plain_http_error_body_in_mess
         "status_code": 400,
         "body": "bad request details",
         "attempts": 1,
+    }
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_cancels_quiet_stream() -> None:
+    signal = SimpleCancellationToken()
+    stream = _QuietStream()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=stream,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+            ),
+            client=client,
+        )
+        collect_task = asyncio.create_task(
+            _collect(
+                provider.stream_response(
+                    model="test-model",
+                    system="You are Tau.",
+                    messages=[UserMessage(content="Say ok")],
+                    tools=[],
+                    signal=signal,
+                )
+            )
+        )
+        await stream.read_started.wait()
+        signal.cancel()
+        events = await collect_task
+
+    assert stream.read_closed.is_set()
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].error.error_message == "Provider stream ended without a terminal event"
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_reports_stream_read_timeout() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ReadTimeoutStream(request),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                provider_name="test-openai",
+                base_url="https://example.test/v1",
+                stream_idle_timeout_seconds=600,
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 3
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].error.error_message == (
+        "test-openai stream received no data for 600 seconds (ReadTimeout) after 3 attempts."
+    )
+    assert _diagnostic_details(events[-1]) == {
+        "attempts": 3,
+        "error_type": "ReadTimeout",
+        "phase": "response_stream",
+        "stream_idle_timeout_seconds": 600,
+    }
+
+
+@pytest.mark.anyio
+async def test_openai_codex_provider_reports_stream_read_timeout() -> None:
+    requests: list[httpx.Request] = []
+
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ReadTimeoutStream(request),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+                provider_name="openai-codex",
+                stream_idle_timeout_seconds=600,
+                max_retries=2,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="gpt-5.5",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 3
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].error.error_message == (
+        "openai-codex stream received no data for 600 seconds (ReadTimeout) after 3 attempts."
+    )
+    assert _diagnostic_details(events[-1]) == {
+        "attempts": 3,
+        "error_type": "ReadTimeout",
+        "phase": "response_stream",
+        "stream_idle_timeout_seconds": 600,
     }
 
 

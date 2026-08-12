@@ -17,6 +17,7 @@ from tau_ai.env import (
     DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
     DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES,
     DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
+    DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
 )
 from tau_coding.brave_search import BraveSearchConfig
@@ -111,6 +112,7 @@ def setup_command(
     api_key_env: str = "OPENAI_API_KEY",
     model: str = DEFAULT_MODEL,
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
+    stream_idle_timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES,
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
     set_default: bool = True,
@@ -124,6 +126,7 @@ def setup_command(
         models=(model,),
         default_model=model,
         timeout_seconds=timeout_seconds,
+        stream_idle_timeout_seconds=stream_idle_timeout_seconds,
         max_retries=max_retries,
         max_retry_delay_seconds=max_retry_delay_seconds,
     )
@@ -179,9 +182,16 @@ def main(
         float,
         typer.Option(
             "--timeout-seconds",
-            help="HTTP timeout in seconds for `tau setup` provider requests.",
+            help="Connect, write, and pool inactivity timeout for `tau setup`.",
         ),
     ] = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
+    setup_stream_idle_timeout_seconds: Annotated[
+        float,
+        typer.Option(
+            "--stream-idle-timeout-seconds",
+            help="Streaming response inactivity timeout for `tau setup`.",
+        ),
+    ] = DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
     setup_max_retries: Annotated[
         int,
         typer.Option("--max-retries", help="Provider retry count for `tau setup`."),
@@ -395,6 +405,7 @@ def main(
             api_key_env=setup_api_key_env,
             model=model or DEFAULT_MODEL,
             timeout_seconds=setup_timeout_seconds,
+            stream_idle_timeout_seconds=setup_stream_idle_timeout_seconds,
             max_retries=setup_max_retries,
             max_retry_delay_seconds=setup_max_retry_delay_seconds,
             set_default=setup_default,
@@ -733,6 +744,7 @@ def render_provider_settings(
             f"{provider.default_model}\t{models}\t{provider.api_key_env}\t"
             f"{_provider_credential_status(provider, credential_reader=credential_reader)}\t"
             f"{provider.base_url}\t{provider.timeout_seconds:g}s\t"
+            f"stream_idle={provider.stream_idle_timeout_seconds:g}s\t"
             f"retries={provider.max_retries}\t"
             f"retry_delay={provider.max_retry_delay_seconds:g}s"
         )

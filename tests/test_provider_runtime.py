@@ -20,11 +20,12 @@ def test_create_model_provider_returns_openai_codex_provider(tmp_path: Path) -> 
     store = FileCredentialStore(tmp_path / "credentials.json")
 
     provider = create_model_provider(
-        OpenAICodexProviderConfig(),
+        OpenAICodexProviderConfig(stream_idle_timeout_seconds=900),
         credential_store=store,
     )
 
     assert isinstance(provider, OpenAICodexProvider)
+    assert provider._config.stream_idle_timeout_seconds == 900
 
 
 def test_create_model_provider_uses_codex_model_image_capability(tmp_path: Path) -> None:

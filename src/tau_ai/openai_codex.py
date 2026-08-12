@@ -41,10 +41,17 @@ from tau_ai.content import (
 from tau_ai.env import (
     DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES,
     DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
+    DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
 )
 from tau_ai.events import AssistantMessageEvent
-from tau_ai.http import create_async_client
+from tau_ai.http import (
+    aiter_with_cancellation,
+    create_async_client,
+    streaming_timeout,
+    transport_error_data,
+    transport_error_message,
+)
 from tau_ai.http_errors import provider_http_error_message
 from tau_ai.model_limits import RuntimeModelLimits
 from tau_ai.openai_cache import openai_prompt_cache_key
@@ -74,6 +81,7 @@ class OpenAICodexConfig:
     base_url: str = DEFAULT_OPENAI_CODEX_BASE_URL
     headers: Mapping[str, str] | None = None
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
+    stream_idle_timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
     originator: str = "tau"
@@ -187,6 +195,7 @@ class OpenAICodexProvider:
             while True:
                 emitted_content = False
                 emitted_thinking = False
+                response_started = False
                 try:
                     credentials = await self._config.credential_resolver()
                     headers = _build_codex_headers(
@@ -243,6 +252,7 @@ class OpenAICodexProvider:
                             )
                             return
 
+                        response_started = True
                         yield ProviderResponseStartEvent(model=model)
                         stream_error: dict[str, JSONValue] | None = None
                         async for event in _codex_provider_events(response, signal=signal):
@@ -282,7 +292,13 @@ class OpenAICodexProvider:
                             return
                         continue
                 except httpx.HTTPError as exc:
-                    if not emitted_content and self._should_retry(attempt):
+                    error_data = transport_error_data(
+                        exc,
+                        attempts=attempt + 1,
+                        response_started=response_started,
+                        stream_idle_timeout_seconds=self._config.stream_idle_timeout_seconds,
+                    )
+                    if not emitted_content and not emitted_thinking and self._should_retry(attempt):
                         delay = retry_delay_seconds(
                             attempt,
                             max_delay_seconds=self._config.max_retry_delay_seconds,
@@ -292,18 +308,21 @@ class OpenAICodexProvider:
                             max_retries=self._config.max_retries,
                             delay_seconds=delay,
                             reason="network error",
-                            data={
-                                "error": str(exc),
-                                "error_type": type(exc).__name__,
-                            },
+                            data=error_data,
                         )
                         attempt += 1
                         if not await wait_for_retry(delay, signal=signal):
                             return
                         continue
                     yield ProviderErrorEvent(
-                        message=str(exc),
-                        data={"attempts": attempt + 1},
+                        message=transport_error_message(
+                            exc,
+                            provider_name=self._config.provider_name,
+                            attempts=attempt + 1,
+                            response_started=response_started,
+                            stream_idle_timeout_seconds=self._config.stream_idle_timeout_seconds,
+                        ),
+                        data=error_data,
                     )
                     return
                 except Exception as exc:  # noqa: BLE001 - provider errors are surfaced as events
@@ -314,7 +333,12 @@ class OpenAICodexProvider:
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = create_async_client(timeout=self._config.timeout_seconds)
+            self._client = create_async_client(
+                timeout=streaming_timeout(
+                    timeout_seconds=self._config.timeout_seconds,
+                    stream_idle_timeout_seconds=self._config.stream_idle_timeout_seconds,
+                )
+            )
         return self._client
 
     def _should_retry(
@@ -519,9 +543,7 @@ async def _codex_provider_events(
     finish_reason: str | None = None
     usage: Usage | None = None
 
-    async for event in _iter_sse_objects(response):
-        if signal is not None and signal.is_cancelled():
-            return
+    async for event in _iter_sse_objects(response, signal=signal):
         event_type = event.get("type")
         if not isinstance(event_type, str):
             continue
@@ -655,6 +677,9 @@ async def _codex_provider_events(
             usage = _usage_from_response(event) or usage
             break
 
+    if signal is not None and signal.is_cancelled():
+        return
+
     content = assistant_content("".join(content_parts), tool_calls)
     if thinking_parts:
         content.insert(
@@ -675,9 +700,13 @@ async def _codex_provider_events(
     )
 
 
-async def _iter_sse_objects(response: httpx.Response) -> AsyncIterator[dict[str, JSONValue]]:
+async def _iter_sse_objects(
+    response: httpx.Response,
+    *,
+    signal: CancellationToken | None,
+) -> AsyncIterator[dict[str, JSONValue]]:
     data_lines: list[str] = []
-    async for line in response.aiter_lines():
+    async for line in aiter_with_cancellation(response.aiter_lines(), signal=signal):
         stripped = line.strip()
         if not stripped:
             if data_lines:
