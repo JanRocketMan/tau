@@ -42,8 +42,8 @@ def test_create_model_provider_uses_codex_model_image_capability(tmp_path: Path)
     assert isinstance(vision_provider, OpenAICodexProvider)
     assert vision_provider._config.supports_images is True
 
-    # Use opencode with deepseek-v4-flash (text-only model) for non-vision test
-    opencode_config = provider_config_from_catalog_entry("opencode")
+    # Use opencode-go with deepseek-v4-flash (text-only model) for non-vision test
+    opencode_config = provider_config_from_catalog_entry("opencode-go")
     text_provider = create_model_provider(
         opencode_config,
         credential_store=store,
@@ -59,7 +59,7 @@ def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path: Path) 
     store.set_api_key("opencode", "sk-test")
 
     provider = create_model_provider(
-        provider_config_from_catalog_entry("opencode"),
+        provider_config_from_catalog_entry("opencode-go"),
         credential_store=store,
         model="gpt-5.6-luna",
     )
@@ -115,7 +115,7 @@ def test_compatible_gateway_defaults_to_no_openai_cache_affinity(tmp_path: Path)
     store.set_api_key("opencode", "gateway-key")
 
     provider = create_model_provider(
-        provider_config_from_catalog_entry("opencode"),
+        provider_config_from_catalog_entry("opencode-go"),
         credential_store=store,
     )
 

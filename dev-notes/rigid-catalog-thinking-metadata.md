@@ -24,6 +24,13 @@ to change the level in a session. Cycling steps through the active model's
 `thinking_levels` and is a silent no-op when the model exposes zero or one
 levels.
 
+Quick-cycling scoped models with **Ctrl+P** (`cycle_scoped_model`) resets the
+active thinking level to the target model's default — its remembered per-model
+preference, then its catalog `thinking_default` — instead of carrying the
+previous model's level over when that level happens to be valid for the new
+model. The `/model` picker keeps the coercion behavior: the current level is
+kept when the selected model supports it.
+
 ## Why it exists
 
 The old `thinking_level_map` mixed two jobs: marking a level unsupported per

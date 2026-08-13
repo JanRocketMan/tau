@@ -13,7 +13,7 @@ from tau_coding.session_usage import collect_session_usage, render_usage_dashboa
 def _assistant(
     entry_id: str,
     *,
-    provider: str = "opencode",
+    provider: str = "opencode-go",
     model: str = "gpt-5.6-luna",
     usage: Usage | None = None,
     tools: list[ToolCall] | None = None,

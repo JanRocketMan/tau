@@ -123,7 +123,6 @@ see [Configuration]({{< relref "../reference/configuration.md#providers" >}}).
 At startup Tau picks a valid level for the selected model automatically: a
 remembered per-model choice wins, then the model's catalog default, then the
 global default, then the first level the model supports. OpenCode Go starts
-`kimi-k3` at `max` and `deepseek-v4-flash` at `max`; OpenCode starts
-`deepseek-v4-flash` at `high`. Cycling with the thinking key cycles through only
-that model's declared levels, and does nothing when the model exposes a single
-level.
+`deepseek-v4-flash` at `max` and `gpt-5.6-luna` at `xhigh`. Cycling with the
+thinking key cycles through only that model's declared levels, and does nothing
+when the model exposes a single level.

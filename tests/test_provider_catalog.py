@@ -57,20 +57,17 @@ def test_builtin_catalog_matches_expected_providers() -> None:
     assert [entry.name for entry in BUILTIN_PROVIDER_CATALOG] == [
         "openai-codex",
         "opencode-go",
-        "opencode",
     ]
 
 
 def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
     codex = builtin_provider_entry("openai-codex")
     opencode_go = builtin_provider_entry("opencode-go")
-    opencode = builtin_provider_entry("opencode")
 
     assert codex is not None and codex.auth_methods == ("oauth",)
     assert opencode_go is not None and opencode_go.auth_methods == ("api_key",)
-    assert opencode is not None and opencode.auth_methods == ("api_key",)
     assert opencode_go.api_key_env == "OPENCODE_API_KEY"
-    assert opencode.api_key_env == "OPENCODE_API_KEY"
+    assert opencode_go.credential_name == "opencode"
 
 
 @pytest.mark.parametrize(
@@ -81,18 +78,10 @@ def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
             {
                 "gpt-5.6-sol",
                 "gpt-5.6-luna",
-                "gpt-5.6-terra",
             },
         ),
         (
             "opencode-go",
-            {
-                "gpt-5.6-luna",
-                "kimi-k3",
-            },
-        ),
-        (
-            "opencode",
             {
                 "gpt-5.6-luna",
             },
@@ -116,14 +105,8 @@ def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> No
         "openai-codex": {
             "gpt-5.6-sol": (272_000, 128_000),
             "gpt-5.6-luna": (272_000, 128_000),
-            "gpt-5.6-terra": (272_000, 128_000),
         },
         "opencode-go": {
-            "deepseek-v4-flash": (1_000_000, 384_000),
-            "gpt-5.6-luna": (1_000_000, 128_000),
-            "kimi-k3": (1_000_000, None),
-        },
-        "opencode": {
             "deepseek-v4-flash": (1_000_000, 384_000),
             "gpt-5.6-luna": (1_000_000, 128_000),
         },
@@ -141,32 +124,30 @@ def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> No
 
 def test_builtin_catalog_declares_current_model_modalities() -> None:
     codex = builtin_provider_entry("openai-codex")
-    opencode = builtin_provider_entry("opencode")
+    opencode_go = builtin_provider_entry("opencode-go")
 
     assert codex is not None
-    assert opencode is not None
+    assert opencode_go is not None
     assert {
         model for model, metadata in codex.model_metadata.items() if "image" in metadata.input
     } == set(codex.models)
     assert {
-        model for model, metadata in opencode.model_metadata.items() if "image" in metadata.input
+        model for model, metadata in opencode_go.model_metadata.items() if "image" in metadata.input
     } == {"gpt-5.6-luna"}
-    assert opencode.model_metadata["deepseek-v4-flash"].input == ("text",)
+    assert opencode_go.model_metadata["deepseek-v4-flash"].input == ("text",)
 
 
 def test_builtin_catalog_auth_and_thinking_metadata() -> None:
     codex = builtin_provider_entry("openai-codex")
     opencode_go = builtin_provider_entry("opencode-go")
-    opencode = builtin_provider_entry("opencode")
 
     assert codex is not None
     assert opencode_go is not None
-    assert opencode is not None
     assert codex.auth_methods == ("oauth",)
-    assert opencode.auth_methods == ("api_key",)
-    assert opencode.api == "openai-completions"
+    assert opencode_go.auth_methods == ("api_key",)
+    assert opencode_go.api == "openai-completions"
     assert codex.thinking_parameter == "reasoning.effort"
-    assert opencode.thinking_parameter == "reasoning_effort"
+    assert opencode_go.thinking_parameter == "reasoning_effort"
     assert codex.model_metadata["gpt-5.6-luna"].thinking_default == "xhigh"
     assert codex.model_metadata["gpt-5.6-luna"].thinking_levels == (
         "low",
@@ -174,7 +155,13 @@ def test_builtin_catalog_auth_and_thinking_metadata() -> None:
         "high",
         "xhigh",
     )
-    assert opencode.model_metadata["gpt-5.6-luna"].thinking_levels == (
+    assert codex.model_metadata["gpt-5.6-sol"].thinking_levels == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
+    assert opencode_go.model_metadata["gpt-5.6-luna"].thinking_levels == (
         "low",
         "medium",
         "high",
@@ -182,18 +169,7 @@ def test_builtin_catalog_auth_and_thinking_metadata() -> None:
         "max",
     )
     assert opencode_go.model_metadata["deepseek-v4-flash"].thinking_default == "max"
-    assert opencode.model_metadata["deepseek-v4-flash"].thinking_default == "high"
-    assert opencode_go.model_metadata["kimi-k3"].thinking_default == "max"
-    for provider in (opencode_go, opencode):
-        assert provider.model_metadata["deepseek-v4-flash"].thinking_levels == (
-            "low",
-            "medium",
-            "high",
-            "max",
-        )
-    assert opencode_go.model_metadata["kimi-k3"].thinking_levels == (
-        "low",
-        "medium",
+    assert opencode_go.model_metadata["deepseek-v4-flash"].thinking_levels == (
         "high",
         "max",
     )
@@ -276,7 +252,7 @@ def test_user_catalog_provider_labels_reject_duplicate_labels(tmp_path: Path) ->
         """
 [provider_labels]
 openai-codex = "models"
-opencode = "models"
+opencode-go = "models"
 """,
     )
 
@@ -289,7 +265,7 @@ def test_user_catalog_provider_labels_reject_canonical_id_conflict(tmp_path: Pat
         tmp_path / ".tau",
         """
 [provider_labels]
-openai-codex = "opencode"
+openai-codex = "opencode-go"
 """,
     )
 
@@ -315,7 +291,7 @@ def test_user_catalog_overlays_builtin_provider(tmp_path: Path) -> None:
         tmp_path / ".tau",
         """
 [[providers]]
-name = "opencode"
+name = "opencode-go"
 models = ["custom-model"]
 default_model = "custom-model"
 
@@ -323,7 +299,7 @@ default_model = "custom-model"
 "custom-model" = 500000
 """,
     )
-    entry = next(e for e in effective_catalog(paths) if e.name == "opencode")
+    entry = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
     assert entry.models[0] == "custom-model"
     assert "gpt-5.6-luna" in entry.models
     assert entry.default_model == "custom-model"
@@ -331,7 +307,7 @@ default_model = "custom-model"
     assert entry.context_windows["custom-model"] == 500_000
     assert entry.context_windows["gpt-5.6-luna"] == 1_000_000
     # Untouched fields come from the builtin entry.
-    assert entry.base_url == "https://opencode.ai/zen/v1"
+    assert entry.base_url == "https://opencode.ai/zen/go/v1"
     assert entry.thinking_parameter == "reasoning_effort"
 
 
@@ -340,7 +316,7 @@ def test_user_catalog_thinking_metadata_replaces_per_model(tmp_path: Path) -> No
         tmp_path / ".tau",
         """
 [[providers]]
-name = "opencode"
+name = "opencode-go"
 thinking_parameter = "reasoning.effort"
 
 [providers.model_metadata."deepseek-v4-flash"]
@@ -348,7 +324,7 @@ thinking_default = "low"
 thinking_levels = ["low", "high"]
 """,
     )
-    entry = next(e for e in effective_catalog(paths) if e.name == "opencode")
+    entry = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
     assert entry.thinking_parameter == "reasoning.effort"
     assert entry.model_metadata["deepseek-v4-flash"].thinking_levels == ("low", "high")
     assert entry.model_metadata["deepseek-v4-flash"].thinking_default == "low"
@@ -368,7 +344,7 @@ def test_user_catalog_rejects_provider_level_thinking_fields(tmp_path: Path) -> 
         tmp_path / ".tau",
         """
 [[providers]]
-name = "opencode"
+name = "opencode-go"
 thinking_levels = ["low", "high"]
 thinking_default = "high"
 """,
@@ -382,7 +358,7 @@ def test_user_catalog_overlays_and_serializes_cost_tiers(tmp_path: Path) -> None
         tmp_path / ".tau",
         """
 [[providers]]
-name = "opencode"
+name = "opencode-go"
 
 [providers.model_metadata."deepseek-v4-flash"]
 cost_tiers = [
@@ -391,7 +367,7 @@ cost_tiers = [
 ]
 """,
     )
-    entry = next(e for e in effective_catalog(paths) if e.name == "opencode")
+    entry = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
     metadata = entry.model_metadata["deepseek-v4-flash"]
     assert model_cost_for_input_tokens(metadata, 400_000) == {
         "input": 0.2,
@@ -408,7 +384,7 @@ cost_tiers = [
     assert model_cost_for_input_tokens(metadata, 400_001) == long_context_cost
 
     save_user_catalog_entries([entry], paths)
-    reloaded = next(e for e in effective_catalog(paths) if e.name == "opencode")
+    reloaded = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
     assert (
         model_cost_for_input_tokens(reloaded.model_metadata["deepseek-v4-flash"], 400_001)
         == long_context_cost
@@ -420,7 +396,7 @@ def test_user_catalog_cost_tier_accepts_one_hour_cache_write_rate(tmp_path: Path
         tmp_path / ".tau",
         """
 [[providers]]
-name = "opencode"
+name = "opencode-go"
 
 [providers.model_metadata."deepseek-v4-flash"]
 cost_tiers = [
@@ -429,7 +405,7 @@ cost_tiers = [
 ]
 """,
     )
-    entry = next(e for e in effective_catalog(paths) if e.name == "opencode")
+    entry = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
     metadata = entry.model_metadata["deepseek-v4-flash"]
     assert model_cost_for_input_tokens(metadata, 400_001) == {
         "input": 0.5,
@@ -452,7 +428,7 @@ def test_user_catalog_rejects_bounded_final_cost_tier(tmp_path: Path) -> None:
         tmp_path / ".tau",
         """
 [[providers]]
-name = "opencode"
+name = "opencode-go"
 
 [providers.model_metadata."deepseek-v4-flash"]
 cost_tiers = [

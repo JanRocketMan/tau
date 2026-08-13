@@ -6138,7 +6138,7 @@ async def test_tui_login_saves_provider_key(
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
-        prompt.value = "/login opencode"
+        prompt.value = "/login opencode-go"
         await pilot.press("enter")
         await pilot.pause()
 
@@ -6151,7 +6151,7 @@ async def test_tui_login_saves_provider_key(
 
     assert session.reload_count == 0
     assert session.provider_reload_count == 1
-    assert session.provider_name == "opencode"
+    assert session.provider_name == "opencode-go"
     assert session.prompt_texts == []
     assert all(item.text != "stored-openai-key" for item in app.state.items)
     assert (tmp_path / ".tau" / "credentials.json").read_text(encoding="utf-8")
@@ -6184,17 +6184,17 @@ async def test_tui_openai_codex_alias_opens_oauth(
 
 
 @pytest.mark.anyio
-async def test_tui_opencode_alias_opens_api_key_login() -> None:
+async def test_tui_opencode_go_login_opens_api_key_login() -> None:
     app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
-        prompt.value = "/login opencode"
+        prompt.value = "/login opencode-go"
         await pilot.press("enter")
         await pilot.pause()
 
         assert isinstance(app.screen, LoginScreen)
-        assert app.screen.provider.name == "opencode"
+        assert app.screen.provider.name == "opencode-go"
 
 
 @pytest.mark.anyio
@@ -6395,14 +6395,14 @@ async def test_tui_logout_removes_stored_api_key(
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", PromptInput)
-        prompt.value = "/logout opencode"
+        prompt.value = "/logout opencode-go"
         await pilot.press("enter")
         await pilot.pause()
 
     assert FileCredentialStore(credential_path).get("opencode") is None
     assert session.provider_reload_count == 1
     assert notifications == [
-        "Removed stored API key for OpenCode Zen. "
+        "Removed stored API key for OpenCode Go. "
         "Environment variables and providers.json config are unchanged."
     ]
 
@@ -6464,7 +6464,7 @@ async def test_tui_logout_opens_stored_credential_provider_picker(
         assert str(title.render()) == "Logout"
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels == ["OpenCode Go — opencode-go", "OpenCode Zen — opencode"]
+        assert labels == ["OpenCode Go — opencode-go"]
 
 
 @pytest.mark.anyio
@@ -6613,12 +6613,15 @@ async def test_tui_login_api_provider_picker_filters_by_name_and_display_name() 
         await pilot.wait_for_scheduled_animations()
 
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels == ["OpenCode Zen — opencode"]
+        assert labels == []
 
+        # Restore a match so Enter opens the API-key login for the provider.
+        search.value = "go"
+        await pilot.wait_for_scheduled_animations()
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, LoginScreen)
-        assert app.screen.provider.name == "opencode"
+        assert app.screen.provider.name == "opencode-go"
 
 
 @pytest.mark.anyio
@@ -6677,7 +6680,7 @@ async def test_tui_login_api_key_opens_api_provider_picker() -> None:
         await pilot.pause()
 
         assert isinstance(app.screen, LoginScreen)
-        assert app.screen.provider.name == "opencode"
+        assert app.screen.provider.name == "opencode-go"
 
 
 @pytest.mark.anyio

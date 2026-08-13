@@ -1082,6 +1082,70 @@ async def test_session_cycles_thinking_is_noop_with_single_level(tmp_path: Path)
 
 
 @pytest.mark.anyio
+async def test_cycle_scoped_model_resets_thinking_level_to_model_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    isolate_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("LOCAL_API_KEY", "test-key")
+    provider_config = OpenAICompatibleProviderConfig(
+        name="local",
+        api_key_env="LOCAL_API_KEY",
+        models=("low-model", "high-model"),
+        default_model="low-model",
+        thinking_parameter="reasoning_effort",
+        model_metadata={
+            "low-model": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="low",
+                thinking_levels=("low", "medium"),
+            ),
+            "high-model": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="high",
+                thinking_levels=("high", "xhigh"),
+            ),
+        },
+    )
+    settings = ProviderSettings(
+        default_provider="local",
+        providers=(provider_config,),
+        scoped_models=(
+            ScopedModelConfig(provider="local", model="low-model"),
+            ScopedModelConfig(provider="local", model="high-model"),
+        ),
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=FakeProvider([]),
+            model="low-model",
+            system="You are Tau.",
+            storage=JsonlSessionStorage(tmp_path / "scoped-session.jsonl"),
+            cwd=tmp_path,
+            provider_name="local",
+            provider_settings=settings,
+        )
+    )
+
+    assert session.thinking_level == "low"
+    # A level that is valid on both models: cycling must still reset to the
+    # target model's default instead of carrying the current level over.
+    await session.set_thinking_level("medium")
+
+    choice = session.cycle_scoped_model()
+
+    assert choice.model == "high-model"
+    assert session.model == "high-model"
+    assert session.thinking_level == "high"
+
+    choice = session.cycle_scoped_model()
+
+    assert choice.model == "low-model"
+    # The remembered preference set above wins over the catalog default.
+    assert session.thinking_level == "medium"
+
+
+@pytest.mark.anyio
 async def test_session_updates_read_image_behavior_when_model_changes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

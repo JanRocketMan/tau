@@ -120,28 +120,24 @@ the explicit `gpt-5.6-sol` model instead. Tau tombstones the API-only alias for
 the Codex provider, so older user catalog overlays and saved preferences cannot
 restore it after an upgrade.
 
-### OpenCode Go and Zen
+### OpenCode Go
 
-OpenCode Go and OpenCode Zen are **API-key providers**, not OAuth providers.
-Sign in at the OpenCode console, subscribe to Go or fund Zen, copy the API key,
-and then run:
+OpenCode Go is an **API-key provider**, not an OAuth provider. Sign in at the
+OpenCode console, subscribe to Go, copy the API key, and then run:
 
 ```text
 /login opencode-go  # subscription limits; https://opencode.ai/zen/go/v1
-/login opencode     # Zen pay-as-you-go; https://opencode.ai/zen/v1
 ```
 
-Both can also read `OPENCODE_API_KEY`. Tau stores their saved credentials under
-the shared `opencode` name since both tiers use the same API key; logging in
-once makes both OpenCode Go and OpenCode Zen available. Available models and plan limits change over time; consult the
-[OpenCode Go](https://opencode.ai/docs/go) and
-[OpenCode Zen](https://opencode.ai/docs/zen) pages for the current list.
+It can also read `OPENCODE_API_KEY`. Tau stores its saved credentials under the
+`opencode` name. Available models and plan limits change over time; consult the
+[OpenCode Go](https://opencode.ai/docs/go) page for the current list.
 
-Tau starts new OpenCode sessions with model-specific reasoning defaults:
-`kimi-k3` uses `max` on `opencode-go`, `deepseek-v4-flash` uses `max` on
-`opencode-go` and `high` on `opencode`. Cycle the setting for the current
-session with the thinking keybinding; the available levels are model-aware and
-the selected value is sent as the provider's `reasoning_effort`.
+Tau starts new OpenCode Go sessions with model-specific reasoning defaults:
+`deepseek-v4-flash` uses `max` and `gpt-5.6-luna` uses `xhigh`. Cycle the
+setting for the current session with the thinking keybinding; the available
+levels are model-aware and the selected value is sent as the provider's
+`reasoning_effort`.
 
 ### Hugging Face Inference Providers
 

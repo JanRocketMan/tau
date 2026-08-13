@@ -434,10 +434,10 @@ def test_login_command_requests_provider_picker(tmp_path: Path) -> None:
 
 
 def test_login_command_requests_provider_login(tmp_path: Path) -> None:
-    result = create_default_command_registry().execute(FakeSession(tmp_path), "/login opencode")
+    result = create_default_command_registry().execute(FakeSession(tmp_path), "/login opencode-go")
 
     assert result.handled is True
-    assert result.login_provider == "opencode"
+    assert result.login_provider == "opencode-go"
 
 
 def test_login_command_requests_custom_provider_login(tmp_path: Path) -> None:
@@ -455,10 +455,10 @@ def test_logout_command_requests_provider_picker(tmp_path: Path) -> None:
 
 
 def test_logout_command_requests_provider_logout(tmp_path: Path) -> None:
-    result = create_default_command_registry().execute(FakeSession(tmp_path), "/logout opencode")
+    result = create_default_command_registry().execute(FakeSession(tmp_path), "/logout opencode-go")
 
     assert result.handled is True
-    assert result.logout_provider == "opencode"
+    assert result.logout_provider == "opencode-go"
 
 
 def test_logout_command_rejects_unknown_provider(tmp_path: Path) -> None:

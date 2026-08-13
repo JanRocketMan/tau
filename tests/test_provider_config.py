@@ -67,7 +67,6 @@ def test_load_provider_settings_missing_file_uses_current_catalog(tmp_path: Path
     assert [provider.name for provider in settings.providers] == [
         "openai-codex",
         "opencode-go",
-        "opencode",
     ]
     assert settings.get_provider("openai-codex").default_model == DEFAULT_MODEL
 
@@ -86,7 +85,7 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     opencode_go = settings.get_provider("opencode-go")
 
     assert codex.context_windows["gpt-5.6-luna"] == 272_000
-    assert opencode_go.context_windows["kimi-k3"] == 1_000_000
+    assert opencode_go.context_windows["gpt-5.6-luna"] == 1_000_000
     assert provider_thinking_levels(codex, model="gpt-5.6-luna") == (
         "low",
         "medium",
@@ -97,20 +96,19 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     assert provider_thinking_unavailable_reason(codex, model="unknown") == (
         "Provider openai-codex does not declare thinking metadata for unknown"
     )
-    assert provider_thinking_levels(opencode_go, model="kimi-k3") == (
-        "low",
-        "medium",
+    assert provider_thinking_levels(opencode_go, model="deepseek-v4-flash") == (
         "high",
         "max",
     )
     assert provider_default_thinking_level(opencode_go, model="deepseek-v4-flash") == "max"
-    assert provider_default_thinking_level(opencode_go, model="kimi-k3") == "max"
-
-    opencode = settings.get_provider("opencode")
-    assert provider_default_thinking_level(opencode, model="deepseek-v4-flash") == "high"
     assert resolve_startup_thinking_level(opencode_go, "deepseek-v4-flash") == "max"
-    assert resolve_startup_thinking_level(opencode_go, "kimi-k3") == "max"
-    assert resolve_startup_thinking_level(opencode, "deepseek-v4-flash") == "high"
+    assert provider_thinking_levels(opencode_go, model="gpt-5.6-luna") == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
 
 
 def test_load_provider_settings_accepts_provider_preferences_with_user_catalog(
@@ -820,9 +818,9 @@ def test_openai_compatible_config_from_provider_sets_reasoning_effort(
 
 @pytest.mark.parametrize(
     ("level", "expected_effort"),
-    [("low", "low"), ("medium", "medium"), ("high", "high"), ("max", "max")],
+    [("high", "high"), ("max", "max")],
 )
-def test_kimi_k3_maps_thinking_levels_to_reasoning_effort(
+def test_deepseek_v4_flash_maps_thinking_levels_to_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch,
     level: ThinkingLevel,
     expected_effort: str,
@@ -834,17 +832,30 @@ def test_kimi_k3_maps_thinking_levels_to_reasoning_effort(
 
     config = openai_compatible_config_from_provider(
         provider,
-        model="kimi-k3",
+        model="deepseek-v4-flash",
         thinking_level=level,
     )
 
-    assert provider_thinking_levels(provider, model="kimi-k3") == (
-        "low",
-        "medium",
-        "high",
-        "max",
-    )
+    assert provider_thinking_levels(provider, model="deepseek-v4-flash") == ("high", "max")
     assert config.reasoning_effort == expected_effort
+
+
+@pytest.mark.parametrize("level", ["low", "medium", "xhigh"])
+def test_deepseek_v4_flash_rejects_unlisted_thinking_levels(
+    monkeypatch: pytest.MonkeyPatch,
+    level: ThinkingLevel,
+) -> None:
+    monkeypatch.setenv("OPENCODE_API_KEY", "test-key")
+    settings = load_provider_settings(TauPaths(home=Path("/missing")))
+    provider = settings.get_provider("opencode-go")
+    assert isinstance(provider, OpenAICompatibleProviderConfig)
+
+    with pytest.raises(ProviderConfigError, match="not available"):
+        openai_compatible_config_from_provider(
+            provider,
+            model="deepseek-v4-flash",
+            thinking_level=level,
+        )
 
 
 def test_openai_compatible_config_from_provider_rejects_unsupported_thinking_level(
@@ -1136,7 +1147,7 @@ def test_load_provider_settings_does_not_restore_stale_codex_builtin_models(
     settings = load_provider_settings(TauPaths(home=tau_home))
     provider = settings.get_provider("openai-codex")
 
-    assert provider.models == ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
+    assert provider.models == ("gpt-5.6-luna", "gpt-5.6-sol")
     assert provider.default_model == "gpt-5.6-luna"
     assert provider_thinking_levels(provider, model="gpt-5.6-luna") == (
         "low",
@@ -1229,7 +1240,6 @@ def test_load_provider_settings_restores_builtin_providers_with_stored_credentia
         "local",
         "openai-codex",
         "opencode-go",
-        "opencode",
     }
     assert settings.default_provider == "local"
     assert settings.get_provider("opencode-go").credential_name == "opencode"

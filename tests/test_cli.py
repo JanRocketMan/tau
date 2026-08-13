@@ -1429,7 +1429,7 @@ def test_providers_command_lists_default_provider(
 
     assert result.exit_code == 0
     assert "*\topenai-codex\topenai-codex\tgpt-5.6-luna" in result.stdout
-    assert " \topencode\topenai-compatible\tgpt-5.6-luna" in result.stdout
+    assert " \topencode-go\topenai-compatible\tdeepseek-v4-flash" in result.stdout
 
 
 def test_render_provider_settings_shows_credential_source(
