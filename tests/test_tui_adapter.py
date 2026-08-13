@@ -28,7 +28,7 @@ from tau_coding.events import (
 )
 from tau_coding.skills import Skill, format_skill_invocation
 from tau_coding.tui import TuiEventAdapter, TuiState
-from tau_coding.tui.state import format_tool_call_block, format_tool_result_block, format_tps
+from tau_coding.tui.state import format_tool_call_block, format_tool_result_block
 
 
 def _update(event: TextDeltaEvent | ThinkingDeltaEvent) -> MessageUpdateEvent:
@@ -329,52 +329,28 @@ def test_tui_adapter_records_agent_run_timing_and_finished_badge() -> None:
 
     assert state.agent_started_at is None
     assert state.running is False
-    final = state.items[-1]
-    assert final.role == "assistant"
-    assert final.run_started_at is not None
-    assert final.run_elapsed is not None
-    assert final.run_elapsed >= 0
+    assert state.last_run_elapsed is not None
+    assert state.last_run_elapsed >= 0
 
 
-def test_tui_state_end_agent_run_clears_intermediate_running_badges() -> None:
+def test_tui_state_last_run_elapsed_clears_on_new_run() -> None:
     state = TuiState()
     state.start_agent_run()
     state.agent_started_at = time.monotonic() - 65
-    state.add_item("assistant", "first message")
-    state.attach_run_timing(state.items[-1])
-    state.add_item("assistant", "final message")
-    state.attach_run_timing(state.items[-1])
+    assert state.end_agent_run() is not None
+    assert 65 <= state.last_run_elapsed < 67
 
-    state.end_agent_run()
-
-    assert state.agent_started_at is None
-    intermediate, final = state.items
-    assert intermediate.run_started_at is None
-    assert intermediate.run_elapsed is None
-    assert final.run_started_at is not None
-    assert final.run_elapsed is not None
-    assert 65 <= final.run_elapsed < 67
+    state.start_agent_run()
+    assert state.last_run_elapsed is None
+    assert state.agent_started_at is not None
 
 
-def test_tui_state_attach_run_timing_skips_idle_items() -> None:
+def test_tui_state_end_agent_run_is_idempotent() -> None:
     state = TuiState()
-    state.add_item("assistant", "restored history")
-
-    state.attach_run_timing(state.items[-1])
-
-    assert state.items[-1].run_started_at is None
-
-
-def test_format_tps_zero_padded_three_digits() -> None:
-    # 400 chars / 4 tokens-per-char = 100 tokens over 10s = 10 TPS.
-    assert format_tps(400, 10) == "010 TPS"
-    assert format_tps(40, 10) == "001 TPS"
-    assert format_tps(3992, 2) == "499 TPS"
-    # Rates above 999 are capped to keep the badge strictly three digits.
-    assert format_tps(40000, 1) == "999 TPS"
-    # No data yet: no badge.
-    assert format_tps(0, 10) is None
-    assert format_tps(400, 0) is None
+    assert state.end_agent_run() is None
+    state.start_agent_run()
+    assert state.end_agent_run() is not None
+    assert state.end_agent_run() is None
 
 
 def _assistant_message(content: str) -> AssistantMessage:

@@ -11,11 +11,12 @@ see [Keyboard shortcuts]({{< relref "../reference/keybindings.md" >}}).
 
 Type into the prompt box at the bottom and press **Enter** to submit. The editor
 keeps its padded block size and background, while a single left border changes
-color to reflect focus, shell mode, active runs, and errors without boxing it in.
+color to reflect focus, shell mode, and errors without boxing it in.
 **Shift+Enter** inserts a newline for multi-line prompts. Tau streams the
 assistant's reply above the prompt, showing tool calls as they run. The prompt's
-left border is green while Tau works and becomes the theme's soft red error color
-when the model run fails. A new prompt resets the previous failure state. In
+left border becomes the theme's soft red error color when the model run fails;
+while the agent works it stays neutral, because the status bar above the prompt
+already reports `running`. A new prompt resets the previous failure state. In
 supported terminal emulators, Tau also updates the tab title. Named sessions show as
 `τ | <name>`, and active runs add an animated running indicator so you can see
 work continuing from another tab. When a run fully settles while Tau's terminal
@@ -46,7 +47,8 @@ While the agent is working you don't have to wait:
   it keeps the former behavior and clears the prompt. Use **Ctrl+U** to clear the
   prompt directly.
 - **Esc** also cancels the active run. Cancellation is treated as an intentional
-  stop, not an error.
+  stop, not an error. After an interrupt, the status bar above the prompt still
+  reports `finished in Xm Ys` with the elapsed time.
 - **Enter** (while running) queues your text as **steering** — extra guidance
   applied to the current run.
 - **Alt+Enter** queues a **follow-up** — a prompt that waits until the current
@@ -117,25 +119,19 @@ Tool calls keep a static marker in the transcript while they run: orange means
 in progress, green means success, and red means failure. The terminal tab title
 also animates during a run without adding a second spinner to each tool row.
 
-## Message status badges
+## Message status bar
 
-While the agent works, the assistant message that is currently streaming shows
-a one-row status footer inside the message block:
+A one-row status bar sits directly above the prompt input box and shows the
+agent-run timing in a fixed position, so it never moves as the transcript
+grows:
 
-- **bottom-left**: `running 1m 23s` - how long the agent turn has been running,
-  ticking once per second
-- **bottom-right**: `010 TPS` - the estimated streaming speed, always shown as
-  three zero-padded digits (for example `010`, capped at `999`)
+- `running 1m 23s` while the agent works, ticking once per second
+- `finished in 1m 23s` once the turn settles, with the total turn duration
 
-TPS is an estimate (characters divided by four per second) because provider
-token usage only arrives after a response completes. It appears while tokens are
-streaming and disappears when the message stops growing, such as while a tool
-runs.
-
-When the turn settles, the final assistant message reports
-`finished in 1m 23s` with the total turn duration, and the TPS badge is
-removed. Earlier messages of the same turn lose their `running` badge at that
-point, so only the final message keeps a time reference.
+The finished report appears whether the run completed normally, failed with a
+provider error, or was interrupted with **Ctrl+C** or **Esc**. The bar keeps
+its row even when idle, so nothing shifts when a run starts or ends. The
+finished duration stays visible until your next prompt.
 
 Tool results (like long `read` or `bash` output) render as compact previews so
 the transcript stays readable. Toggle full tool output with **Ctrl+O**. Markdown

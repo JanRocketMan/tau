@@ -166,9 +166,11 @@ from tau_coding.tui.themes import (
 )
 from tau_coding.tui.widgets import (
     CompactSessionInfo,
+    RunStatusBar,
     TranscriptView,
     _custom_markup_to_text,
     render_completion_suggestions,
+    run_status_text,
 )
 
 _textual_theme_for_tau_theme = textual_theme_for_tui_theme
@@ -3624,6 +3626,7 @@ class TauTuiApp(App[None]):
             yield Container(id="main-slot")
             yield Container(id="above-prompt-slot")
             yield Static("", id="queued-messages")
+            yield RunStatusBar(id="run-status")
             with Horizontal(id="prompt-row"):
                 yield Static("τ", id="prompt-prefix")
                 yield PromptInput(
@@ -4755,11 +4758,6 @@ class TauTuiApp(App[None]):
             return
         if isinstance(event, AgentEndEvent):
             await transcript.finish_assistant_message()
-            transcript.finish_agent_run()
-            self._refresh_chrome()
-            return
-        if isinstance(event, AgentSettledEvent):
-            transcript.finish_agent_run()
             self._refresh_chrome()
             return
         if isinstance(event, MessageStartEvent):
@@ -5757,6 +5755,8 @@ class TauTuiApp(App[None]):
         self._sync_queue_state()
         compact_info = self.query_one("#compact-session-info", CompactSessionInfo)
         compact_info.update_from_session(self.session, theme=theme)
+        run_status = self.query_one("#run-status", RunStatusBar)
+        run_status.set_content(run_status_text(self.state))
         queued_messages = self.query_one("#queued-messages", Static)
         queue_render_key = (
             self.state.queued_steering,
@@ -5812,15 +5812,15 @@ class TauTuiApp(App[None]):
         if now - self._last_tool_timer_refresh_at >= 1.0:
             self._last_tool_timer_refresh_at = now
             self.call_later(self._refresh_pending_tool_timer)
-            self.call_later(self._refresh_message_status_footers)
+            self.call_later(self._refresh_run_status_bar)
 
-    def _refresh_message_status_footers(self) -> None:
-        """Refresh running timer and TPS badges on the active turn's messages."""
+    def _refresh_run_status_bar(self) -> None:
+        """Refresh the persistent timer bar above the prompt."""
         try:
-            transcript = self.query_one("#transcript", TranscriptView)
+            run_status = self.query_one("#run-status", RunStatusBar)
         except NoMatches:
             return
-        transcript.refresh_mounted_status_footers()
+        run_status.set_content(run_status_text(self.state))
 
     async def _refresh_pending_tool_timer(self) -> None:
         """Refresh elapsed time on the tool row that is currently executing."""
@@ -6009,12 +6009,15 @@ def _activity_prompt_border_color(
     shell_mode: bool,
     failed: bool = False,
 ) -> str:
-    """Return the prompt border color for the current activity state."""
-    del frame
+    """Return the prompt border color for the current activity state.
+
+    The border stays neutral while the agent runs; the status bar above the
+    prompt already reports running/finished. Shell mode and failed runs keep
+    their distinct colors.
+    """
+    del frame, running
     if shell_mode:
         return theme.role_styles["tool"].border
-    if running:
-        return theme.success
     if failed:
         return theme.error
     return theme.prompt_border

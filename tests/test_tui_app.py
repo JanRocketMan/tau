@@ -140,7 +140,7 @@ from tau_coding.tui.widgets import (
     TRANSCRIPT_WINDOW_OVERSCAN_ITEMS,
     CompactSessionInfo,
     LeftAlignedMarkdownHeading,
-    MessageStatusFooter,
+    RunStatusBar,
     StreamingTranscriptMessageWidget,
     TauMarkdownBlock,
     ThemedMarkdownWidget,
@@ -2082,51 +2082,52 @@ async def test_tui_streaming_deltas_update_active_message_without_full_refresh(
 
 
 @pytest.mark.anyio
-async def test_tui_streaming_message_shows_running_timer_and_tps_badge() -> None:
-    """The streaming message footer shows a running timer and zero-padded TPS."""
+async def test_tui_run_status_bar_shows_running_timer() -> None:
+    """The persistent status bar shows a running timer."""
     app = _tui_app(FakeSession())
 
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
-        transcript = app.query_one("#transcript", TranscriptView)
-        widget = await transcript.start_assistant_message(theme=TAU_DARK_THEME)
-        widget.item.run_started_at = time.monotonic() - 65
-        await transcript.append_assistant_delta("x" * 400, theme=TAU_DARK_THEME)
-        widget._stream_started_at = time.monotonic() - 10
-        widget.refresh_status_footer()
+        state = app.state
+        state.agent_started_at = time.monotonic() - 65
+        app._refresh_run_status_bar()
         await pilot.pause()
 
-        footer = widget.query_one(MessageStatusFooter)
-        assert footer.display is True
-        assert _render_plain(footer.query_one(".message-status-timer", Static)) == "running 1m 5s"
-        # 400 chars / 4 = 100 tokens over 10s = 10 TPS, zero-padded to 3 digits.
-        assert _render_plain(footer.query_one(".message-status-tps", Static)) == "010 TPS"
+        bar = app.query_one("#run-status", RunStatusBar)
+        assert _render_plain(bar) == "running 1m 5s"
 
 
 @pytest.mark.anyio
-async def test_tui_streaming_message_hides_tps_after_finalize() -> None:
-    """Finalizing a message drops the live TPS badge but keeps the timer."""
-    app = _tui_app(FakeSession())
+async def test_tui_run_status_bar_streams_running_timer_end_to_end() -> None:
+    """While a message streams, the bar shows a running timer."""
+    partial = AssistantMessage()
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageStartEvent(message=partial),
+            MessageUpdateEvent(
+                message=partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="hello", partial=partial
+                ),
+            ),
+        ]
+    )
+    app = _tui_app(session)
 
     async with app.run_test(size=(120, 30)) as pilot:
+        await app._run_prompt("stream")
         await pilot.pause()
-        transcript = app.query_one("#transcript", TranscriptView)
-        widget = await transcript.start_assistant_message(theme=TAU_DARK_THEME)
-        widget.item.run_started_at = time.monotonic() - 5
-        await transcript.append_assistant_delta("hello", theme=TAU_DARK_THEME)
-        widget._stream_started_at = time.monotonic() - 1
-        await transcript.finish_assistant_message()
-        await pilot.pause()
+        # The bar refreshes on the 1s activity tick; trigger it directly in test.
+        app._refresh_run_status_bar()
 
-        footer = widget.query_one(MessageStatusFooter)
-        assert footer.display is True
-        assert _render_plain(footer.query_one(".message-status-timer", Static)) == "running 5s"
-        assert footer.query_one(".message-status-tps", Static).display is False
+        bar = app.query_one("#run-status", RunStatusBar)
+        assert _render_plain(bar).startswith("running ")
 
 
 @pytest.mark.anyio
-async def test_tui_agent_turn_shows_finished_badge_after_settle() -> None:
-    """A settled agent turn reports 'finished in X' on its final message."""
+async def test_tui_run_status_bar_reports_finished_after_settle() -> None:
+    """A settled agent turn reports 'finished in X' on the status bar."""
     partial = AssistantMessage()
     session = FakeSession(
         events=[
@@ -2148,22 +2149,79 @@ async def test_tui_agent_turn_shows_finished_badge_after_settle() -> None:
         await app._run_prompt("stream")
         await pilot.pause()
 
-        widget = app.query_one(StreamingTranscriptMessageWidget)
-        assert widget.item.run_elapsed is not None
-        footer = widget.query_one(MessageStatusFooter)
-        assert footer.display is True
-        assert _render_plain(footer.query_one(".message-status-timer", Static)).startswith(
-            "finished in"
-        )
-        assert footer.query_one(".message-status-tps", Static).display is False
+        bar = app.query_one("#run-status", RunStatusBar)
+        assert _render_plain(bar).startswith("finished in")
         # The run no longer carries a live start time.
         assert app.state.agent_started_at is None
         assert app.state.running is False
 
 
 @pytest.mark.anyio
-async def test_tui_agent_turn_intermediate_message_keeps_badge_until_settle() -> None:
-    """Intermediate messages drop their running badge once the turn settles."""
+async def test_tui_run_status_bar_reports_finished_after_model_error() -> None:
+    """A failed model run still reports 'finished in X' on the status bar."""
+    partial = AssistantMessage()
+    error_message = _assistant("partial output")
+    error_message.stop_reason = "error"
+    error_message.error_message = "server_is_overloaded"
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageStartEvent(message=partial),
+            MessageUpdateEvent(
+                message=partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="partial output", partial=partial
+                ),
+            ),
+            MessageEndEvent(message=error_message),
+            AgentSettledEvent(),
+        ]
+    )
+    app = _tui_app(session)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app._run_prompt("stream")
+        await pilot.pause()
+
+        bar = app.query_one("#run-status", RunStatusBar)
+        assert _render_plain(bar).startswith("finished in")
+        assert app.state.last_run_elapsed is not None
+        assert app.state.agent_started_at is None
+
+
+@pytest.mark.anyio
+async def test_tui_run_status_bar_reports_finished_after_interrupt() -> None:
+    """Ctrl+C interruption still reports 'finished in X' on the status bar."""
+
+    class StuckSession(FakeSession):
+        events: object = None
+
+        async def prompt(
+            self,
+            text: str,
+            **kwargs: object,
+        ) -> AsyncIterator[CodingSessionEvent]:
+            yield AgentStartEvent()
+            await asyncio.sleep(3600)
+
+    app = _tui_app(StuckSession())
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app._submit_prompt("stream")
+        await pilot.pause()
+        app.action_interrupt()
+        await pilot.pause()
+
+        bar = app.query_one("#run-status", RunStatusBar)
+        assert _render_plain(bar).startswith("finished in")
+        assert app.state.last_run_elapsed is not None
+        assert app.state.agent_started_at is None
+        assert app.state.running is False
+
+
+@pytest.mark.anyio
+async def test_tui_run_status_bar_stays_fixed_above_prompt_across_tool_calls() -> None:
+    """The bar never jumps: it stays above the prompt across messages and tools."""
     first_partial = AssistantMessage()
     second_partial = AssistantMessage()
     session = FakeSession(
@@ -2201,27 +2259,11 @@ async def test_tui_agent_turn_intermediate_message_keeps_badge_until_settle() ->
         await app._run_prompt("stream")
         await pilot.pause()
 
-        transcript = app.query_one("#transcript", TranscriptView)
-        messages = [
-            child
-            for child in transcript.children
-            if isinstance(child, TranscriptMessageWidget | StreamingTranscriptMessageWidget)
-            and child.item.role == "assistant"
-        ]
-        assert len(messages) == 2
-        first, second = messages
-        # The intermediate message was finalized and paged through a redraw, so
-        # it is a plain block whose running badge was cleared at settle.
-        assert isinstance(first, TranscriptMessageWidget)
-        assert first.item.run_started_at is None
-        assert first.item.run_elapsed is None
-        assert first.query_one(MessageStatusFooter).display is False
-        assert isinstance(second, StreamingTranscriptMessageWidget)
-        assert second.item.run_elapsed is not None
-        assert second.query_one(MessageStatusFooter).display is True
-        assert _render_plain(second.query_one(".message-status-timer", Static)).startswith(
-            "finished in"
-        )
+        bar = app.query_one("#run-status", RunStatusBar)
+        prompt = app.query_one("#prompt")
+        # The bar sits directly above the input box, not inside the transcript.
+        assert bar.region.bottom <= prompt.region.y
+        assert _render_plain(bar).startswith("finished in")
 
 
 @pytest.mark.anyio
@@ -2530,12 +2572,13 @@ def test_activity_indicator_keeps_running_animation_in_shell_mode() -> None:
     assert rendered.plain != "$"
 
 
-def test_activity_prompt_border_uses_success_while_running_and_error_after_failure() -> None:
+def test_activity_prompt_border_stays_neutral_while_running_and_red_after_failure() -> None:
+    """The border does not turn green while running; the status bar covers that."""
     theme = TAU_LIGHT_THEME
 
     assert (
         _activity_prompt_border_color(theme, frame=0, running=True, shell_mode=False)
-        == theme.success
+        == theme.prompt_border
     )
     assert (
         _activity_prompt_border_color(
@@ -3088,12 +3131,14 @@ async def test_tui_app_shows_activity_indicator_while_running() -> None:
 
         assert pytest.approx(tui_app.ACTIVITY_TICK_SECONDS) == 0.15
         assert tui_app.ACTIVITY_COLOR_FADE_STEPS == 24
-        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.success.lower()
+        # The border stays neutral while running; the status bar reports the
+        # running state instead of a color change.
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border.lower()
         assert _render_plain(indicator).startswith("■")
 
         app._tick_activity()
 
-        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.success.lower()
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border.lower()
         assert _render_plain(indicator).splitlines()[1] == "■"
 
         app.adapter.apply(AgentEndEvent())
@@ -3825,7 +3870,7 @@ async def test_activity_animation_throttles_tool_timer_layout_work(
         app._tick_activity()
         assert scheduled == [
             app._refresh_pending_tool_timer,
-            app._refresh_message_status_footers,
+            app._refresh_run_status_bar,
         ]
 
 
@@ -7789,7 +7834,8 @@ async def test_submitting_new_prompt_resets_failed_prompt_border_immediately() -
         await pilot.pause()
 
         assert app.state.error is None
-        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.success.lower()
+        # The border resets to neutral; the status bar reports running state.
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border.lower()
         app.action_interrupt()
 
 

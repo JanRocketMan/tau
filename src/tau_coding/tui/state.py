@@ -32,12 +32,6 @@ TERMINAL_COMMAND_OUTPUT_PREVIEW_LINES = 120
 # Show live elapsed time on an executing tool row once it stops being instant;
 # quick reads/edits never flash a "(0s)".
 TOOL_TIMER_MIN_SECONDS = 1.0
-# Heuristic for the live TPS indicator: tokens are estimated as chars / 4,
-# a common approximation for mixed prose and code, because provider token
-# usage is only available after a response completes.
-TOKEN_ESTIMATE_CHARS = 4
-# The TPS badge is strictly three digits, so the display value is capped.
-MAX_DISPLAY_TPS = 999
 
 
 @dataclass(slots=True)
@@ -55,12 +49,6 @@ class ChatItem:
     tool_name: str | None = None
     tool_arguments: dict[str, JSONValue] | None = None
     started_at: float | None = None
-    # Monotonic start of the agent turn that produced this item; drives the
-    # live "running Xm Ys" badge while the turn is in flight.
-    run_started_at: float | None = None
-    # Total agent-turn duration once the turn settles; drives the final
-    # "finished in Xm Ys" badge on the last assistant message.
-    run_elapsed: float | None = None
     always_show_tool_result: bool = False
     custom_type: str | None = None
     details: dict[str, JSONValue] | None = None
@@ -73,10 +61,12 @@ class TuiState:
     items: list[ChatItem] = field(default_factory=list)
     assistant_buffer: str = ""
     running: bool = False
-    # Monotonic start of the active agent turn, or None when idle. Items
-    # created while it is set carry `run_started_at` so their status badge
-    # can render a live elapsed-time counter.
+    # Monotonic start of the active agent turn, or None when idle. The status
+    # bar above the prompt renders a live elapsed-time counter while it is set.
     agent_started_at: float | None = None
+    # Total duration of the last finished turn, shown as "finished in Xm Ys"
+    # until the next turn starts.
+    last_run_elapsed: float | None = None
     error: str | None = None
     show_tool_results: bool = False
     show_thinking: bool = True
@@ -232,7 +222,6 @@ class TuiState:
             self.items[-1].text += delta
             return
         self.add_item("thinking", delta)
-        self.attach_run_timing(self.items[-1])
 
     def find_tool_item(self, tool_call_id: str) -> ChatItem | None:
         """Return the transcript item for a tool call id in O(1)."""
@@ -302,47 +291,27 @@ class TuiState:
         self._tool_items_by_call_id.clear()
         self.assistant_buffer = ""
         self.agent_started_at = None
+        self.last_run_elapsed = None
         self.error = None
 
     def start_agent_run(self) -> None:
         """Record the start of an agent turn for the running timer badge."""
         self.agent_started_at = time.monotonic()
+        self.last_run_elapsed = None
 
-    def end_agent_run(self) -> None:
-        """Record total elapsed time on the turn's final assistant message.
+    def end_agent_run(self) -> float | None:
+        """End the active agent turn and return its total elapsed seconds.
 
-        The final assistant message keeps a "finished in Xm Ys" badge;
-        intermediate messages of the turn drop their live "running" badge so
-        they read as plain history once the agent settles.
+        The elapsed duration feeds the "finished in Xm Ys" status bar; the
+        value is retained in `last_run_elapsed` until the next turn starts.
+        Returns None when no turn is active.
         """
         if self.agent_started_at is None:
-            return
+            return None
         elapsed = time.monotonic() - self.agent_started_at
         self.agent_started_at = None
-        final_item = next(
-            (
-                item
-                for item in reversed(self.items)
-                if item.role == "assistant" and item.run_started_at is not None
-            ),
-            None,
-        )
-        for item in self.items:
-            if item.role not in {"assistant", "thinking"} or item.run_started_at is None:
-                continue
-            if item is final_item:
-                item.run_elapsed = elapsed
-            else:
-                item.run_started_at = None
-
-    def attach_run_timing(self, item: ChatItem) -> None:
-        """Attach the active turn's start time to a transcript item.
-
-        Only items created while an agent turn is in flight get timing; items
-        restored from history or created while idle stay badge-free.
-        """
-        if item.run_started_at is None and self.agent_started_at is not None:
-            item.run_started_at = self.agent_started_at
+        self.last_run_elapsed = elapsed
+        return elapsed
 
     def set_skills(self, skills: Iterable[Skill]) -> None:
         """Replace loaded skill metadata used for presentation-only path matching."""
@@ -395,11 +364,9 @@ class TuiState:
             if isinstance(block, ThinkingContent):
                 if block.thinking:
                     self.add_item("thinking", block.thinking)
-                    self.attach_run_timing(self.items[-1])
             elif isinstance(block, TextContent):
                 if block.text:
                     self.add_item("assistant", block.text)
-                    self.attach_run_timing(self.items[-1])
             elif include_tool_calls:
                 self.add_tool_call(block)
 
@@ -450,20 +417,6 @@ def format_elapsed(seconds: float) -> str:
         return f"{minutes}m {secs}s"
     hours, minutes = divmod(minutes, 60)
     return f"{hours}h {minutes}m"
-
-
-def format_tps(chars: int, elapsed: float) -> str | None:
-    """Format a live tokens-per-second badge from streamed chars and seconds.
-
-    Tokens are estimated as chars / 4 because provider usage arrives only
-    after a response completes. Returns None before there is any data. The
-    badge is strictly three digits, zero-padded, and capped at 999.
-    """
-    if chars <= 0 or elapsed <= 0:
-        return None
-    tokens = chars / TOKEN_ESTIMATE_CHARS
-    tps = min(round(tokens / elapsed), MAX_DISPLAY_TPS)
-    return f"{tps:03d} TPS"
 
 
 def format_tool_call_block(tool_call: ToolCall) -> str:

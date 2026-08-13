@@ -134,5 +134,4 @@ class TuiEventAdapter:
     def _flush(self) -> None:
         if self.state.assistant_buffer:
             self.state.add_item("assistant", self.state.assistant_buffer)
-            self.state.attach_run_timing(self.state.items[-1])
             self.state.assistant_buffer = ""
