@@ -44,7 +44,6 @@ from tau_agent import (
     ToolExecutionUpdateEvent,
     ToolResultMessage,
     UserMessage,
-    message_text,
 )
 from tau_agent.messages import AssistantContent, assistant_content
 from tau_agent.provider_events import TextDeltaEvent, ThinkingDeltaEvent
@@ -165,7 +164,6 @@ def _tui_app(
     tui_settings: TuiSettings | None = None,
     startup_message: str | None = None,
     startup_notice: str | None = None,
-    startup_update_notice: str | None = None,
     startup_notices: Sequence[str] = (),
     initial_prompt: str | None = None,
 ) -> TauTuiApp:
@@ -174,7 +172,6 @@ def _tui_app(
         tui_settings=tui_settings,
         startup_message=startup_message,
         startup_notice=startup_notice,
-        startup_update_notice=startup_update_notice,
         startup_notices=startup_notices,
         initial_prompt=initial_prompt,
     )
@@ -7883,39 +7880,6 @@ async def test_tui_resume_refreshes_context_after_session_swap() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_shows_startup_update_notice_first_in_bright_yellow() -> None:
-    session = FakeSession(messages=[UserMessage(content="Earlier prompt")])
-    app = _tui_app(
-        session,
-        startup_update_notice="Tau 0.2.0 is available",
-        startup_notices=("Tau updated to 0.2.0",),
-    )
-    notifications: list[tuple[str, str | None]] = []
-
-    def fake_notify(message: str, **kwargs: object) -> None:
-        severity = kwargs.get("severity")
-        notifications.append((message, severity if isinstance(severity, str) else None))
-
-    app._notify = fake_notify  # ty: ignore[invalid-assignment]
-
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        transcript = app.query_one("#transcript", TranscriptView)
-        assert [line.text for line in transcript.lines] == [
-            "Tau 0.2.0 is available",
-            "Tau updated to 0.2.0",
-            "Earlier prompt",
-        ]
-        update_widget = transcript.query(TranscriptMessageWidget).first()
-        assert update_widget.item.highlight == "update"
-        assert update_widget._role_style.border == "#ffff00"
-        assert update_widget._role_style.body == "bold #ffff00"
-
-    assert notifications == []
-    assert [message_text(message) for message in session.messages] == ["Earlier prompt"]
-
-
-@pytest.mark.anyio
 async def test_tui_app_runs_initial_prompt() -> None:
     session = FakeSession(
         events=[
@@ -8679,10 +8643,10 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
             message = str(kwargs["startup_message"])
             assert "Tau 0.2.0 is available" not in message
             notices = cast(tuple[str, ...], kwargs["startup_notices"])
-            # The startup provider error is surfaced first, then the update notice.
+            # The startup provider error is surfaced before the generic startup notice.
             assert any("Startup provider creation failed" in notice for notice in notices)
             assert "Missing provider API key." in notices[0]
-            assert "Tau 0.2.0 is available" in notices
+            assert "Welcome to Tau" in notices
             assert "Login required. Run /login" in message
             assert "/login openai-codex" in message
             assert "OPENAI_API_KEY" not in message
@@ -8706,7 +8670,7 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
         cwd=tmp_path,
         model=None,
         session_manager=cast(SessionManager, FakeManager()),
-        startup_notice="Tau 0.2.0 is available",
+        startup_notice="Welcome to Tau",
     )
 
     assert calls == [

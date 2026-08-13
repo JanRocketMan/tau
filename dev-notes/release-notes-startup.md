@@ -12,10 +12,10 @@ Tau records the last installed version seen at startup in `~/.tau/cache/release-
 
 On the first run it only writes the current version. On later runs, if the installed version is newer than the recorded version, the TUI prepends a status-style transcript item with release highlights for versions between the old and new versions.
 
-This keeps the reusable agent harness unchanged: release-note detection lives in `tau_coding.update_check`, and the TUI consumes the resulting startup notice as display state.
+This keeps the reusable agent harness unchanged: local release-note detection lives in `tau_coding.release_notes`, and the TUI consumes the resulting startup notice as display state. Tau does not contact PyPI or another package index at startup.
 
 Test with:
 
 ```bash
-uv run pytest tests/test_update_check.py tests/test_cli.py tests/test_tui_app.py
+uv run pytest tests/test_release_notes.py tests/test_cli.py tests/test_tui_app.py
 ```

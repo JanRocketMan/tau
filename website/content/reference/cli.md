@@ -15,13 +15,9 @@ tau [OPTIONS] [PROMPT] [COMMAND] [ARGS]
 - `-p/--print` (or `--mode`) runs that same positional prompt in [print mode]({{< relref "../guides/print-mode.md" >}}) instead of the TUI.
 - Put flags before the prompt — Tau treats everything after the last recognized flag as prompt text, including tokens that look like flags.
 
-On TUI and text print-mode startup, Tau may show a non-blocking notice when a
-newer `tau-ai` release is available on PyPI. In the TUI, this notice is the first
-transcript item and appears in bright yellow. Run `tau update` to upgrade. Disable
-the check with `TAU_NO_UPDATE_CHECK=1`; utility commands such as `tau --version`,
-`tau update`, `tau sessions`, and `tau export` do not run it. After an upgrade,
-the TUI also adds a one-time release-notes message to the transcript with the new
-features and fixes.
+Tau does not check for updates or contact a package index at startup. After an
+upgrade, the TUI adds a one-time message from its bundled release notes to the
+transcript with the new features and fixes.
 
 ## Commands
 
@@ -29,7 +25,6 @@ features and fixes.
 | --- | --- |
 | `tau` | Open the interactive TUI |
 | `tau "<prompt>"` | Open the TUI with an initial prompt |
-| `tau update` | Upgrade Tau with the installer that owns its environment. Windows uv-tool updates are handed off and begin after Tau exits; follow the printed log path for the final result. |
 | `tau sessions` | List indexed sessions (id, title, model, cwd) |
 | `tau export <ref> [dest] [--format html\|jsonl]` | Export a session id or JSONL path (HTML default) |
 | `tau --export <ref> [dest]` | Same as `tau export`, as a top-level flag |

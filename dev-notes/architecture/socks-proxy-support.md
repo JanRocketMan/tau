@@ -1,6 +1,6 @@
 # SOCKS proxy support
 
-Tau uses `httpx` for provider requests, OAuth token refreshes, and startup update checks. `httpx` reads standard proxy environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`.
+Tau uses `httpx` for provider requests and OAuth token refreshes. `httpx` reads standard proxy environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`.
 
 ## What changed
 
@@ -16,7 +16,7 @@ Tau now:
 
 - installs `httpx[socks]` in the base package so `socksio` is available;
 - normalizes `socks://...` to `socks5://...` before constructing Tau-owned HTTP clients;
-- routes provider clients, OAuth token refresh clients, and update-check fetches through shared helpers in `tau_ai.http`.
+- routes provider clients and OAuth token refresh clients through shared helpers in `tau_ai.http`.
 
 ## Why `socks://` maps to `socks5://`
 
@@ -26,9 +26,7 @@ Users who need proxy-side DNS resolution should set an explicit `socks5h://` URL
 
 ## Future improvement: avoid temporary environment mutation
 
-The current helper temporarily normalizes proxy environment variables while constructing Tau-owned `httpx` clients. For the synchronous update-check helper, the normalization currently wraps the full `httpx.get(...)` call because `httpx.get` constructs and uses a short-lived client internally.
-
-This is acceptable for the current low-concurrency startup update-check path, but environment variables are process-global state. If Tau later performs more concurrent networking around this helper, another thread or task could observe the normalized proxy value while the request is in progress.
+The current helper temporarily normalizes proxy environment variables while constructing Tau-owned `httpx` clients. Environment variables are process-global state. Another thread or task could observe the normalized proxy value while client construction is in progress.
 
 If this becomes a concern, prefer avoiding process environment mutation for request execution:
 

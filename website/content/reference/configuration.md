@@ -37,9 +37,9 @@ policy. The default is `ask`. Interactive `ask` opens the trust modal; headless
 relative paths or unknown fields. See [Project trust]({{< relref
 "../guides/project-trust.md" >}}).
 
-Startup update checks cache their latest PyPI result in
-`~/.tau/cache/update-check.json` and refresh at most once per day. Set
-`TAU_NO_UPDATE_CHECK=1` to disable the check; Tau also skips it when `CI` is set.
+Tau does not check for updates or contact a package index at startup. The local
+`~/.tau/cache/release-notes-state.json` file records which bundled release notes
+the TUI has shown.
 
 ## System prompt files
 
@@ -73,8 +73,8 @@ can replace or extend the model's highest-priority instructions.
 
 ## Network proxies
 
-Tau uses `httpx` for provider requests, OAuth token refreshes, and startup update
-checks, so it honors standard proxy environment variables such as `HTTP_PROXY`,
+Tau uses `httpx` for provider requests and OAuth token refreshes, so it honors
+standard proxy environment variables such as `HTTP_PROXY`,
 `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`.
 
 SOCKS proxies are supported by the base installation. Use explicit schemes when

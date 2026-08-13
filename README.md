@@ -97,10 +97,12 @@ Tau is also available on [conda-forge](https://conda-forge.org), and can be inst
 pixi global install tau-ai
 ```
 
-Upgrade a normal installation with:
+Upgrade Tau with the package manager that installed it, for example:
 
 ```bash
-tau update
+uv tool upgrade tau-ai
+# or
+pipx upgrade tau-ai
 ```
 
 For local development:

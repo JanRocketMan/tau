@@ -3429,7 +3429,6 @@ class TauTuiApp(App[None]):
         tui_settings: TuiSettings | None = None,
         startup_message: str | None = None,
         startup_notice: str | None = None,
-        startup_update_notice: str | None = None,
         startup_notices: Sequence[str] = (),
         initial_prompt: str | None = None,
     ) -> None:
@@ -3450,8 +3449,6 @@ class TauTuiApp(App[None]):
         self._bindings = BindingsMap(_app_bindings(self.tui_settings.keybindings))
         self.session = session
         self.state = TuiState(skills=session.skills)
-        if startup_update_notice is not None:
-            self.state.add_item("status", startup_update_notice, highlight="update")
         for notice in self.startup_notices:
             self.state.add_item("status", notice)
         if self.tui_settings.theme != self.tui_settings.resolved_theme.name:
@@ -6840,7 +6837,6 @@ async def run_tui_app(
     initial_prompt: str | None = None,
     session_manager: SessionManager | None = None,
     startup_notice: str | None = None,
-    startup_update_notice: str | None = None,
     startup_notices: Sequence[str] = (),
     extension_paths: tuple[Path, ...] = (),
     extensions_enabled: bool = True,
@@ -6957,7 +6953,6 @@ async def run_tui_app(
             session,
             tui_settings=load_tui_settings(),
             startup_message=startup_message,
-            startup_update_notice=startup_update_notice,
             startup_notices=all_startup_notices,
             initial_prompt=initial_prompt,
         )
