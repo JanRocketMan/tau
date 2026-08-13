@@ -521,6 +521,7 @@ def _hotkeys_command(context: CommandContext) -> CommandResult:
         "- Enter: submit prompt",
         "- Shift+Enter: insert newline",
         "- Alt+Enter: queue follow-up while running",
+        "- Ctrl+C: stop the active run",
         "- Esc: cancel active run",
         "- Ctrl+K: open slash-command completions",
         "- Ctrl+R: open session picker",
@@ -528,7 +529,7 @@ def _hotkeys_command(context: CommandContext) -> CommandResult:
         "- Shift+Tab: cycle thinking mode",
         "- Ctrl+T: toggle thinking tokens",
         "- Ctrl+O: collapse or expand tool output",
-        "- Ctrl+C: clear prompt input",
+        "- Ctrl+U: clear prompt input",
         "- Ctrl+D: quit",
     ]
     return CommandResult(handled=True, message="\n".join(lines))

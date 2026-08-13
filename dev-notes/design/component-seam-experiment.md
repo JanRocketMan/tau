@@ -443,8 +443,8 @@ re-invokes slot factories (drop + remount, or call an optional
 > entirely for a minimal `RESERVED_EXTENSION_INTERCEPTOR_KEYS` frozenset —
 > `{"ctrl+c", "ctrl+d"}` — so those keys always flow to normal dispatch
 > untouched. These are the app's actual escape hatches: `ctrl+d` is bound to
-> the `quit` action (exits the app) and `ctrl+c` to `clear_prompt` but is the
-> terminal-standard SIGINT/interrupt reflex; `ctrl+q` is deliberately *not*
+> the `quit` action (exits the app) and `ctrl+c` to the hard `interrupt` action;
+> `ctrl+q` is deliberately *not*
 > included because tau's `_bindings` (`_app_bindings`) does not actually bind
 > it. **Deviation from Pi (deliberate):** Pi's
 > `RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS` (`runner.ts:69` — `app.interrupt`,

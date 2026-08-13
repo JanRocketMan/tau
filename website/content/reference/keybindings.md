@@ -13,6 +13,7 @@ These are the default keys in the interactive [TUI]({{< relref "../guides/tui.md
 | --- | --- |
 | `Enter` | Submit the prompt (or apply a highlighted completion) |
 | `Shift+Enter` | Insert a newline |
+| `Ctrl+C` | Stop the active model run, tool, or compaction |
 | `Esc` | Cancel the active run |
 | `Enter` (while running) | Queue text as steering for the current run |
 | `Alt+Enter` | Queue a follow-up that waits until the run would stop |
@@ -41,7 +42,7 @@ These are the default keys in the interactive [TUI]({{< relref "../guides/tui.md
 | Key | Action |
 | --- | --- |
 | `Ctrl+O` | Toggle full tool output (vs. compact preview) |
-| `Ctrl+C` | Clear the prompt input |
+| `Ctrl+U` | Clear the prompt input |
 | `Ctrl+D` | Quit |
 
 {{% note title="Remapping" %}}

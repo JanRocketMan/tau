@@ -117,6 +117,7 @@ def _session_summary_fingerprint(
         theme.name,
         session.cwd,
         session.provider_name,
+        getattr(session, "provider_display_name", session.provider_name),
         session.model,
         session.thinking_level,
         session.context_token_estimate,
@@ -1443,7 +1444,8 @@ def render_compact_session_info(
     """Render a responsive two-line session status below the prompt."""
     cwd = _styled_cwd(session.cwd, theme=theme)
     model = Text(style=theme.muted_text, overflow="fold", no_wrap=False, justify="right")
-    model.append(session.provider_name, style=theme.completion_description)
+    provider_display_name = getattr(session, "provider_display_name", session.provider_name)
+    model.append(provider_display_name, style=theme.completion_description)
     model.append(f":{session.model}", style=theme.prompt_text)
     model.append(" ")
     model.append(f"({_thinking_level(session)})", style=theme.completion_description)

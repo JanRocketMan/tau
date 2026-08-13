@@ -117,6 +117,9 @@ Add reusable custom provider definitions to `~/.tau/catalog.toml`:
 ```toml
 schema_version = 1
 
+[provider_labels]
+openai-codex = "codex"
+
 [[providers]]
 name = "local-gateway"
 display_name = "Local Gateway"
@@ -131,6 +134,13 @@ docs_url = "https://example.test/local-gateway"
 [providers.context_windows]
 qwen-coder = 64000
 ```
+
+`provider_labels` is an optional mapping from a canonical provider ID to the
+short label shown in the TUI status block and model picker. For example,
+`openai-codex = "codex"` displays `codex:<model>` but keeps `openai-codex` for
+routing, credentials, CLI arguments, and saved session metadata. Labels must
+refer to providers in the effective catalog, must be non-empty and unique, and
+must not equal another provider's canonical ID.
 
 Catalog entries support `kind` values of `openai-compatible`, `anthropic`, and
 `openai-codex`. For most custom services, start with `openai-compatible`.
@@ -387,7 +397,7 @@ The built-in frontend reads optional settings from `~/.tau/tui.json`:
     "model_cycle": "ctrl+p",
     "toggle_thinking": "ctrl+t",
     "toggle_tool_results": "ctrl+o",
-    "copy_message": "ctrl+c",
+    "clear_prompt": "ctrl+u",
     "quit": "ctrl+d"
   }
 }
@@ -402,7 +412,10 @@ to `tau-dark` with a startup notice, without overwriting the setting. Keys use
 Textual syntax; omitted keys keep their defaults. Tau ignores unrecognized
 settings and keybinding names so a `tui.json` written by a newer Tau version does
 not prevent an older version from starting. Recognized settings remain strict:
-Tau rejects invalid values, empty keys, and duplicate assignments.
+Tau rejects invalid values, empty keys, and duplicate assignments. `Ctrl+C` is
+reserved as the hard stop key and is not remappable. The former `copy_message`
+name still migrates a custom clear-prompt key, while its old default `ctrl+c`
+becomes the new `Ctrl+U` clear-prompt default.
 
 - `turn_notification`: `"desktop"` (default), `"bell"`, or `"off"`. When Tau's
   terminal surface is unfocused and the agent becomes fully idle, `"desktop"`

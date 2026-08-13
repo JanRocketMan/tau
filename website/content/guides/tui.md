@@ -11,10 +11,12 @@ see [Keyboard shortcuts]({{< relref "../reference/keybindings.md" >}}).
 
 Type into the prompt box at the bottom and press **Enter** to submit. The editor
 keeps its padded block size and background, while a single left border changes
-color to reflect focus, shell mode, and active runs without boxing it in.
+color to reflect focus, shell mode, active runs, and errors without boxing it in.
 **Shift+Enter** inserts a newline for multi-line prompts. Tau streams the
-assistant's reply above the prompt, showing tool calls as they run. In supported
-terminal emulators, Tau also updates the tab title: named sessions show as
+assistant's reply above the prompt, showing tool calls as they run. The prompt's
+left border is green while Tau works and becomes the theme's soft red error color
+when the model run fails. A new prompt resets the previous failure state. In
+supported terminal emulators, Tau also updates the tab title. Named sessions show as
 `τ | <name>`, and active runs add an animated running indicator so you can see
 work continuing from another tab. When a run fully settles while Tau's terminal
 surface is unfocused, Tau emits a desktop notification by default on supported
@@ -40,8 +42,11 @@ conversation history.
 
 While the agent is working you don't have to wait:
 
-- **Esc** cancels the active run. Cancellation is treated as an intentional stop,
-  not an error.
+- **Ctrl+C** stops the active model request, tool, or compaction. If Tau is idle,
+  it keeps the former behavior and clears the prompt. Use **Ctrl+U** to clear the
+  prompt directly.
+- **Esc** also cancels the active run. Cancellation is treated as an intentional
+  stop, not an error.
 - **Enter** (while running) queues your text as **steering** — extra guidance
   applied to the current run.
 - **Alt+Enter** queues a **follow-up** — a prompt that waits until the current
@@ -154,8 +159,10 @@ list.
 
 The compact status block below the prompt uses two aligned rows on a large
 enough terminal. The first row shows the session name on the left and
-`provider:model (thinking)` on the right. The second row shows the working
-directory and the short Jujutsu change ID, shown as `@ <change-id>`, on the
+`provider:model (thinking)` on the right. A provider label from
+`~/.tau/catalog.toml` replaces only this displayed provider text and model-picker
+labels; routing continues to use the canonical provider ID. The second row shows
+the working directory and short Jujutsu change ID, shown as `@ <change-id>`, on the
 left, with provider-anchored active context as `used/limit` on the right. The
 directory name and model are emphasized. Parent paths, Jujutsu details, and the
 provider use the quieter metadata color.

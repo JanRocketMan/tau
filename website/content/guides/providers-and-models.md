@@ -381,6 +381,20 @@ Tau loads its bundled `src/tau_coding/data/catalog.toml` first, then overlays
 built-in provider: scalar fields replace built-in values, `models` are merged
 with your models first, and `context_windows` are merged.
 
+To shorten provider names in the TUI without changing their canonical IDs, add a
+label mapping to the same file:
+
+```toml
+schema_version = 1
+
+[provider_labels]
+openai-codex = "codex"
+```
+
+The status block and model picker then show `codex:<model>`. Commands, routing,
+credentials, and saved sessions continue to use `openai-codex`, so the rename is
+deterministic and display-only.
+
 There is intentionally **no project-level** `.tau/catalog.toml`. Only the
 user-level `~/.tau/catalog.toml` is loaded, so cloning a repository cannot
 silently redirect a provider's `base_url` or credentials to an unexpected

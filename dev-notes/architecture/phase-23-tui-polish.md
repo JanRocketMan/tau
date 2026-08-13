@@ -175,8 +175,8 @@ uv run tau
    opening `/resume`. The renamed session should appear in the resume picker and
    in `/resume <session-id>` completions.
 2. Check the working indicator by submitting a prompt that takes a few seconds.
-   The prompt border should slowly fade between activity colors while the turn
-   runs, without a separate spinner row above the prompt.
+   The prompt border should use the theme success color while the turn runs,
+   without a separate spinner row above the prompt.
 3. Check shortcut hints in the built-in bottom footer. It should show prompt
    actions such as submit, newline, commands, sessions, thinking, clear, and
    quit. Open slash-command autocomplete and confirm the same footer switches to

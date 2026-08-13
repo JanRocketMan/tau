@@ -53,6 +53,6 @@ invocation and was left out of scope — see the issue for that discussion.
   and `test_cli_suppresses_resume_hint_without_persisted_session` exercise
   the CLI-level behavior with a fake `run_openai_tui`.
 - Manual: run `tau`, send at least one message (so the session persists),
-  then quit (`Ctrl+C` / `/quit`). The shell should print the resume hint
+  then quit (`Ctrl+D` / `/quit`). The shell should print the resume hint
   with the real session id. Starting `tau` and exiting immediately, before
   any session-worthy activity, should print nothing.

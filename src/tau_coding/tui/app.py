@@ -447,6 +447,8 @@ class CompletionActionTarget(Protocol):
 
     def action_cancel(self) -> None: ...
 
+    def action_interrupt(self) -> None: ...
+
     def action_completion_next(self) -> None: ...
 
     def action_completion_previous(self) -> None: ...
@@ -605,6 +607,10 @@ class PromptInput(TextArea):
             self.text = ""
             self.move_cursor((0, 0))
             self._clear_pending_paste()
+
+    def action_interrupt(self) -> None:
+        """Stop active work, falling back to clearing an idle prompt."""
+        self._completion_target().action_interrupt()
 
     def get_line(self, line_index: int) -> Text:
         """Retrieve one prompt line, coloring terminal commands like a running tool."""
@@ -775,14 +781,16 @@ class PromptInput(TextArea):
         elif event.key == keybindings.toggle_thinking:
             event.stop()
             self._completion_target().action_toggle_thinking()
-        elif event.key == keybindings.copy_message:
+        elif event.key == "ctrl+c":
+            event.stop()
+            event.prevent_default()
+            self._completion_target().action_interrupt()
+        elif event.key == keybindings.clear_prompt:
             if self.selected_text:
                 return
             event.stop()
             event.prevent_default()
-            if self.text:
-                self.text = ""
-                self.move_cursor((0, 0))
+            self.action_clear_prompt()
         elif event.key == keybindings.completion_next:
             event.stop()
             if self._has_completion_options():
@@ -2358,6 +2366,7 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         current_model: str,
         provider_name: str,
         theme: TuiTheme,
+        provider_display_names: Mapping[str, str] | None = None,
         on_toggle_scoped: Callable[[ModelChoice], Sequence[ModelChoice]] | None = None,
         picker_kind: Literal["model", "scoped"] = "model",
     ) -> None:
@@ -2367,6 +2376,7 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         self.visible_choices = self.choices
         self.current_model = current_model
         self.provider_name = provider_name
+        self.provider_display_names = dict(provider_display_names or {})
         self.theme = theme
         self.on_toggle_scoped = on_toggle_scoped
         self.picker_kind = picker_kind
@@ -2376,9 +2386,8 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
     def compose(self) -> ComposeResult:
         """Compose the model picker."""
         with Vertical(id="model-picker"):
-            title = (
-                f"Model: {self.provider_name}" if self.picker_kind == "model" else "Scoped models"
-            )
+            provider_label = self.provider_display_names.get(self.provider_name, self.provider_name)
+            title = f"Model: {provider_label}" if self.picker_kind == "model" else "Scoped models"
             yield Static(title, id="model-picker-title")
             yield Static("", id="model-picker-tabs")
             yield ModelPickerSearchInput(placeholder="Search models", id="model-picker-search")
@@ -2391,6 +2400,7 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
                                 current_model=self.current_model,
                                 current_provider=self.provider_name,
                                 scoped=choice in self.scoped_choices,
+                                provider_display_names=self.provider_display_names,
                             ),
                             markup=False,
                         )
@@ -2505,7 +2515,11 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
 
     def _refresh_model_list(self) -> None:
         base_choices = self.scoped_choices if self.mode == "scoped" else self.choices
-        self.visible_choices = _filter_model_choices(base_choices, self.search_value)
+        self.visible_choices = _filter_model_choices(
+            base_choices,
+            self.search_value,
+            provider_display_names=self.provider_display_names,
+        )
         model_list = self.query_one("#model-picker-list", ListView)
         model_list.clear()
         model_list.extend(
@@ -2517,6 +2531,7 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
                             current_model=self.current_model,
                             current_provider=self.provider_name,
                             scoped=choice in self.scoped_choices,
+                            provider_display_names=self.provider_display_names,
                         ),
                         markup=False,
                     )
@@ -2887,8 +2902,7 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | _LoginFlowAction | None]):
 #: too broadly) cannot swallow the session's hard interrupt/exit reflexes and
 #: brick the TUI. Deliberately minimal — only the always-available escape
 #: hatches: ``ctrl+d`` (the ``quit`` action, exits the app) and ``ctrl+c``
-#: (Tau binds it to ``clear_prompt``, but it is the terminal-standard
-#: SIGINT/interrupt reflex users hit to bail). NOT reserved: escape/enter/
+#: (Tau's hard interrupt action). NOT reserved: escape/enter/
 #: arrows/tab/left/right — those are load-bearing for the tau-subagents
 #: extension and must stay interceptable. This is Tau's counterpart to Pi's
 #: ``RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS`` (runner.ts:69), applied
@@ -3500,7 +3514,18 @@ class TauTuiApp(App[None]):
 
     def _is_working(self) -> bool:
         """Return whether the app should show working affordances (agent turn or compaction)."""
-        return self.state.running or self._compacting
+        worker = self._prompt_worker
+        is_worker_active = worker is not None and not worker.is_finished and not worker.is_cancelled
+        return (
+            self.state.running
+            or bool(getattr(self.session, "is_running", False))
+            or is_worker_active
+            or self._compacting
+        )
+
+    def _prompt_run_failed(self) -> bool:
+        """Return whether the latest completed model run ended with an error."""
+        return not self._is_working() and self.state.error is not None
 
     def _sync_terminal_title(self) -> None:
         """Reflect the active session name and running state in the terminal tab title."""
@@ -3652,6 +3677,11 @@ class TauTuiApp(App[None]):
         :data:`RESERVED_EXTENSION_INTERCEPTOR_KEYS` are skipped entirely, so
         they always reach normal dispatch even behind a misbehaving interceptor.
         """
+        if isinstance(event, events.Key) and not event.is_forwarded and event.key == "ctrl+c":
+            event.stop()
+            event.prevent_default()
+            self.action_interrupt()
+            return
         if (
             isinstance(event, events.Key)
             and not event.is_forwarded
@@ -3994,6 +4024,7 @@ class TauTuiApp(App[None]):
         """Add a prompt to the transcript and start the agent worker."""
         self._prompt_run_id += 1
         run_id = self._prompt_run_id
+        self.state.error = None
         # Custom messages are never rendered optimistically: the optimistic
         # dedupe matches on exact content equality with the post-expansion
         # event (see _consume_optimistic_user_event), and a mismatch would
@@ -4006,6 +4037,7 @@ class TauTuiApp(App[None]):
             self._run_prompt(text, run_id, source=source, custom_type=custom_type, details=details),
             exclusive=True,
         )
+        self._refresh_chrome_if_mounted()
 
     async def _append_optimistic_user_message(
         self,
@@ -4852,6 +4884,15 @@ class TauTuiApp(App[None]):
             return
         self._cancel_active_prompt(notify=True)
 
+    def action_interrupt(self) -> None:
+        """Stop current work on Ctrl+C, or clear the prompt when Tau is idle."""
+        if self._cancel_active_compaction(notify=True):
+            return
+        if self._cancel_active_prompt(notify=True):
+            return
+        with suppress(NoMatches):
+            self.query_one("#prompt", PromptInput).action_clear_prompt()
+
     def _cancel_active_compaction(self, *, notify: bool) -> bool:
         """Cancel the active manual compaction worker and restore visible session state."""
         worker = self._compaction_worker
@@ -4870,14 +4911,14 @@ class TauTuiApp(App[None]):
             self._notify("Cancelled compaction.")
         return True
 
-    def _cancel_active_prompt(self, *, notify: bool, interrupt: bool = False) -> None:
+    def _cancel_active_prompt(self, *, notify: bool, interrupt: bool = False) -> bool:
         """Cancel the active prompt worker and ignore any late events from it."""
         del interrupt
         worker = self._prompt_worker
         is_worker_active = worker is not None and not worker.is_cancelled
         is_session_running = bool(getattr(self.session, "is_running", False))
         if not (self.state.running or is_session_running or is_worker_active):
-            return
+            return False
 
         self._prompt_run_id += 1
         cancel = getattr(self.session, "cancel", None)
@@ -4892,6 +4933,7 @@ class TauTuiApp(App[None]):
         self._refresh()
         if notify:
             self._notify("Interrupted current operation.")
+        return True
 
     def action_accept_completion(self) -> None:
         """Accept the currently selected prompt completion."""
@@ -5579,6 +5621,7 @@ class TauTuiApp(App[None]):
                 current_model=self.session.model,
                 provider_name=self.session.provider_name,
                 theme=self.tui_settings.resolved_theme,
+                provider_display_names=getattr(self.session, "provider_display_names", {}),
                 on_toggle_scoped=None,
                 picker_kind="model",
             ),
@@ -5600,6 +5643,7 @@ class TauTuiApp(App[None]):
                 current_model=self.session.model,
                 provider_name=self.session.provider_name,
                 theme=self.tui_settings.resolved_theme,
+                provider_display_names=getattr(self.session, "provider_display_names", {}),
                 on_toggle_scoped=self._toggle_scoped_model,
                 picker_kind="scoped",
             ),
@@ -5823,8 +5867,11 @@ class TauTuiApp(App[None]):
             theme.accent,
             theme.screen_background,
             theme.prompt_border,
+            theme.success,
+            theme.error,
             self._activity_frame,
             self._is_working(),
+            self._prompt_run_failed(),
             shell_mode,
         )
         if render_key == self._last_activity_indicator_key:
@@ -5836,6 +5883,7 @@ class TauTuiApp(App[None]):
                 theme,
                 frame=self._activity_frame,
                 running=self._is_working(),
+                failed=self._prompt_run_failed(),
                 shell_mode=shell_mode,
             ),
         )
@@ -5965,11 +6013,16 @@ def _activity_prompt_border_color(
     frame: int,
     running: bool,
     shell_mode: bool,
+    failed: bool = False,
 ) -> str:
-    """Return the prompt border color for the current activity animation frame."""
-    del frame, running
+    """Return the prompt border color for the current activity state."""
+    del frame
     if shell_mode:
         return theme.role_styles["tool"].border
+    if running:
+        return theme.success
+    if failed:
+        return theme.error
     return theme.prompt_border
 
 
@@ -6348,6 +6401,7 @@ def _model_picker_label(
     current_model: str,
     current_provider: str,
     scoped: bool = False,
+    provider_display_names: Mapping[str, str] | None = None,
 ) -> str:
     marker = (
         "* "
@@ -6355,7 +6409,8 @@ def _model_picker_label(
         else "  "
     )
     suffix = " [scoped]" if scoped else ""
-    return f"{marker}{choice.provider_name}:{choice.model}{suffix}"
+    provider_label = (provider_display_names or {}).get(choice.provider_name, choice.provider_name)
+    return f"{marker}{provider_label}:{choice.model}{suffix}"
 
 
 def _filter_login_providers(
@@ -6372,14 +6427,22 @@ def _filter_login_providers(
     )
 
 
-def _filter_model_choices(choices: Sequence[ModelChoice], query: str) -> tuple[ModelChoice, ...]:
-    normalized = query.strip().lower()
+def _filter_model_choices(
+    choices: Sequence[ModelChoice],
+    query: str,
+    *,
+    provider_display_names: Mapping[str, str] | None = None,
+) -> tuple[ModelChoice, ...]:
+    normalized = query.strip().casefold()
     if not normalized:
         return tuple(choices)
+    labels = provider_display_names or {}
     return tuple(
         choice
         for choice in choices
-        if normalized in choice.provider_name.lower() or normalized in choice.model.lower()
+        if normalized in choice.provider_name.casefold()
+        or normalized in labels.get(choice.provider_name, choice.provider_name).casefold()
+        or normalized in choice.model.casefold()
     )
 
 
@@ -6476,7 +6539,8 @@ def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
         ),
         Binding(keybindings.toggle_tool_results, "toggle_tool_results", "Tool results"),
         Binding(keybindings.toggle_thinking, "toggle_thinking", "Thinking tokens"),
-        Binding(keybindings.copy_message, "clear_prompt", "Clear input"),
+        Binding("ctrl+c", "interrupt", "Stop"),
+        Binding(keybindings.clear_prompt, "clear_prompt", "Clear input"),
         Binding(keybindings.quit, "quit", "Quit"),
     ]
 
@@ -6512,6 +6576,7 @@ def _prompt_bindings(
         bindings = [
             Binding("enter", "submit_prompt", "Steer", priority=True),
             Binding(keybindings.queue_follow_up, "submit_follow_up", "Follow-up", priority=True),
+            Binding("ctrl+c", "interrupt", "Stop", priority=True),
             Binding(keybindings.cancel, "cancel", "Cancel", priority=True),
             Binding(
                 keybindings.toggle_thinking,
@@ -6535,8 +6600,9 @@ def _prompt_bindings(
         Binding(keybindings.open_context, "open_context", "Context", priority=True),
         Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking", priority=True),
         Binding(keybindings.model_cycle, "cycle_model", "Model", priority=True),
+        Binding("ctrl+c", "interrupt", "Stop", priority=True),
         Binding(
-            keybindings.copy_message,
+            keybindings.clear_prompt,
             "clear_prompt",
             "Clear",
             priority=True,
@@ -6561,7 +6627,8 @@ def _hidden_prompt_bindings(
         (keybindings.model_cycle, "cycle_model"),
         (keybindings.toggle_tool_results, "toggle_tool_results"),
         (keybindings.toggle_thinking, "toggle_thinking"),
-        (keybindings.copy_message, "clear_prompt"),
+        ("ctrl+c", "interrupt"),
+        (keybindings.clear_prompt, "clear_prompt"),
         (keybindings.accept_completion, "accept_completion"),
         (keybindings.completion_next, "completion_next"),
         (keybindings.completion_previous, "completion_previous"),

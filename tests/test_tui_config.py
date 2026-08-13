@@ -47,7 +47,7 @@ def test_load_tui_settings_reads_keybindings(tmp_path: Path) -> None:
             "thinking_cycle": "f3",
             "model_cycle": "f6",
             "toggle_thinking": "f4",
-            "copy_message": "ctrl+b"
+            "clear_prompt": "ctrl+b"
           },
           "theme": "high-contrast"
         }
@@ -66,7 +66,7 @@ def test_load_tui_settings_reads_keybindings(tmp_path: Path) -> None:
     assert settings.keybindings.accept_completion == "f2"
     assert settings.keybindings.thinking_cycle == "f3"
     assert settings.keybindings.model_cycle == "f6"
-    assert settings.keybindings.copy_message == "ctrl+b"
+    assert settings.keybindings.clear_prompt == "ctrl+b"
     assert settings.keybindings.cancel == "escape"
     assert settings.theme == "high-contrast"
     assert settings.resolved_theme == HIGH_CONTRAST_THEME
@@ -164,6 +164,29 @@ def test_tui_settings_reject_invalid_auto_copy_selection() -> None:
         tui_settings_from_json({"auto_copy_selection": "yes"})
 
 
+def test_tui_keybindings_migrate_default_legacy_ctrl_c_to_ctrl_u() -> None:
+    settings = tui_settings_from_json({"keybindings": {"copy_message": "ctrl+c"}})
+
+    assert settings.keybindings.clear_prompt == "ctrl+u"
+
+
+def test_tui_keybindings_preserve_custom_legacy_clear_prompt_key() -> None:
+    settings = tui_settings_from_json({"keybindings": {"copy_message": "ctrl+b"}})
+
+    assert settings.keybindings.clear_prompt == "ctrl+b"
+
+
+def test_tui_keybindings_reserve_ctrl_c_for_interrupt() -> None:
+    with pytest.raises(TuiConfigError, match="reserved for interrupt"):
+        tui_settings_from_json({"keybindings": {"clear_prompt": "ctrl+c"}})
+    with pytest.raises(TuiConfigError, match="reserved for interrupt"):
+        TuiKeybindings(clear_prompt="ctrl+c")
+
+
+def test_tui_keybindings_constructor_migrates_legacy_default() -> None:
+    assert TuiKeybindings(copy_message="ctrl+c").clear_prompt == "ctrl+u"
+
+
 def test_tui_keybindings_serialize_to_json() -> None:
     settings = TuiSettings(
         keybindings=TuiKeybindings(
@@ -175,7 +198,7 @@ def test_tui_keybindings_serialize_to_json() -> None:
             thinking_cycle="f3",
             model_cycle="f6",
             toggle_thinking="f4",
-            copy_message="ctrl+b",
+            clear_prompt="ctrl+b",
         ),
         theme="high-contrast",
     )
@@ -189,7 +212,7 @@ def test_tui_keybindings_serialize_to_json() -> None:
     assert settings.to_json()["keybindings"]["accept_completion"] == "f2"
     assert settings.to_json()["keybindings"]["thinking_cycle"] == "f3"
     assert settings.to_json()["keybindings"]["model_cycle"] == "f6"
-    assert settings.to_json()["keybindings"]["copy_message"] == "ctrl+b"
+    assert settings.to_json()["keybindings"]["clear_prompt"] == "ctrl+b"
     assert settings.to_json()["theme"] == "high-contrast"
     assert settings.to_json()["auto_copy_selection"] is False
 

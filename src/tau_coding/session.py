@@ -42,6 +42,7 @@ from tau_agent.types import JSONValue
 from tau_ai.model_limits import ModelLimitsProvider, RuntimeModelLimits
 from tau_coding.branch_summary import summarize_branch_messages_with_model
 from tau_coding.brave_search import BraveSearchConfig
+from tau_coding.catalog_loader import effective_provider_labels
 from tau_coding.commands import CommandRegistry, CommandResult, create_default_command_registry
 from tau_coding.context import discover_project_context_with_diagnostics
 from tau_coding.context_window import (
@@ -321,6 +322,7 @@ class CodingSession:
         self._provider_settings = config.provider_settings
         self._runtime_provider_config = config.runtime_provider_config
         self._resource_paths = resource_paths_with_cwd(config.resource_paths, config.cwd)
+        self._provider_display_names = effective_provider_labels(self._resource_paths.paths)
         self._auto_compact_token_threshold = config.auto_compact_token_threshold
         self._auto_compact_enabled = config.auto_compact_enabled
         self._thinking_level: ThinkingLevel = _state_thinking_level(
@@ -536,6 +538,16 @@ class CodingSession:
     def provider_name(self) -> str:
         """Return the active provider name."""
         return self._provider_name
+
+    @property
+    def provider_display_name(self) -> str:
+        """Return the user-configured provider label without changing provider identity."""
+        return self._provider_display_names.get(self._provider_name, self._provider_name)
+
+    @property
+    def provider_display_names(self) -> dict[str, str]:
+        """Return display labels for configured provider IDs."""
+        return dict(self._provider_display_names)
 
     @property
     def inference_provider(self) -> str | None:
@@ -1582,14 +1594,19 @@ class CodingSession:
         if self._provider_settings is None:
             return
         previous_settings = self._provider_settings
+        previous_display_names = self._provider_display_names
         previous_thinking_level = self._thinking_level
-        self._provider_settings = load_provider_settings(self._resource_paths.paths)
         try:
+            next_settings = load_provider_settings(self._resource_paths.paths)
+            next_display_names = effective_provider_labels(self._resource_paths.paths)
+            self._provider_settings = next_settings
+            self._provider_display_names = next_display_names
             self._sync_thinking_level_to_active_model()
             self._refresh_runtime_provider()
             self._sync_image_support()
-        except ProviderConfigError:
+        except (ProviderConfigError, ValueError):
             self._provider_settings = previous_settings
+            self._provider_display_names = previous_display_names
             self._thinking_level = previous_thinking_level
             raise
 
@@ -1773,6 +1790,7 @@ class CodingSession:
         self._provider_name = replacement._provider_name
         self._inference_provider = replacement._inference_provider
         self._provider_settings = replacement._provider_settings
+        self._provider_display_names = replacement._provider_display_names
         self._runtime_provider_config = replacement._runtime_provider_config
         self._resource_paths = replacement._resource_paths
         self._auto_compact_token_threshold = replacement._auto_compact_token_threshold

@@ -11,6 +11,7 @@ from tau_coding.catalog_loader import (
     builtin_catalog,
     builtin_catalog_resource_text,
     effective_catalog,
+    effective_provider_labels,
     save_user_catalog_entries,
     user_catalog_path,
 )
@@ -203,6 +204,80 @@ def test_user_catalog_adds_new_provider(tmp_path: Path) -> None:
     assert entry.default_model == "deepseek-ai/DeepSeek-V4-Pro"
     assert entry.context_windows == {"deepseek-ai/DeepSeek-V4-Pro": 163_840}
     assert entry.thinking_levels == ("off", "low", "medium", "high")
+
+
+def test_user_catalog_provider_labels_rename_display_without_changing_identity(
+    tmp_path: Path,
+) -> None:
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        """
+[provider_labels]
+openai-codex = "codex"
+""",
+    )
+
+    assert effective_provider_labels(paths) == {"openai-codex": "codex"}
+    assert (
+        next(entry for entry in effective_catalog(paths) if entry.name == "openai-codex").name
+        == "openai-codex"
+    )
+
+
+def test_user_catalog_provider_labels_survive_provider_upsert(tmp_path: Path) -> None:
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        f"""
+[provider_labels]
+openai-codex = "codex"
+{VALID_PROVIDER}
+""",
+    )
+    entry = next(item for item in effective_catalog(paths) if item.name == "nebius")
+
+    save_user_catalog_entries((entry,), paths)
+
+    assert effective_provider_labels(paths) == {"openai-codex": "codex"}
+
+
+def test_user_catalog_provider_labels_reject_duplicate_labels(tmp_path: Path) -> None:
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        """
+[provider_labels]
+openai-codex = "models"
+opencode = "models"
+""",
+    )
+
+    with pytest.raises(CatalogError, match="duplicate labels: models"):
+        effective_provider_labels(paths)
+
+
+def test_user_catalog_provider_labels_reject_canonical_id_conflict(tmp_path: Path) -> None:
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        """
+[provider_labels]
+openai-codex = "opencode"
+""",
+    )
+
+    with pytest.raises(CatalogError, match="conflicts with canonical provider IDs"):
+        effective_provider_labels(paths)
+
+
+def test_user_catalog_provider_labels_reject_unknown_provider(tmp_path: Path) -> None:
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        """
+[provider_labels]
+missing = "friendly"
+""",
+    )
+
+    with pytest.raises(CatalogError, match="unknown providers: missing"):
+        effective_provider_labels(paths)
 
 
 def test_user_catalog_overlays_builtin_provider(tmp_path: Path) -> None:

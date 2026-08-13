@@ -117,6 +117,7 @@ class _CatalogFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1]
+    provider_labels: dict[_NonEmptyString, _NonEmptyString] = {}
     providers: tuple[_CatalogProvider, ...] = ()
 
 
@@ -151,6 +152,30 @@ def effective_catalog(paths: TauPaths | None = None) -> tuple[ProviderCatalogEnt
     return _entries_from_raw(filtered, source=str(path))
 
 
+def effective_provider_labels(paths: TauPaths | None = None) -> dict[str, str]:
+    """Return configured provider display labels keyed by canonical provider ID."""
+    path = user_catalog_path(paths)
+    if not path.exists():
+        return {}
+    raw = _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
+    _validate_catalog_root(raw, source=str(path))
+    provider_labels = raw.get("provider_labels", {})
+    if not isinstance(provider_labels, dict):
+        raise CatalogError(f"{path}: provider_labels must be a table")
+    labels: dict[str, str] = {}
+    for provider_name, label in provider_labels.items():
+        if not isinstance(provider_name, str) or not provider_name.strip():
+            raise CatalogError(f"{path}: provider_labels keys must be non-empty strings")
+        if not isinstance(label, str) or not label.strip():
+            raise CatalogError(
+                f"{path}: provider_labels.{provider_name} must be a non-empty string"
+            )
+        labels[provider_name.strip()] = label.strip()
+    provider_names = {entry.name for entry in effective_catalog(paths)}
+    _validate_provider_labels(labels, provider_names=provider_names, source=str(path))
+    return labels
+
+
 def save_user_catalog_entries(
     entries: Iterable[ProviderCatalogEntry],
     paths: TauPaths | None = None,
@@ -177,6 +202,7 @@ def save_user_catalog_entries(
 
     updated = {
         "schema_version": raw.get("schema_version", CATALOG_SCHEMA_VERSION),
+        "provider_labels": raw.get("provider_labels", {}),
         "providers": providers,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +223,7 @@ def _parse_catalog_text(text: str, *, source: str) -> dict[str, Any]:
 
 
 def _validate_catalog_root(raw: dict[str, Any], *, source: str) -> None:
-    allowed = {"schema_version", "providers"}
+    allowed = {"schema_version", "provider_labels", "providers"}
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise CatalogError(f"{source}: unknown catalog keys: {', '.join(unknown)}")
@@ -227,6 +253,10 @@ def _merge_raw_catalogs(base: dict[str, Any], overlay: dict[str, Any]) -> dict[s
             order.append(name)
     return {
         "schema_version": overlay.get("schema_version", base.get("schema_version")),
+        "provider_labels": {
+            **base.get("provider_labels", {}),
+            **overlay.get("provider_labels", {}),
+        },
         "providers": [by_name[name] for name in order],
     }
 
@@ -339,7 +369,44 @@ def _entries_from_raw(raw: dict[str, Any], *, source: str) -> tuple[ProviderCata
     if len(set(names)) != len(names):
         duplicates = sorted({name for name in names if names.count(name) > 1})
         raise CatalogError(f"{source}: duplicate provider names: {', '.join(duplicates)}")
+    _validate_provider_labels(
+        catalog.provider_labels,
+        provider_names=set(names),
+        source=source,
+    )
     return entries
+
+
+def _validate_provider_labels(
+    labels: Mapping[str, str],
+    *,
+    provider_names: set[str],
+    source: str,
+) -> None:
+    """Reject ambiguous display labels while keeping provider IDs unchanged."""
+    unknown = sorted(set(labels) - provider_names)
+    if unknown:
+        raise CatalogError(
+            f"{source}: provider_labels contains unknown providers: {', '.join(unknown)}"
+        )
+    label_counts: dict[str, int] = {}
+    for label in labels.values():
+        label_counts[label] = label_counts.get(label, 0) + 1
+    duplicates = sorted(label for label, count in label_counts.items() if count > 1)
+    if duplicates:
+        raise CatalogError(
+            f"{source}: provider_labels contains duplicate labels: {', '.join(duplicates)}"
+        )
+    conflicts = sorted(
+        provider_name
+        for provider_name, label in labels.items()
+        if label in provider_names and label != provider_name
+    )
+    if conflicts:
+        raise CatalogError(
+            f"{source}: provider_labels conflicts with canonical provider IDs: "
+            f"{', '.join(conflicts)}"
+        )
 
 
 def _entry_from_provider(provider: _CatalogProvider, *, source: str) -> ProviderCatalogEntry:
@@ -594,6 +661,12 @@ def _raw_model_metadata_from_entry(metadata: ModelCatalogMetadata) -> dict[str, 
 
 def _catalog_to_toml(raw: dict[str, Any]) -> str:
     lines = [f"schema_version = {raw.get('schema_version', CATALOG_SCHEMA_VERSION)}", ""]
+    provider_labels = raw.get("provider_labels")
+    if isinstance(provider_labels, dict) and provider_labels:
+        lines.append("[provider_labels]")
+        for provider_name, label in provider_labels.items():
+            lines.append(f"{_toml_key(str(provider_name))} = {_toml_value(label)}")
+        lines.append("")
     for provider in _raw_providers(raw):
         lines.append("[[providers]]")
         for key in (

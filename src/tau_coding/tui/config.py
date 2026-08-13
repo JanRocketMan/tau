@@ -64,8 +64,19 @@ class TuiKeybindings:
     model_cycle: str = "ctrl+p"
     toggle_thinking: str = "ctrl+t"
     toggle_tool_results: str = "ctrl+o"
-    copy_message: str = "ctrl+c"
+    clear_prompt: str = "ctrl+u"
     quit: str = "ctrl+d"
+    copy_message: str | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Accept the former ``copy_message`` constructor name as a compatibility alias."""
+        clear_prompt = self.copy_message or self.clear_prompt
+        if self.copy_message == "ctrl+c":
+            clear_prompt = "ctrl+u"
+        if clear_prompt == "ctrl+c":
+            raise TuiConfigError("TUI keybinding 'ctrl+c' is reserved for interrupt")
+        object.__setattr__(self, "clear_prompt", clear_prompt)
+        object.__setattr__(self, "copy_message", clear_prompt)
 
     def to_json(self) -> dict[str, str]:
         """Serialize these keybindings to JSON-compatible data."""
@@ -82,7 +93,7 @@ class TuiKeybindings:
             "model_cycle": self.model_cycle,
             "toggle_thinking": self.toggle_thinking,
             "toggle_tool_results": self.toggle_tool_results,
-            "copy_message": self.copy_message,
+            "clear_prompt": self.clear_prompt,
             "quit": self.quit,
         }
 
@@ -178,7 +189,16 @@ def _keybindings_from_json(data: dict[str, Any]) -> TuiKeybindings:
         field_name: _key_string(data.get(field_name, default_value), field_name)
         for field_name, default_value in defaults.to_json().items()
     }
+    # ``copy_message`` was the old name for clearing the prompt. An untouched
+    # old Ctrl+C value now yields to the hard interrupt binding; custom values
+    # continue to work as the clear-prompt key.
+    if "clear_prompt" not in data and "copy_message" in data:
+        legacy_clear_prompt = _key_string(data["copy_message"], "copy_message")
+        if legacy_clear_prompt != "ctrl+c":
+            values["clear_prompt"] = legacy_clear_prompt
     _reject_duplicate_keys(values)
+    if values["clear_prompt"] == "ctrl+c":
+        raise TuiConfigError("TUI keybinding 'ctrl+c' is reserved for interrupt")
     return TuiKeybindings(**values)
 
 

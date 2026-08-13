@@ -112,6 +112,8 @@ from tau_coding.tui.app import (
     TreePickerScreen,
     _activity_prompt_border_color,
     _completion_selected_render_line,
+    _filter_model_choices,
+    _model_picker_label,
     _render_activity_indicator,
     _terminal_command_prefix_span,
     _textual_theme_for_tau_theme,
@@ -231,6 +233,8 @@ class FakeSession:
         self.events: tuple[CodingSessionEvent, ...] = tuple(events)
         self.cwd = Path("/workspace/project")
         self.provider_name = "openai"
+        self.provider_display_name = "openai"
+        self.provider_display_names: dict[str, str] = {}
         self.model = "fake-model"
         self.available_models: tuple[str, ...] = ("fake-model", "other-model")
         self.available_model_choices: tuple[ModelChoice, ...] = (
@@ -546,6 +550,18 @@ def test_compact_session_info_renders_session_title_and_status() -> None:
     assert context_line == provider_line + 1
 
 
+def test_compact_session_info_uses_provider_display_name() -> None:
+    session = FakeSession()
+    session.provider_display_name = "codex"
+    console = Console(record=True, width=120)
+
+    console.print(render_compact_session_info(session))
+
+    output = console.export_text()
+    assert "codex:fake-model" in output
+    assert "openai:fake-model" not in output
+
+
 def test_compact_session_info_omits_title_in_small_layout() -> None:
     session = FakeSession()
     session._session_title = "Customer bugfix"
@@ -592,6 +608,25 @@ def test_compact_session_info_redraws_when_provider_usage_becomes_available(
     second_output = second_console.export_text()
     assert "12k/200k" in second_output
     assert "?/200k" not in second_output
+
+
+def test_model_picker_labels_and_search_use_provider_display_name() -> None:
+    choice = ModelChoice(provider_name="openai-codex", model="gpt-test")
+    labels = {"openai-codex": "codex"}
+
+    assert (
+        _model_picker_label(
+            choice,
+            current_model="gpt-test",
+            current_provider="openai-codex",
+            provider_display_names=labels,
+        )
+        == "* codex:gpt-test"
+    )
+    assert _filter_model_choices((choice,), "codex", provider_display_names=labels) == (choice,)
+    assert _filter_model_choices((choice,), "openai-codex", provider_display_names=labels) == (
+        choice,
+    )
 
 
 def test_compact_session_info_styles_provider_as_metadata() -> None:
@@ -2346,6 +2381,25 @@ def test_activity_indicator_keeps_running_animation_in_shell_mode() -> None:
     assert rendered.plain != "$"
 
 
+def test_activity_prompt_border_uses_success_while_running_and_error_after_failure() -> None:
+    theme = TAU_LIGHT_THEME
+
+    assert (
+        _activity_prompt_border_color(theme, frame=0, running=True, shell_mode=False)
+        == theme.success
+    )
+    assert (
+        _activity_prompt_border_color(
+            theme,
+            frame=0,
+            running=False,
+            shell_mode=False,
+            failed=True,
+        )
+        == theme.error
+    )
+
+
 def test_activity_prompt_border_uses_tool_running_color_in_shell_mode() -> None:
     theme = TAU_LIGHT_THEME
 
@@ -2418,7 +2472,8 @@ async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
         assert len(app.query("#shortcut-hints")) == 0
         assert _visible_footer_bindings(app) == {
             "Quit": "ctrl+d",
-            "Clear": "ctrl+c",
+            "Clear": "ctrl+u",
+            "Stop": "ctrl+c",
             "Commands": "ctrl+k",
             "Submit": "enter",
             "Newline": "shift+enter",
@@ -2458,6 +2513,7 @@ async def test_tui_app_footer_hints_update_while_running() -> None:
         assert _visible_footer_bindings(app) == {
             "Steer": "enter",
             "Follow-up": "alt+enter",
+            "Stop": "ctrl+c",
             "Cancel": "escape",
             "Thinking": "ctrl+t",
             "Tools": "ctrl+o",
@@ -2883,12 +2939,12 @@ async def test_tui_app_shows_activity_indicator_while_running() -> None:
 
         assert pytest.approx(tui_app.ACTIVITY_TICK_SECONDS) == 0.15
         assert tui_app.ACTIVITY_COLOR_FADE_STEPS == 24
-        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.success.lower()
         assert _render_plain(indicator).startswith("■")
 
         app._tick_activity()
 
-        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.success.lower()
         assert _render_plain(indicator).splitlines()[1] == "■"
 
         app.adapter.apply(AgentEndEvent())
@@ -3022,7 +3078,7 @@ async def test_tui_app_clears_activity_status_on_error() -> None:
 
         assert not app.query("#status")
         assert not app.query("#activity-status")
-        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.prompt_border
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.error.lower()
         assert prompt.styles.border_top[0] == ""
         assert prompt.styles.border_right[0] == ""
         assert prompt.styles.border_bottom[0] == ""
@@ -5871,6 +5927,69 @@ async def test_tui_app_non_session_modal_uses_global_auto_copy_setting(
 
 
 @pytest.mark.anyio
+async def test_tui_app_ctrl_c_stops_worker_before_agent_start_event() -> None:
+    started = asyncio.Event()
+
+    class StartingSession(FakeSession):
+        async def prompt(
+            self,
+            text: str,
+            **kwargs: object,
+        ) -> AsyncIterator[CodingSessionEvent]:
+            del kwargs
+            self.prompt_texts.append(text)
+            started.set()
+            await asyncio.Event().wait()
+            yield AgentStartEvent()  # pragma: no cover
+
+    session = StartingSession()
+    app = _tui_app(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "start slowly"
+        await pilot.press("enter")
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        assert app._prompt_worker is None
+        assert app._is_working() is False
+
+
+@pytest.mark.anyio
+async def test_tui_app_ctrl_c_stops_running_session_from_prompt() -> None:
+    class RunningSession(FakeSession):
+        @property
+        def is_running(self) -> bool:
+            return True
+
+    session = RunningSession()
+    app = _tui_app(session)
+    notifications: list[str] = []
+
+    def fake_notify(message: str, **kwargs: object) -> None:
+        del kwargs
+        notifications.append(message)
+
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
+
+    async with app.run_test() as pilot:
+        app.adapter.apply(AgentStartEvent())
+        app._refresh()
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "keep this draft"
+
+        await pilot.press("ctrl+c")
+
+        assert session.cancel_count == 1
+        assert app.state.running is False
+        assert prompt.value == "keep this draft"
+        assert notifications == ["Interrupted current operation."]
+
+
+@pytest.mark.anyio
 async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
     class RunningSession(FakeSession):
         @property
@@ -7324,7 +7443,7 @@ async def test_tui_app_thinking_toggle_preserves_unrelated_items() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_prompt_ctrl_c_clears_text() -> None:
+async def test_tui_prompt_ctrl_c_clears_text_when_idle() -> None:
     app = _tui_app(FakeSession(messages=(UserMessage(content="User prompt"),)))
 
     async with app.run_test() as pilot:
@@ -7333,6 +7452,20 @@ async def test_tui_prompt_ctrl_c_clears_text() -> None:
         prompt.text = "discard this prompt"
         await pilot.pause()
         await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        assert prompt.text == ""
+
+
+@pytest.mark.anyio
+async def test_tui_prompt_ctrl_u_clears_text() -> None:
+    app = _tui_app(FakeSession())
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", TextArea)
+        prompt.focus()
+        prompt.text = "discard this prompt"
+        await pilot.press("ctrl+u")
         await pilot.pause()
 
         assert prompt.text == ""
@@ -7477,6 +7610,34 @@ async def test_tui_app_uses_configured_thinking_keybinding() -> None:
 
 
 @pytest.mark.anyio
+async def test_submitting_new_prompt_resets_failed_prompt_border_immediately() -> None:
+    class StartingSession(FakeSession):
+        async def prompt(
+            self,
+            text: str,
+            **kwargs: object,
+        ) -> AsyncIterator[CodingSessionEvent]:
+            del text, kwargs
+            await asyncio.Event().wait()
+            yield AgentStartEvent()  # pragma: no cover
+
+    app = _tui_app(StartingSession())
+
+    async with app.run_test() as pilot:
+        app.state.error = "provider failed"
+        app._refresh_chrome()
+        prompt = app.query_one("#prompt", PromptInput)
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.error.lower()
+
+        await app._submit_prompt("retry")
+        await pilot.pause()
+
+        assert app.state.error is None
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.success.lower()
+        app.action_interrupt()
+
+
+@pytest.mark.anyio
 async def test_tui_prompt_worker_refreshes_directly() -> None:
     app = _tui_app(FakeSession(events=[AgentStartEvent(), AgentEndEvent()]))
     refreshes = 0
@@ -7617,6 +7778,8 @@ async def test_tui_prompt_worker_mounts_provider_error_in_live_transcript() -> N
         assert [widget.item.text for widget in errors] == [
             "Error: provider failed\nRun ended before completion. Send a message to retry."
         ]
+        prompt = app.query_one("#prompt", PromptInput)
+        assert prompt.styles.border_left[1].hex.lower() == CODEYELLOW_THEME.error.lower()
         assert app.state.running is False
 
 
@@ -9241,8 +9404,8 @@ async def test_component_interceptor_never_consumes_reserved_interrupt_keys() ->
         prompt.focus()
         await pilot.pause()
 
-        # ctrl+c (SIGINT/interrupt reflex, bound to clear_prompt): never consulted,
-        # and its bound action still fires (the prompt is cleared).
+        # ctrl+c (SIGINT/interrupt reflex): never consulted, and its hard
+        # interrupt action still clears an idle prompt as a compatibility fallback.
         prompt.text = "hi"
         prompt.move_cursor((0, 2))
         await pilot.press("ctrl+c")

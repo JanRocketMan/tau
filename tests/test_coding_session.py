@@ -2843,12 +2843,22 @@ async def test_session_provider_settings_reload_uses_session_paths(
 ) -> None:
     tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
     seen_paths: list[TauPaths | None] = []
+    seen_label_paths: list[TauPaths | None] = []
 
     def load_provider_settings(paths: TauPaths | None = None) -> ProviderSettings:
         seen_paths.append(paths)
         return ProviderSettings(providers=(OpenAICompatibleProviderConfig(name="openai"),))
 
+    def effective_provider_labels(paths: TauPaths | None = None) -> dict[str, str]:
+        seen_label_paths.append(paths)
+        return {"openai-codex": "codex"}
+
     monkeypatch.setattr(coding_session_module, "load_provider_settings", load_provider_settings)
+    monkeypatch.setattr(
+        coding_session_module,
+        "effective_provider_labels",
+        effective_provider_labels,
+    )
     session = await CodingSession.load(
         CodingSessionConfig(
             provider=FakeProvider([]),
@@ -2866,6 +2876,8 @@ async def test_session_provider_settings_reload_uses_session_paths(
     session.reload_provider_settings()
 
     assert seen_paths == [tau_paths]
+    assert seen_label_paths == [tau_paths, tau_paths]
+    assert session.provider_display_names == {"openai-codex": "codex"}
 
 
 @pytest.mark.anyio
