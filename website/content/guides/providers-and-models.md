@@ -138,10 +138,10 @@ once makes both OpenCode Go and OpenCode Zen available. Available models and pla
 [OpenCode Zen](https://opencode.ai/docs/zen) pages for the current list.
 
 Tau starts new OpenCode sessions with model-specific reasoning defaults:
-`kimi-k3` uses `max`, while `deepseek-v4-flash` uses `high`, on both
-`opencode-go` and `opencode`. Change the setting for the current session with
-`/effort [level]`; the available levels are model-aware and the selected value
-is sent as the provider's `reasoning_effort`.
+`kimi-k3` uses `max` on `opencode-go`, `deepseek-v4-flash` uses `max` on
+`opencode-go` and `high` on `opencode`. Cycle the setting for the current
+session with the thinking keybinding; the available levels are model-aware and
+the selected value is sent as the provider's `reasoning_effort`.
 
 ### Hugging Face Inference Providers
 

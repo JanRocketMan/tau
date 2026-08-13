@@ -107,22 +107,23 @@ thinking level you can cycle:
 off → minimal → low → medium → high → xhigh → max
 ```
 
-- **Shift+Tab** cycles the thinking level.
-- **`/effort [level]`** shows the available levels or changes the effort for
-  future turns in the current session.
+- **Shift+Tab** cycles the thinking level (configurable in `~/.tau/tui.json`
+  via the `thinking_cycle` keybinding).
 - **Ctrl+T** toggles whether reasoning tokens are shown (hidden by default).
   Reasoning blocks are saved with the assistant response, so their original
   positions and visibility toggle are restored when you resume a session.
 
-Thinking is model-aware: Tau enables it only when the active provider declares
-supported levels for the active model. When it's unavailable, `/session` shows
-the reason (e.g. the provider doesn't declare `thinking_levels`, or the model
-isn't listed). Custom providers can opt in via `thinking_levels` in their config
-— see [Configuration]({{< relref "../reference/configuration.md#providers" >}}).
+Thinking is model-aware: Tau enables it only when the active model declares a
+`thinking_levels` list in its catalog metadata. When it's unavailable, `/session`
+shows the reason (for example, the model metadata is missing, or the model is not
+a reasoning model). Custom providers declare the two model-scoped thinking
+fields, `thinking_default` and `thinking_levels`, in their catalog metadata —
+see [Configuration]({{< relref "../reference/configuration.md#providers" >}}).
 
 At startup Tau picks a valid level for the selected model automatically: a
 remembered per-model choice wins, then the model's catalog default, then the
-provider's default, then the global default, then the first level the model
-supports. OpenCode Go and OpenCode start `kimi-k3` at `max` and
-`deepseek-v4-flash` at `high`. Picking an unsupported level explicitly via
-`/effort` still shows an error listing the available modes.
+global default, then the first level the model supports. OpenCode Go starts
+`kimi-k3` at `max` and `deepseek-v4-flash` at `max`; OpenCode starts
+`deepseek-v4-flash` at `high`. Cycling with the thinking key cycles through only
+that model's declared levels, and does nothing when the model exposes a single
+level.

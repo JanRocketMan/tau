@@ -34,13 +34,15 @@ credential_name = "nebius"
 models = ["deepseek-ai/DeepSeek-V4-Pro", "Qwen/Qwen3-Coder-480B-A35B-Instruct"]
 default_model = "deepseek-ai/DeepSeek-V4-Pro"
 docs_url = "https://studio.nebius.ai/docs"
-thinking_levels = ["off", "low", "medium", "high"]
-thinking_models = ["deepseek-ai/DeepSeek-V4-Pro"]
-thinking_default = "medium"
 thinking_parameter = "reasoning_effort"
 
 [providers.context_windows]
 "deepseek-ai/DeepSeek-V4-Pro" = 163840
+
+[providers.model_metadata."deepseek-ai/DeepSeek-V4-Pro"]
+input = ["text"]
+thinking_default = "medium"
+thinking_levels = ["off", "low", "medium", "high"]
 """
 
 
@@ -79,6 +81,7 @@ def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
             {
                 "gpt-5.6-sol",
                 "gpt-5.6-luna",
+                "gpt-5.6-terra",
             },
         ),
         (
@@ -92,7 +95,6 @@ def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
             "opencode",
             {
                 "gpt-5.6-luna",
-                "kimi-k3",
             },
         ),
     ],
@@ -114,6 +116,7 @@ def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> No
         "openai-codex": {
             "gpt-5.6-sol": (272_000, 128_000),
             "gpt-5.6-luna": (272_000, 128_000),
+            "gpt-5.6-terra": (272_000, 128_000),
         },
         "opencode-go": {
             "deepseek-v4-flash": (1_000_000, 384_000),
@@ -123,7 +126,6 @@ def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> No
         "opencode": {
             "deepseek-v4-flash": (1_000_000, 384_000),
             "gpt-5.6-luna": (1_000_000, 128_000),
-            "kimi-k3": (1_000_000, None),
         },
     }
 
@@ -148,7 +150,7 @@ def test_builtin_catalog_declares_current_model_modalities() -> None:
     } == set(codex.models)
     assert {
         model for model, metadata in opencode.model_metadata.items() if "image" in metadata.input
-    } == {"gpt-5.6-luna", "kimi-k3"}
+    } == {"gpt-5.6-luna"}
     assert opencode.model_metadata["deepseek-v4-flash"].input == ("text",)
 
 
@@ -163,27 +165,49 @@ def test_builtin_catalog_auth_and_thinking_metadata() -> None:
     assert codex.auth_methods == ("oauth",)
     assert opencode.auth_methods == ("api_key",)
     assert opencode.api == "openai-completions"
-    assert codex.thinking_levels == ("low", "medium", "high", "xhigh")
-    assert codex.thinking_default == "xhigh"
     assert codex.thinking_parameter == "reasoning.effort"
-    assert opencode.thinking_levels == ("low", "medium", "high", "xhigh", "max")
-    assert opencode.thinking_default == "xhigh"
     assert opencode.thinking_parameter == "reasoning_effort"
+    assert codex.model_metadata["gpt-5.6-luna"].thinking_default == "xhigh"
+    assert codex.model_metadata["gpt-5.6-luna"].thinking_levels == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
+    assert opencode.model_metadata["gpt-5.6-luna"].thinking_levels == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
+    assert opencode_go.model_metadata["deepseek-v4-flash"].thinking_default == "max"
+    assert opencode.model_metadata["deepseek-v4-flash"].thinking_default == "high"
+    assert opencode_go.model_metadata["kimi-k3"].thinking_default == "max"
     for provider in (opencode_go, opencode):
-        assert provider.model_metadata["deepseek-v4-flash"].thinking_default == "high"
-        assert provider.model_metadata["kimi-k3"].thinking_default == "max"
-    assert codex.model_metadata["gpt-5.6-sol"].thinking_level_map == {"xhigh": "xhigh"}
-    assert codex.model_metadata["gpt-5.6-luna"].thinking_level_map == {"xhigh": "xhigh"}
+        assert provider.model_metadata["deepseek-v4-flash"].thinking_levels == (
+            "low",
+            "medium",
+            "high",
+            "max",
+        )
+    assert opencode_go.model_metadata["kimi-k3"].thinking_levels == (
+        "low",
+        "medium",
+        "high",
+        "max",
+    )
 
 
 def test_builtin_catalog_entries_are_internally_consistent() -> None:
     for entry in builtin_catalog():
         assert entry.default_model in entry.models
-        assert set(entry.thinking_models) <= set(entry.models)
         assert set(entry.context_windows or {}) <= set(entry.models)
-        if entry.thinking_default is not None:
-            assert entry.thinking_levels is not None
-            assert entry.thinking_default in entry.thinking_levels
+        for model, metadata in entry.model_metadata.items():
+            assert model in entry.models
+            assert metadata.thinking_levels
+            assert metadata.thinking_default is not None
+            assert metadata.thinking_default in metadata.thinking_levels
 
 
 def test_builtin_catalog_resource_is_packaged() -> None:
@@ -203,7 +227,13 @@ def test_user_catalog_adds_new_provider(tmp_path: Path) -> None:
     assert entry.name == "nebius"
     assert entry.default_model == "deepseek-ai/DeepSeek-V4-Pro"
     assert entry.context_windows == {"deepseek-ai/DeepSeek-V4-Pro": 163_840}
-    assert entry.thinking_levels == ("off", "low", "medium", "high")
+    assert entry.model_metadata["deepseek-ai/DeepSeek-V4-Pro"].thinking_levels == (
+        "off",
+        "low",
+        "medium",
+        "high",
+    )
+    assert entry.model_metadata["deepseek-ai/DeepSeek-V4-Pro"].thinking_default == "medium"
 
 
 def test_user_catalog_provider_labels_rename_display_without_changing_identity(
@@ -305,7 +335,35 @@ default_model = "custom-model"
     assert entry.thinking_parameter == "reasoning_effort"
 
 
-def test_user_catalog_thinking_fields_replace_as_group(tmp_path: Path) -> None:
+def test_user_catalog_thinking_metadata_replaces_per_model(tmp_path: Path) -> None:
+    paths = _write_user_catalog(
+        tmp_path / ".tau",
+        """
+[[providers]]
+name = "opencode"
+thinking_parameter = "reasoning.effort"
+
+[providers.model_metadata."deepseek-v4-flash"]
+thinking_default = "low"
+thinking_levels = ["low", "high"]
+""",
+    )
+    entry = next(e for e in effective_catalog(paths) if e.name == "opencode")
+    assert entry.thinking_parameter == "reasoning.effort"
+    assert entry.model_metadata["deepseek-v4-flash"].thinking_levels == ("low", "high")
+    assert entry.model_metadata["deepseek-v4-flash"].thinking_default == "low"
+    # Untouched models keep their builtin per-model thinking metadata.
+    assert entry.model_metadata["gpt-5.6-luna"].thinking_levels == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
+    assert entry.model_metadata["gpt-5.6-luna"].thinking_default == "xhigh"
+
+
+def test_user_catalog_rejects_provider_level_thinking_fields(tmp_path: Path) -> None:
     paths = _write_user_catalog(
         tmp_path / ".tau",
         """
@@ -315,11 +373,8 @@ thinking_levels = ["low", "high"]
 thinking_default = "high"
 """,
     )
-    entry = next(e for e in effective_catalog(paths) if e.name == "opencode")
-    assert entry.thinking_levels == ("low", "high")
-    assert entry.thinking_default == "high"
-    assert entry.thinking_models == ()
-    assert entry.thinking_parameter is None
+    with pytest.raises(CatalogError, match="thinking_levels"):
+        effective_catalog(paths)
 
 
 def test_user_catalog_overlays_and_serializes_cost_tiers(tmp_path: Path) -> None:

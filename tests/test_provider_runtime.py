@@ -144,9 +144,14 @@ def test_create_model_provider_rejects_model_not_declared_for_provider(
 def test_create_model_provider_maps_codex_reasoning_effort_like_pi(tmp_path: Path) -> None:
     store = FileCredentialStore(tmp_path / "credentials.json")
     provider_config = OpenAICodexProviderConfig(
-        thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
-        thinking_models=("gpt-5.5",),
         thinking_parameter="reasoning.effort",
+        model_metadata={
+            "gpt-5.5": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="xhigh",
+                thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
+            ),
+        },
     )
 
     off_provider = create_model_provider(
@@ -182,7 +187,7 @@ def test_create_model_provider_coerces_unsupported_startup_thinking_level(
 ) -> None:
     # Regression: startup used to pass the global default ("medium") straight
     # to create_model_provider, which crashed for models like kimi-code:k3
-    # that only support xhigh. Now k3 also supports low and high.
+    # that only support xhigh. Now k3 supports low, high, and max.
     monkeypatch.setenv("TAU_TEST_KIMI_CODE_API_KEY", "test-key")
     store = FileCredentialStore(tmp_path / "credentials.json")
     provider_config = OpenAICompatibleProviderConfig(
@@ -190,20 +195,12 @@ def test_create_model_provider_coerces_unsupported_startup_thinking_level(
         api_key_env="TAU_TEST_KIMI_CODE_API_KEY",
         models=("k3",),
         default_model="k3",
-        thinking_levels=("low", "medium", "high", "xhigh"),
-        thinking_default="xhigh",
         thinking_parameter="reasoning_effort",
         model_metadata={
             "k3": ProviderModelMetadata(
                 reasoning=True,
-                thinking_level_map={
-                    "off": None,
-                    "minimal": None,
-                    "low": "low",
-                    "medium": None,
-                    "high": "high",
-                    "xhigh": "max",
-                },
+                thinking_default="max",
+                thinking_levels=("low", "high", "max"),
             ),
         },
     )

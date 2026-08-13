@@ -149,10 +149,11 @@ User catalog overlays can be partial when they use the same `name` as a built-in
 provider. Scalar fields replace built-in values, `models` are merged with user
 models first, and `context_windows` are merged. Provider-level `compat` is merged
 key by key. Model metadata is merged by model;
-its `headers`, `compat`, and `thinking_level_map` mappings are merged, while other
-metadata fields—including the complete `cost_tiers` array—replace the built-in
-value. A model's `compat` wins over the provider's, so a built-in per-model value
-overrides a provider-level overlay — override at the model level to change it.
+its `headers` and `compat` mappings are merged, while other
+metadata fields—including the complete `cost_tiers` array and the thinking
+fields—replace the built-in value. A model's `compat` wins over the provider's, so
+a built-in per-model value overrides a provider-level overlay — override at the
+model level to change it.
 
 `removed_models` is an additive provider-scoped tombstone list. Tau applies it
 last and removes matching model-list, metadata, context-window, thinking, and
@@ -199,11 +200,14 @@ name = "anthropic"
 compat = { supportsLongCacheRetention = false }
 ```
 
-The thinking fields (`thinking_levels`, `thinking_models`,
-`thinking_default`, `thinking_parameter`) replace as a group when
-`thinking_levels` is present. A model metadata entry may also set
-`thinking_default` for a model-specific startup choice, alongside
-`thinking_level_map` when the provider's wire value differs.
+Thinking support is declared strictly in model metadata. A `[[providers]]` entry
+may set `thinking_parameter` (the request field used to change effort:
+`"reasoning_effort"`, `"reasoning.effort"`, or `"anthropic.thinking"`); it must
+not set provider-level `thinking_levels`, `thinking_models`, or
+`thinking_default`. Every `[providers.model_metadata.<model>]` entry declares
+exactly two thinking fields: `thinking_levels` (the Tau levels the model
+accepts, sent verbatim as the parameter value) and `thinking_default` (a member
+of that list used when no preference is remembered).
 
 `catalog.toml` does not store runtime request options such as custom HTTP
 headers, timeouts, or retry settings. Put those in `~/.tau/providers.json` on the
@@ -211,7 +215,7 @@ matching provider entry.
 
 Invalid catalog files fail loudly. Tau rejects unknown keys, empty required
 strings, empty model names, unsupported provider kinds, default models that are
-not listed in `models`, `thinking_models` or `context_windows` entries for
+not listed in `models` or `context_windows` entries for
 unknown models, and non-positive or non-integer context-window values.
 
 Model metadata can retain a backward-compatible flat `cost` and optionally
@@ -309,10 +313,10 @@ Provider preferences live in `~/.tau/providers.json`:
 - Tau ignores unrecognized preference fields for cross-version compatibility,
   but rejects an unsupported `schema_version` rather than risking a destructive
   rewrite with the wrong format.
-- Custom models declare thinking support in `catalog.toml` with
-  `thinking_levels`, `thinking_default`, `thinking_models`, and
-  `thinking_parameter` (`"reasoning_effort"`, `"reasoning.effort"`, or
-  `"anthropic.thinking"`).
+- Custom models declare thinking support in `catalog.toml` model metadata with
+  `thinking_levels` and `thinking_default`, and set the wire parameter
+  (`"reasoning_effort"`, `"reasoning.effort"`, or `"anthropic.thinking"`) with
+  the provider-level `thinking_parameter`.
 
 Writes after `/login`, `/model`, or scoped-model changes reload the file first,
 apply only the requested change, write atomically, and keep a `.bak` backup.

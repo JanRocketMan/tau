@@ -43,7 +43,7 @@ available modes — the fallback only applies to the implicit startup default.
 Pi treats thinking-level capability as model-scoped data and never lets an
 unsupported implicit default abort the session; Tau now follows the same rule
 at startup by resolving the level from the model metadata
-(`thinking_level_map` / `unsupported_thinking_levels`) instead of assuming the
+(`thinking_default` / `thinking_levels`) instead of assuming the
 global default fits every model.
 
 ## Verify

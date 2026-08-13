@@ -18,7 +18,6 @@ ProviderApi = Literal[
     "openai-codex-responses",
 ]
 ModelInput = Literal["text", "image"]
-ThinkingLevelMap = dict[ThinkingLevel, str | None]
 AuthMethod = Literal["api_key", "oauth"]
 
 
@@ -44,9 +43,9 @@ class ModelCatalogMetadata:
     context_window: int | None = None
     max_tokens: int | None = None
     thinking_default: ThinkingLevel | None = None
+    thinking_levels: tuple[ThinkingLevel, ...] = ()
     headers: dict[str, str] = field(default_factory=dict)
     compat: dict[str, JSONValue] = field(default_factory=dict)
-    thinking_level_map: ThinkingLevelMap = field(default_factory=dict)
 
 
 def model_cost_for_input_tokens(
@@ -80,9 +79,6 @@ class ProviderCatalogEntry:
     headers: dict[str, str] = field(default_factory=dict)
     compat: dict[str, JSONValue] = field(default_factory=dict)
     model_metadata: dict[str, ModelCatalogMetadata] = field(default_factory=dict)
-    thinking_levels: tuple[ThinkingLevel, ...] | None = None
-    thinking_models: tuple[str, ...] = ()
-    thinking_default: ThinkingLevel | None = None
     thinking_parameter: ThinkingParameter | None = None
     removed_models: tuple[str, ...] = ()
     auth_methods: tuple[AuthMethod, ...] = ("api_key",)

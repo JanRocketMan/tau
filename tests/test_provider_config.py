@@ -95,25 +95,22 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     )
     assert provider_default_thinking_level(codex, model="gpt-5.6-luna") == "xhigh"
     assert provider_thinking_unavailable_reason(codex, model="unknown") == (
-        "openai-codex:unknown is not declared in thinking_models"
+        "Provider openai-codex does not declare thinking metadata for unknown"
     )
     assert provider_thinking_levels(opencode_go, model="kimi-k3") == (
         "low",
         "medium",
         "high",
-        "xhigh",
         "max",
     )
-    assert provider_default_thinking_level(opencode_go, model="deepseek-v4-flash") == "high"
+    assert provider_default_thinking_level(opencode_go, model="deepseek-v4-flash") == "max"
     assert provider_default_thinking_level(opencode_go, model="kimi-k3") == "max"
 
     opencode = settings.get_provider("opencode")
     assert provider_default_thinking_level(opencode, model="deepseek-v4-flash") == "high"
-    assert provider_default_thinking_level(opencode, model="kimi-k3") == "max"
-    assert resolve_startup_thinking_level(opencode_go, "deepseek-v4-flash") == "high"
+    assert resolve_startup_thinking_level(opencode_go, "deepseek-v4-flash") == "max"
     assert resolve_startup_thinking_level(opencode_go, "kimi-k3") == "max"
     assert resolve_startup_thinking_level(opencode, "deepseek-v4-flash") == "high"
-    assert resolve_startup_thinking_level(opencode, "kimi-k3") == "max"
 
 
 def test_load_provider_settings_accepts_provider_preferences_with_user_catalog(
@@ -578,36 +575,23 @@ def test_resolve_provider_selection_rejects_unknown_provider() -> None:
 
 
 def _kimi_code_like_provider() -> OpenAICompatibleProviderConfig:
-    # Mirrors the catalog kimi-code entry: k3 supports low, high, and xhigh
-    # mapped to "low", "high", "max" respectively.
+    # Mirrors the catalog kimi-code entry: k3 supports low, high, and max, with
+    # max as its catalog default; kimi-for-coding supports only medium.
     return OpenAICompatibleProviderConfig(
         name="kimi-code",
         models=("k3", "kimi-for-coding"),
         default_model="k3",
-        thinking_levels=("low", "medium", "high", "xhigh"),
-        thinking_default="xhigh",
         thinking_parameter="reasoning_effort",
         model_metadata={
             "k3": ProviderModelMetadata(
                 reasoning=True,
-                thinking_level_map={
-                    "off": None,
-                    "minimal": None,
-                    "low": "low",
-                    "medium": None,
-                    "high": "high",
-                    "xhigh": "max",
-                },
+                thinking_default="max",
+                thinking_levels=("low", "high", "max"),
             ),
             "kimi-for-coding": ProviderModelMetadata(
                 reasoning=True,
-                thinking_level_map={
-                    "off": None,
-                    "minimal": None,
-                    "low": None,
-                    "high": None,
-                    "xhigh": None,
-                },
+                thinking_default="medium",
+                thinking_levels=("medium",),
             ),
         },
     )
@@ -616,8 +600,9 @@ def _kimi_code_like_provider() -> OpenAICompatibleProviderConfig:
 def test_resolve_startup_thinking_level_uses_k3_max_default() -> None:
     provider = _kimi_code_like_provider()
 
-    # The current global startup preference is xhigh, which K3 supports.
-    assert resolve_startup_thinking_level(provider, "k3") == "xhigh"
+    # The current global startup preference is xhigh, which K3 does not expose;
+    # its catalog default max wins.
+    assert resolve_startup_thinking_level(provider, "k3") == "max"
 
 
 def test_resolve_startup_thinking_level_prefers_remembered_model_default() -> None:
@@ -626,20 +611,18 @@ def test_resolve_startup_thinking_level_prefers_remembered_model_default() -> No
         name=provider.name,
         models=provider.models,
         default_model=provider.default_model,
-        thinking_levels=provider.thinking_levels,
-        thinking_default=provider.thinking_default,
         thinking_parameter=provider.thinking_parameter,
-        thinking_defaults={"k3": "xhigh"},
+        thinking_defaults={"k3": "high"},
         model_metadata=provider.model_metadata,
     )
 
-    assert resolve_startup_thinking_level(remembered, "k3") == "xhigh"
+    assert resolve_startup_thinking_level(remembered, "k3") == "high"
 
 
 def test_resolve_startup_thinking_level_keeps_supported_default() -> None:
     provider = _kimi_code_like_provider()
 
-    # kimi-for-coding supports global medium but not K3's xhigh default.
+    # kimi-for-coding supports global medium and exposes it as its catalog default.
     assert provider_thinking_levels(provider, model="kimi-for-coding") == ("medium",)
     assert resolve_startup_thinking_level(provider, "kimi-for-coding") == "medium"
 
@@ -809,10 +792,15 @@ def test_openai_compatible_config_from_provider_sets_reasoning_effort(
         api_key_env="LOCAL_API_KEY",
         models=("reasoner", "plain"),
         default_model="reasoner",
-        thinking_levels=("off", "low", "high"),
-        thinking_models=("reasoner",),
-        thinking_default="low",
         thinking_parameter="reasoning_effort",
+        model_metadata={
+            "reasoner": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="low",
+                thinking_levels=("off", "low", "high"),
+            ),
+            "plain": ProviderModelMetadata(reasoning=True, thinking_levels=()),
+        },
     )
 
     reasoner = openai_compatible_config_from_provider(
@@ -832,7 +820,7 @@ def test_openai_compatible_config_from_provider_sets_reasoning_effort(
 
 @pytest.mark.parametrize(
     ("level", "expected_effort"),
-    [("low", "low"), ("high", "high"), ("xhigh", "max"), ("max", "max")],
+    [("low", "low"), ("medium", "medium"), ("high", "high"), ("max", "max")],
 )
 def test_kimi_k3_maps_thinking_levels_to_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch,
@@ -854,7 +842,6 @@ def test_kimi_k3_maps_thinking_levels_to_reasoning_effort(
         "low",
         "medium",
         "high",
-        "xhigh",
         "max",
     )
     assert config.reasoning_effort == expected_effort
@@ -870,8 +857,14 @@ def test_openai_compatible_config_from_provider_rejects_unsupported_thinking_lev
         api_key_env="LOCAL_API_KEY",
         models=("reasoner",),
         default_model="reasoner",
-        thinking_levels=("low", "high"),
         thinking_parameter="reasoning_effort",
+        model_metadata={
+            "reasoner": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="low",
+                thinking_levels=("low", "high"),
+            ),
+        },
     )
 
     with pytest.raises(ProviderConfigError, match="not available"):
@@ -974,8 +967,14 @@ def test_openai_compatible_config_from_provider_sets_reasoning_parameter(
         api_key_env="LOCAL_API_KEY",
         models=("reasoner",),
         default_model="reasoner",
-        thinking_levels=("low", "high"),
         thinking_parameter=parameter,
+        model_metadata={
+            "reasoner": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="high",
+                thinking_levels=("low", "high"),
+            ),
+        },
     )
 
     config = openai_compatible_config_from_provider(
@@ -1025,11 +1024,16 @@ def test_provider_settings_from_json_loads_custom_thinking_capabilities() -> Non
                     "api_key_env": "LOCAL_API_KEY",
                     "models": ["reasoner", "plain"],
                     "default_model": "reasoner",
-                    "thinking_levels": ["off", "low", "high"],
-                    "thinking_models": ["reasoner"],
-                    "thinking_default": "low",
                     "thinking_parameter": "reasoning_effort",
                     "thinking_defaults": {"reasoner": "high"},
+                    "model_metadata": {
+                        "reasoner": {
+                            "reasoning": True,
+                            "thinking_default": "low",
+                            "thinking_levels": ["off", "low", "high"],
+                        },
+                        "plain": {"reasoning": True},
+                    },
                 }
             ],
         }
@@ -1050,10 +1054,14 @@ def test_set_provider_thinking_level_updates_preference() -> None:
         name="local",
         models=("reasoner",),
         default_model="reasoner",
-        thinking_levels=("low", "high"),
-        thinking_models=("reasoner",),
-        thinking_default="low",
         thinking_parameter="reasoning_effort",
+        model_metadata={
+            "reasoner": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="low",
+                thinking_levels=("low", "high"),
+            ),
+        },
     )
     settings = ProviderSettings(default_provider="local", providers=(provider,))
 
@@ -1128,7 +1136,7 @@ def test_load_provider_settings_does_not_restore_stale_codex_builtin_models(
     settings = load_provider_settings(TauPaths(home=tau_home))
     provider = settings.get_provider("openai-codex")
 
-    assert provider.models == ("gpt-5.6-luna", "gpt-5.6-sol")
+    assert provider.models == ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
     assert provider.default_model == "gpt-5.6-luna"
     assert provider_thinking_levels(provider, model="gpt-5.6-luna") == (
         "low",

@@ -1047,6 +1047,41 @@ async def test_session_cycles_thinking_level(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_session_cycles_thinking_is_noop_with_single_level(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    provider_config = OpenAICompatibleProviderConfig(
+        name="local",
+        models=("single",),
+        default_model="single",
+        thinking_parameter="reasoning_effort",
+        model_metadata={
+            "single": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="xhigh",
+                thinking_levels=("xhigh",),
+            ),
+        },
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=FakeProvider([]),
+            model="single",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="local",
+            provider_settings=ProviderSettings(providers=(provider_config,)),
+        )
+    )
+
+    assert session.thinking_level == "xhigh"
+    message = await session.cycle_thinking_level()
+
+    assert message == "Thinking mode: xhigh"
+    assert session.thinking_level == "xhigh"
+
+
+@pytest.mark.anyio
 async def test_session_updates_read_image_behavior_when_model_changes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1096,10 +1131,14 @@ async def test_session_uses_active_model_thinking_capabilities(
         name="openai",
         models=("reasoner", "plain"),
         default_model="reasoner",
-        thinking_levels=("off", "low", "high"),
-        thinking_models=("reasoner",),
-        thinking_default="low",
         thinking_parameter="reasoning_effort",
+        model_metadata={
+            "reasoner": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="low",
+                thinking_levels=("off", "low", "high"),
+            ),
+        },
     )
     session = await CodingSession.load(
         CodingSessionConfig(
@@ -1124,9 +1163,11 @@ async def test_session_uses_active_model_thinking_capabilities(
     session.set_model("plain")
 
     assert not session.available_thinking_levels
-    assert session.thinking_unavailable_reason == "openai:plain is not declared in thinking_models"
-    with pytest.raises(ValueError, match="openai:plain is not declared in thinking_models"):
-        await session.cycle_thinking_level()
+    assert session.thinking_unavailable_reason == (
+        "Provider openai does not declare thinking metadata for plain"
+    )
+    # Nothing to cycle: the level is unchanged and no error is raised.
+    assert await session.cycle_thinking_level() == "Thinking mode: high"
 
     session.set_model("reasoner")
 
@@ -1139,10 +1180,14 @@ async def test_session_uses_active_model_thinking_capabilities(
 async def test_session_persists_thinking_preference_for_new_sessions(tmp_path: Path) -> None:
     tau_paths = TauPaths(home=tmp_path / ".tau")
     provider_config = OpenAICodexProviderConfig(
-        thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
-        thinking_models=("gpt-5.5",),
-        thinking_default="medium",
         thinking_parameter="reasoning.effort",
+        model_metadata={
+            "gpt-5.5": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="medium",
+                thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
+            ),
+        },
     )
     settings = ProviderSettings(
         default_provider="openai-codex",
@@ -1162,7 +1207,7 @@ async def test_session_persists_thinking_preference_for_new_sessions(tmp_path: P
         )
     )
 
-    assert session.thinking_level == "xhigh"
+    assert session.thinking_level == "medium"
     assert await session.set_thinking_level("low") == "Thinking mode: low"
 
     saved = load_provider_settings(tau_paths)
@@ -1192,10 +1237,15 @@ async def test_resumed_session_history_overrides_saved_thinking_preference(
         name="openai",
         models=("reasoner",),
         default_model="reasoner",
-        thinking_levels=("low", "high"),
-        thinking_default="low",
         thinking_parameter="reasoning_effort",
         thinking_defaults={"reasoner": "low"},
+        model_metadata={
+            "reasoner": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="low",
+                thinking_levels=("low", "high"),
+            ),
+        },
     )
     storage = JsonlSessionStorage(tmp_path / "resume-thinking-session.jsonl")
     info = SessionInfoEntry(id="info", cwd=str(tmp_path))
@@ -1229,10 +1279,14 @@ async def test_session_uses_codex_subscription_thinking_capabilities(
     tmp_path: Path,
 ) -> None:
     provider_config = OpenAICodexProviderConfig(
-        thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
-        thinking_models=("gpt-5.5",),
-        thinking_default="medium",
         thinking_parameter="reasoning.effort",
+        model_metadata={
+            "gpt-5.5": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="medium",
+                thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
+            ),
+        },
     )
     session = await CodingSession.load(
         CodingSessionConfig(
@@ -1281,9 +1335,14 @@ async def test_session_refreshes_runtime_provider_for_thinking_level(
         name="openai",
         models=("reasoner",),
         default_model="reasoner",
-        thinking_levels=("low", "high"),
-        thinking_default="low",
         thinking_parameter="reasoning_effort",
+        model_metadata={
+            "reasoner": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="low",
+                thinking_levels=("low", "high"),
+            ),
+        },
     )
     session = await CodingSession.load(
         CodingSessionConfig(
@@ -1299,11 +1358,11 @@ async def test_session_refreshes_runtime_provider_for_thinking_level(
         )
     )
 
-    assert created == [("reasoner", "high")]
+    assert created == [("reasoner", "low")]
 
-    await session.set_thinking_level("low")
+    await session.set_thinking_level("high")
 
-    assert created[-1] == ("reasoner", "low")
+    assert created[-1] == ("reasoner", "high")
 
     await session.aclose()
 

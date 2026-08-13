@@ -72,9 +72,9 @@ class ProviderModelMetadata:
     context_window: int | None = None
     max_tokens: int | None = None
     thinking_default: ThinkingLevel | None = None
+    thinking_levels: tuple[ThinkingLevel, ...] = ()
     headers: dict[str, str] = field(default_factory=dict)
     compat: dict[str, Any] = field(default_factory=dict)
-    thinking_level_map: dict[ThinkingLevel, str | None] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         """Serialize this model metadata to JSON-compatible data."""
@@ -99,9 +99,9 @@ class ProviderModelMetadata:
             "context_window": self.context_window,
             "max_tokens": self.max_tokens,
             "thinking_default": self.thinking_default,
+            "thinking_levels": list(self.thinking_levels),
             "headers": dict(self.headers),
             "compat": dict(self.compat),
-            "thinking_level_map": dict(self.thinking_level_map),
         }
 
 
@@ -124,9 +124,6 @@ class OpenAICompatibleProviderConfig:
     stream_idle_timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
-    thinking_levels: tuple[ThinkingLevel, ...] | None = None
-    thinking_models: tuple[str, ...] = ()
-    thinking_default: ThinkingLevel | None = None
     thinking_parameter: ThinkingParameter | None = None
     thinking_defaults: dict[str, ThinkingLevel] = field(default_factory=dict)
     inference_providers: dict[str, str] = field(default_factory=dict)
@@ -142,9 +139,6 @@ class OpenAICompatibleProviderConfig:
         _validate_model_metadata(self.models, self.model_metadata)
         _validate_json_object(self.compat, "Provider compat")
         _validate_thinking_config(
-            thinking_levels=self.thinking_levels,
-            thinking_models=self.thinking_models,
-            thinking_default=self.thinking_default,
             thinking_parameter=self.thinking_parameter,
         )
         _validate_thinking_defaults(self.thinking_defaults)
@@ -171,11 +165,6 @@ class OpenAICompatibleProviderConfig:
             "stream_idle_timeout_seconds": self.stream_idle_timeout_seconds,
             "max_retries": self.max_retries,
             "max_retry_delay_seconds": self.max_retry_delay_seconds,
-            "thinking_levels": (
-                list(self.thinking_levels) if self.thinking_levels is not None else None
-            ),
-            "thinking_models": list(self.thinking_models),
-            "thinking_default": self.thinking_default,
             "thinking_parameter": self.thinking_parameter,
             "thinking_defaults": dict(self.thinking_defaults),
             "inference_providers": dict(self.inference_providers),
@@ -206,9 +195,6 @@ class OpenAICodexProviderConfig:
     stream_idle_timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS
     max_retries: int = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
-    thinking_levels: tuple[ThinkingLevel, ...] | None = None
-    thinking_models: tuple[str, ...] = ()
-    thinking_default: ThinkingLevel | None = None
     thinking_parameter: ThinkingParameter | None = None
     thinking_defaults: dict[str, ThinkingLevel] = field(default_factory=dict)
 
@@ -222,9 +208,6 @@ class OpenAICodexProviderConfig:
         _validate_context_windows(self.context_windows)
         _validate_model_metadata(self.models, self.model_metadata)
         _validate_thinking_config(
-            thinking_levels=self.thinking_levels,
-            thinking_models=self.thinking_models,
-            thinking_default=self.thinking_default,
             thinking_parameter=self.thinking_parameter,
         )
         _validate_thinking_defaults(self.thinking_defaults)
@@ -248,11 +231,6 @@ class OpenAICodexProviderConfig:
             "stream_idle_timeout_seconds": self.stream_idle_timeout_seconds,
             "max_retries": self.max_retries,
             "max_retry_delay_seconds": self.max_retry_delay_seconds,
-            "thinking_levels": (
-                list(self.thinking_levels) if self.thinking_levels is not None else None
-            ),
-            "thinking_models": list(self.thinking_models),
-            "thinking_default": self.thinking_default,
             "thinking_parameter": self.thinking_parameter,
             "thinking_defaults": dict(self.thinking_defaults),
         }
@@ -341,9 +319,6 @@ def provider_config_from_entry(entry: ProviderCatalogEntry) -> ProviderConfig:
             context_windows=context_windows,
             headers=dict(entry.headers),
             model_metadata=model_metadata,
-            thinking_levels=entry.thinking_levels,
-            thinking_models=entry.thinking_models,
-            thinking_default=entry.thinking_default,
             thinking_parameter=entry.thinking_parameter,
             thinking_defaults={},
         )
@@ -359,9 +334,6 @@ def provider_config_from_entry(entry: ProviderCatalogEntry) -> ProviderConfig:
         headers=dict(entry.headers),
         compat=dict(entry.compat),
         model_metadata=model_metadata,
-        thinking_levels=entry.thinking_levels,
-        thinking_models=entry.thinking_models,
-        thinking_default=entry.thinking_default,
         thinking_parameter=entry.thinking_parameter,
         thinking_defaults={},
     )
@@ -388,9 +360,9 @@ def _provider_model_metadata_from_catalog(
             context_window=metadata.context_window,
             max_tokens=metadata.max_tokens,
             thinking_default=metadata.thinking_default,
+            thinking_levels=tuple(metadata.thinking_levels),
             headers=dict(metadata.headers),
             compat=dict(metadata.compat),
-            thinking_level_map=dict(metadata.thinking_level_map),
         )
         for model, metadata in model_metadata.items()
     }
@@ -770,26 +742,7 @@ def _merge_provider_config(existing: ProviderConfig, incoming: ProviderConfig) -
                 incoming.model_metadata,
                 existing.model_metadata,
             ),
-            thinking_levels=(
-                existing.thinking_levels
-                if existing.thinking_levels is not None
-                else incoming.thinking_levels
-            ),
-            thinking_models=(
-                existing.thinking_models
-                if existing.thinking_levels is not None
-                else incoming.thinking_models
-            ),
-            thinking_default=(
-                existing.thinking_default
-                if existing.thinking_levels is not None
-                else incoming.thinking_default
-            ),
-            thinking_parameter=(
-                existing.thinking_parameter
-                if existing.thinking_levels is not None
-                else incoming.thinking_parameter
-            ),
+            thinking_parameter=incoming.thinking_parameter,
             thinking_defaults=existing.thinking_defaults,
         )
 
@@ -823,26 +776,7 @@ def _merge_openai_compatible_provider(
         max_retries=existing.max_retries,
         max_retry_delay_seconds=existing.max_retry_delay_seconds,
         context_windows={**incoming.context_windows, **existing.context_windows},
-        thinking_levels=(
-            existing.thinking_levels
-            if existing.thinking_levels is not None
-            else incoming.thinking_levels
-        ),
-        thinking_models=(
-            existing.thinking_models
-            if existing.thinking_levels is not None
-            else incoming.thinking_models
-        ),
-        thinking_default=(
-            existing.thinking_default
-            if existing.thinking_levels is not None
-            else incoming.thinking_default
-        ),
-        thinking_parameter=(
-            existing.thinking_parameter
-            if existing.thinking_levels is not None
-            else incoming.thinking_parameter
-        ),
+        thinking_parameter=incoming.thinking_parameter,
         thinking_defaults=existing.thinking_defaults,
         inference_providers=existing.inference_providers,
     )
@@ -870,9 +804,9 @@ def _merge_provider_model_metadata(
             context_window=metadata.context_window or base.context_window,
             max_tokens=metadata.max_tokens or base.max_tokens,
             thinking_default=metadata.thinking_default or base.thinking_default,
+            thinking_levels=metadata.thinking_levels or base.thinking_levels,
             headers={**base.headers, **metadata.headers},
             compat={**base.compat, **metadata.compat},
-            thinking_level_map={**base.thinking_level_map, **metadata.thinking_level_map},
         )
     return merged
 
@@ -962,12 +896,6 @@ def _provider_definition_differs_from_catalog(
         return True
     if _catalog_model_metadata_from_provider(provider) != entry.model_metadata:
         return True
-    if provider.thinking_levels != entry.thinking_levels:
-        return True
-    if provider.thinking_models != entry.thinking_models:
-        return True
-    if provider.thinking_default != entry.thinking_default:
-        return True
     return provider.thinking_parameter != entry.thinking_parameter
 
 
@@ -996,9 +924,6 @@ def _catalog_entry_from_provider(
         headers=dict(provider.headers),
         compat=dict(getattr(provider, "compat", {})),
         model_metadata=_catalog_model_metadata_from_provider(provider),
-        thinking_levels=provider.thinking_levels,
-        thinking_models=provider.thinking_models,
-        thinking_default=provider.thinking_default,
         thinking_parameter=provider.thinking_parameter,
     )
 
@@ -1019,9 +944,9 @@ def _catalog_model_metadata_from_provider(
             context_window=metadata.context_window,
             max_tokens=metadata.max_tokens,
             thinking_default=metadata.thinking_default,
+            thinking_levels=tuple(metadata.thinking_levels),
             headers=dict(metadata.headers),
             compat=dict(metadata.compat),
-            thinking_level_map=dict(metadata.thinking_level_map),
         )
         for model, metadata in metadata_by_model.items()
     }
@@ -1300,19 +1225,9 @@ def provider_thinking_levels(
     """Return thinking levels supported by a provider/model pair."""
     selected_model = model or provider.default_model
     metadata = _metadata_for_model(provider, selected_model)
-    if metadata is not None and metadata.reasoning is False:
+    if metadata is None or metadata.reasoning is False:
         return ()
-    if provider.thinking_levels is None:
-        if metadata is None or metadata.reasoning is not True:
-            return ()
-        return _levels_from_thinking_map(metadata.thinking_level_map)
-    if provider.thinking_models and selected_model not in provider.thinking_models:
-        return ()
-    return tuple(
-        level
-        for level in provider.thinking_levels
-        if metadata is None or _metadata_supports_thinking_level(metadata, level)
-    )
+    return tuple(metadata.thinking_levels)
 
 
 def provider_thinking_unavailable_reason(
@@ -1323,48 +1238,13 @@ def provider_thinking_unavailable_reason(
     """Explain why a provider/model pair has no configurable thinking modes."""
     selected_model = model or provider.default_model
     metadata = _metadata_for_model(provider, selected_model)
-    if metadata is not None and metadata.reasoning is False:
+    if metadata is None:
+        return f"Provider {provider.name} does not declare thinking metadata for {selected_model}"
+    if metadata.reasoning is False:
         return f"{provider.name}:{selected_model} is not a reasoning model"
-    if provider.thinking_levels is None:
-        if metadata is not None and metadata.reasoning is True:
-            return None
-        if isinstance(provider, OpenAICodexProviderConfig):
-            return (
-                "OpenAI Codex subscription can stream reasoning output, but Tau does "
-                "not have a validated Codex transport mapping for changing reasoning "
-                "effort yet"
-            )
-        return f"Provider {provider.name} does not declare thinking_levels"
-    if provider.thinking_models and selected_model not in provider.thinking_models:
-        return f"{provider.name}:{selected_model} is not declared in thinking_models"
+    if not metadata.thinking_levels:
+        return f"{provider.name}:{selected_model} does not declare thinking_levels"
     return None
-
-
-def _levels_from_thinking_map(
-    thinking_level_map: dict[ThinkingLevel, str | None],
-) -> tuple[ThinkingLevel, ...]:
-    levels: tuple[ThinkingLevel, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
-    return tuple(
-        level for level in levels if _thinking_level_map_supports(thinking_level_map, level)
-    )
-
-
-def _metadata_supports_thinking_level(
-    metadata: ProviderModelMetadata,
-    level: ThinkingLevel,
-) -> bool:
-    if metadata.reasoning is None and not metadata.thinking_level_map:
-        return True
-    return _thinking_level_map_supports(metadata.thinking_level_map, level)
-
-
-def _thinking_level_map_supports(
-    thinking_level_map: dict[ThinkingLevel, str | None],
-    level: ThinkingLevel,
-) -> bool:
-    if level in thinking_level_map:
-        return thinking_level_map[level] is not None
-    return level != "xhigh"
 
 
 def _metadata_for_model(provider: ProviderConfig, model: str) -> ProviderModelMetadata | None:
@@ -1477,8 +1357,6 @@ def provider_default_thinking_level(
     metadata = _metadata_for_model(provider, selected_model)
     if metadata is not None and metadata.thinking_default in levels:
         return metadata.thinking_default
-    if provider.thinking_default in levels:
-        return provider.thinking_default
     if DEFAULT_THINKING_LEVEL in levels:
         return DEFAULT_THINKING_LEVEL
     return levels[0]
@@ -1496,8 +1374,7 @@ def resolve_startup_thinking_level(
     default model does not support the global default level. The level uses a
     model-aware fallback policy:
     the remembered per-model preference wins, then the model catalog default,
-    then the global ``preferred`` level, then the provider default, then the
-    first available level.
+    then the global ``preferred`` level, then the first available level.
 
     Returns ``None`` when the model has no configurable thinking levels.
     """
@@ -1610,26 +1487,11 @@ def _reasoning_effort_from_provider(
             f"Thinking mode {normalized} is not available for "
             f"{provider.name}:{selected_model}. Available modes: {available}"
         )
-    mapped = _metadata_thinking_value(provider, selected_model, normalized)
-    if mapped is not None:
-        return mapped
     if provider.name == "huggingface" and normalized == "minimal":
         # Hugging Face's router currently accepts low/medium/high/xhigh/max/none
         # for reasoning_effort, but rejects Pi/Tau's "minimal" label.
         return "low"
     return reasoning_effort_for_level(normalized)
-
-
-def _metadata_thinking_value(
-    provider: ProviderConfig,
-    model: str,
-    level: ThinkingLevel,
-) -> str | None:
-    metadata = _metadata_for_model(provider, model)
-    if metadata is None:
-        return None
-    value = metadata.thinking_level_map.get(level)
-    return value if isinstance(value, str) else None
 
 
 def _thinking_format(provider: ProviderConfig, model: str) -> str:
@@ -1663,7 +1525,7 @@ def _include_reasoning_effort_none(
         return False
     if normalized != "off":
         return False
-    return _metadata_thinking_value(provider, model, "off") == "none"
+    return "off" in provider_thinking_levels(provider, model=model)
 
 
 def _provider_from_json(data: object) -> ProviderConfig:
@@ -1713,15 +1575,6 @@ def _provider_from_json(data: object) -> ProviderConfig:
         ),
         f"providers[{name}].max_retry_delay_seconds",
     )
-    thinking_levels = _optional_thinking_levels(
-        data.get("thinking_levels"), f"providers[{name}].thinking_levels"
-    )
-    thinking_models = _optional_string_tuple(
-        data.get("thinking_models"), f"providers[{name}].thinking_models"
-    )
-    thinking_default = _optional_thinking_level(
-        data.get("thinking_default"), f"providers[{name}].thinking_default"
-    )
     thinking_parameter = _optional_thinking_parameter(
         data.get("thinking_parameter"), f"providers[{name}].thinking_parameter"
     )
@@ -1746,9 +1599,6 @@ def _provider_from_json(data: object) -> ProviderConfig:
             stream_idle_timeout_seconds=stream_idle_timeout_seconds,
             max_retries=max_retries,
             max_retry_delay_seconds=max_retry_delay_seconds,
-            thinking_levels=thinking_levels,
-            thinking_models=thinking_models,
-            thinking_default=thinking_default,
             thinking_parameter=thinking_parameter,
             thinking_defaults=thinking_defaults,
         )
@@ -1768,9 +1618,6 @@ def _provider_from_json(data: object) -> ProviderConfig:
         stream_idle_timeout_seconds=stream_idle_timeout_seconds,
         max_retries=max_retries,
         max_retry_delay_seconds=max_retry_delay_seconds,
-        thinking_levels=thinking_levels,
-        thinking_models=thinking_models,
-        thinking_default=thinking_default,
         thinking_parameter=thinking_parameter,
         thinking_defaults=thinking_defaults,
     )
@@ -1851,15 +1698,27 @@ def _validate_model_metadata(
             raise ProviderConfigError("Provider model_metadata cost values must be non-negative")
         if metadata.thinking_default is not None:
             normalize_thinking_level(metadata.thinking_default)
+        if metadata.thinking_levels:
+            try:
+                normalized = normalize_thinking_levels(metadata.thinking_levels)
+            except ValueError as exc:
+                raise ProviderConfigError(str(exc)) from exc
+            if normalized != metadata.thinking_levels:
+                raise ProviderConfigError(
+                    "Provider model_metadata thinking_levels must be normalized"
+                )
+            if metadata.thinking_default is None:
+                raise ProviderConfigError(
+                    f"Provider model_metadata {model} thinking_default is required "
+                    "when thinking_levels is set"
+                )
+            if metadata.thinking_default not in metadata.thinking_levels:
+                raise ProviderConfigError(
+                    f"Provider model_metadata {model} thinking_default must be in thinking_levels"
+                )
         _validate_runtime_cost_tiers(metadata.cost_tiers)
         _validate_json_object(metadata.compat, "Provider model_metadata compat")
         _validate_string_dict(metadata.headers, "Provider model_metadata headers")
-        for level, value in metadata.thinking_level_map.items():
-            normalize_thinking_level(level)
-            if value is not None and (not isinstance(value, str) or not value.strip()):
-                raise ProviderConfigError(
-                    "Provider model_metadata thinking_level_map values must be strings or null"
-                )
 
 
 def _validate_runtime_cost_tiers(tiers: tuple[ModelCostTier, ...]) -> None:
@@ -1964,27 +1823,8 @@ def _validate_thinking_defaults(thinking_defaults: dict[str, ThinkingLevel]) -> 
 
 def _validate_thinking_config(
     *,
-    thinking_levels: tuple[ThinkingLevel, ...] | None,
-    thinking_models: tuple[str, ...],
-    thinking_default: ThinkingLevel | None,
     thinking_parameter: ThinkingParameter | None,
 ) -> None:
-    if thinking_levels is None:
-        if thinking_models or thinking_default is not None or thinking_parameter is not None:
-            raise ProviderConfigError(
-                "Provider thinking_levels must be set before thinking metadata"
-            )
-        return
-    try:
-        normalized = normalize_thinking_levels(thinking_levels)
-    except ValueError as exc:
-        raise ProviderConfigError(str(exc)) from exc
-    if normalized != thinking_levels:
-        raise ProviderConfigError("Provider thinking_levels must be normalized")
-    if any(not isinstance(model, str) or not model.strip() for model in thinking_models):
-        raise ProviderConfigError("Provider thinking_models must contain non-empty strings")
-    if thinking_default is not None and thinking_default not in thinking_levels:
-        raise ProviderConfigError("Provider thinking_default must be in thinking_levels")
     if thinking_parameter not in {
         None,
         "reasoning_effort",
@@ -1995,27 +1835,6 @@ def _validate_thinking_config(
             "Provider thinking_parameter must be reasoning_effort, reasoning.effort, "
             "or anthropic.thinking"
         )
-
-
-def _reject_unimplemented_thinking_config(
-    *,
-    provider_type: str,
-    thinking_levels: tuple[ThinkingLevel, ...] | None,
-) -> None:
-    if thinking_levels is not None:
-        raise ProviderConfigError(f"{provider_type} thinking controls are not implemented yet")
-
-
-def _optional_provider_api(value: object, field_name: str) -> ProviderApi | None:
-    if value is None:
-        return None
-    if value in {
-        "openai-completions",
-        "openai-responses",
-        "openai-codex-responses",
-    }:
-        return cast(ProviderApi, value)
-    raise ProviderConfigError(f"Provider field has unsupported API: {field_name}")
 
 
 def _optional_string(value: object, field_name: str) -> str | None:
@@ -2075,6 +1894,18 @@ def _optional_thinking_level(value: object, field_name: str) -> ThinkingLevel | 
         return normalize_thinking_level(value)
     except ValueError as exc:
         raise ProviderConfigError(str(exc)) from exc
+
+
+def _optional_provider_api(value: object, field_name: str) -> ProviderApi | None:
+    if value is None:
+        return None
+    if value in {
+        "openai-completions",
+        "openai-responses",
+        "openai-codex-responses",
+    }:
+        return cast(ProviderApi, value)
+    raise ProviderConfigError(f"Provider field has unsupported API: {field_name}")
 
 
 def _optional_thinking_parameter(
@@ -2154,12 +1985,14 @@ def _model_metadata_dict(
             thinking_default=_optional_thinking_level(
                 item.get("thinking_default"), f"{field_name}.{model}.thinking_default"
             ),
+            thinking_levels=(
+                _optional_thinking_levels(
+                    item.get("thinking_levels"), f"{field_name}.{model}.thinking_levels"
+                )
+                or ()
+            ),
             headers=_string_dict(item.get("headers", {}), f"{field_name}.{model}.headers"),
             compat=_json_dict(item.get("compat", {}), f"{field_name}.{model}.compat"),
-            thinking_level_map=_thinking_level_map_dict(
-                item.get("thinking_level_map", {}),
-                f"{field_name}.{model}.thinking_level_map",
-            ),
         )
     return items
 
@@ -2201,25 +2034,6 @@ def _cost_tiers(value: object, field_name: str) -> tuple[ModelCostTier, ...]:
     result = tuple(tiers)
     _validate_runtime_cost_tiers(result)
     return result
-
-
-def _thinking_level_map_dict(
-    value: object,
-    field_name: str,
-) -> dict[ThinkingLevel, str | None]:
-    if not isinstance(value, dict):
-        raise ProviderConfigError(f"Provider field must be an object: {field_name}")
-    items: dict[ThinkingLevel, str | None] = {}
-    for key, item in value.items():
-        level = _optional_thinking_level(key, field_name)
-        if level is None:
-            raise ProviderConfigError(f"Provider field must be a thinking mode: {field_name}")
-        if item is not None and (not isinstance(item, str) or not item.strip()):
-            raise ProviderConfigError(
-                f"Provider field values must be strings or null: {field_name}"
-            )
-        items[level] = item.strip() if isinstance(item, str) else None
-    return items
 
 
 def _float_dict(value: object, field_name: str) -> dict[str, float]:

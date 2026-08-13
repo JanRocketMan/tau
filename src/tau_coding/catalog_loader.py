@@ -38,10 +38,6 @@ from tau_coding.thinking import ThinkingLevel, ThinkingParameter
 CATALOG_SCHEMA_VERSION = 1
 USER_CATALOG_FILENAME = "catalog.toml"
 
-# Thinking fields are merged as a group: an overlay that sets thinking_levels
-# replaces all four, mirroring _merge_provider_config in provider_config.
-_THINKING_FIELDS = ("thinking_levels", "thinking_models", "thinking_default", "thinking_parameter")
-
 _NonEmptyString = Annotated[
     str,
     StringConstraints(strict=True, strip_whitespace=True, min_length=1),
@@ -82,10 +78,9 @@ class _CatalogModelMetadata(BaseModel):
     context_window: _PositiveInt | None = None
     max_tokens: _PositiveInt | None = None
     thinking_default: ThinkingLevel | None = None
+    thinking_levels: tuple[ThinkingLevel, ...] = ()
     headers: dict[_NonEmptyString, _NonEmptyString] = {}
     compat: dict[_NonEmptyString, Any] = {}
-    thinking_level_map: dict[ThinkingLevel, _NonEmptyString] = {}
-    unsupported_thinking_levels: tuple[ThinkingLevel, ...] = ()
 
 
 class _CatalogProvider(BaseModel):
@@ -105,9 +100,6 @@ class _CatalogProvider(BaseModel):
     headers: dict[_NonEmptyString, _NonEmptyString] = {}
     compat: dict[_NonEmptyString, Any] = {}
     model_metadata: dict[_NonEmptyString, _CatalogModelMetadata] = {}
-    thinking_levels: tuple[ThinkingLevel, ...] | None = None
-    thinking_models: tuple[_NonEmptyString, ...] = ()
-    thinking_default: ThinkingLevel | None = None
     thinking_parameter: ThinkingParameter | None = None
     removed_models: tuple[_NonEmptyString, ...] = ()
     auth_methods: tuple[AuthMethod, ...] = ("api_key",)
@@ -280,12 +272,6 @@ def _merge_raw_provider(base: dict[str, Any], overlay: dict[str, Any]) -> dict[s
     overlay_metadata = overlay.get("model_metadata")
     if isinstance(base_metadata, dict) and isinstance(overlay_metadata, dict):
         merged["model_metadata"] = _merge_model_metadata(base_metadata, overlay_metadata)
-    if "thinking_levels" in overlay:
-        for field in _THINKING_FIELDS:
-            if field in overlay:
-                merged[field] = overlay[field]
-            else:
-                merged.pop(field, None)
     return merged
 
 
@@ -303,7 +289,7 @@ def _apply_model_tombstones(
             providers.append(provider)
             continue
         filtered = {**provider}
-        for field in ("models", "thinking_models"):
+        for field in ("models",):
             values = filtered.get(field)
             if isinstance(values, list):
                 filtered[field] = [model for model in values if model not in removed]
@@ -334,7 +320,7 @@ def _merge_model_metadata(base: dict[str, Any], overlay: dict[str, Any]) -> dict
         base_metadata = merged.get(model)
         if isinstance(base_metadata, dict) and isinstance(overlay_metadata, dict):
             next_metadata = {**base_metadata, **overlay_metadata}
-            for key in ("headers", "compat", "thinking_level_map"):
+            for key in ("headers", "compat"):
                 base_mapping = base_metadata.get(key)
                 overlay_mapping = overlay_metadata.get(key)
                 if isinstance(base_mapping, dict) and isinstance(overlay_mapping, dict):
@@ -413,28 +399,38 @@ def _entry_from_provider(provider: _CatalogProvider, *, source: str) -> Provider
     prefix = f"{source}: providers.{provider.name}"
     if provider.default_model not in provider.models:
         raise CatalogError(f"{prefix}.default_model: {provider.default_model!r} is not in models")
-    for model in provider.thinking_models:
-        if model not in provider.models:
-            raise CatalogError(f"{prefix}.thinking_models: {model!r} is not in models")
     for model in provider.context_windows or {}:
         if model not in provider.models:
             raise CatalogError(f"{prefix}.context_windows: {model!r} is not in models")
     for model in provider.model_metadata:
         if model not in provider.models:
             raise CatalogError(f"{prefix}.model_metadata: {model!r} is not in models")
-    if provider.thinking_default is not None and (
-        provider.thinking_levels is None
-        or provider.thinking_default not in provider.thinking_levels
-    ):
-        raise CatalogError(
-            f"{prefix}.thinking_default: {provider.thinking_default!r} is not in thinking_levels"
-        )
 
     for model, catalog_metadata in provider.model_metadata.items():
         _validate_cost_tiers(
             catalog_metadata.cost_tiers,
             field_name=f"{prefix}.model_metadata.{model}",
         )
+        if not catalog_metadata.thinking_levels:
+            raise CatalogError(
+                f"{prefix}.model_metadata.{model}.thinking_levels: "
+                "must declare at least one thinking level"
+            )
+        if catalog_metadata.reasoning is False:
+            raise CatalogError(
+                f"{prefix}.model_metadata.{model}.reasoning: "
+                "cannot be false when thinking_levels is set"
+            )
+        if catalog_metadata.thinking_default is None:
+            raise CatalogError(
+                f"{prefix}.model_metadata.{model}.thinking_default: "
+                "is required when thinking_levels is set"
+            )
+        if catalog_metadata.thinking_default not in catalog_metadata.thinking_levels:
+            raise CatalogError(
+                f"{prefix}.model_metadata.{model}.thinking_default: "
+                f"{catalog_metadata.thinking_default!r} is not in thinking_levels"
+            )
 
     model_metadata = {
         model: _model_metadata_from_provider(metadata)
@@ -460,9 +456,6 @@ def _entry_from_provider(provider: _CatalogProvider, *, source: str) -> Provider
         headers=dict(provider.headers),
         compat=_json_object(provider.compat, f"{prefix}.compat"),
         model_metadata=model_metadata,
-        thinking_levels=provider.thinking_levels,
-        thinking_models=provider.thinking_models,
-        thinking_default=provider.thinking_default,
         thinking_parameter=provider.thinking_parameter,
         removed_models=provider.removed_models,
         auth_methods=provider.auth_methods,
@@ -490,9 +483,6 @@ def _validate_cost_tiers(
 
 
 def _model_metadata_from_provider(metadata: _CatalogModelMetadata) -> ModelCatalogMetadata:
-    thinking_level_map: dict[ThinkingLevel, str | None] = dict(metadata.thinking_level_map)
-    for level in metadata.unsupported_thinking_levels:
-        thinking_level_map[level] = None
     return ModelCatalogMetadata(
         name=metadata.name,
         api=metadata.api,
@@ -510,9 +500,9 @@ def _model_metadata_from_provider(metadata: _CatalogModelMetadata) -> ModelCatal
         context_window=metadata.context_window,
         max_tokens=metadata.max_tokens,
         thinking_default=metadata.thinking_default,
+        thinking_levels=tuple(metadata.thinking_levels),
         headers=dict(metadata.headers),
         compat=_json_object(metadata.compat, "model_metadata.compat"),
-        thinking_level_map=thinking_level_map,
     )
 
 
@@ -597,12 +587,6 @@ def _raw_provider_from_entry(entry: ProviderCatalogEntry) -> dict[str, Any]:
             model: _raw_model_metadata_from_entry(metadata)
             for model, metadata in entry.model_metadata.items()
         }
-    if entry.thinking_levels is not None:
-        raw["thinking_levels"] = list(entry.thinking_levels)
-    if entry.thinking_models:
-        raw["thinking_models"] = list(entry.thinking_models)
-    if entry.thinking_default is not None:
-        raw["thinking_default"] = entry.thinking_default
     if entry.thinking_parameter is not None:
         raw["thinking_parameter"] = entry.thinking_parameter
     if entry.removed_models:
@@ -644,18 +628,12 @@ def _raw_model_metadata_from_entry(metadata: ModelCatalogMetadata) -> dict[str, 
         raw["max_tokens"] = metadata.max_tokens
     if metadata.thinking_default is not None:
         raw["thinking_default"] = metadata.thinking_default
+    if metadata.thinking_levels:
+        raw["thinking_levels"] = list(metadata.thinking_levels)
     if metadata.headers:
         raw["headers"] = dict(metadata.headers)
     if metadata.compat:
         raw["compat"] = dict(metadata.compat)
-    thinking_level_map = {
-        level: value for level, value in metadata.thinking_level_map.items() if value is not None
-    }
-    unsupported = [level for level, value in metadata.thinking_level_map.items() if value is None]
-    if thinking_level_map:
-        raw["thinking_level_map"] = thinking_level_map
-    if unsupported:
-        raw["unsupported_thinking_levels"] = unsupported
     return raw
 
 
@@ -682,9 +660,6 @@ def _catalog_to_toml(raw: dict[str, Any]) -> str:
             "api",
             "headers",
             "compat",
-            "thinking_levels",
-            "thinking_models",
-            "thinking_default",
             "thinking_parameter",
             "removed_models",
             "auth_methods",

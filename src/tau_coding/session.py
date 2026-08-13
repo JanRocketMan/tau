@@ -1241,11 +1241,19 @@ class CodingSession:
         return f"Thinking mode: {normalized}"
 
     async def cycle_thinking_level(self) -> str:
-        """Cycle to the next supported thinking mode and persist it."""
+        """Cycle to the next supported thinking mode and persist it.
+
+        Models that expose zero or one thinking levels have nothing to cycle:
+        the current level is returned unchanged so cycling is a silent no-op
+        instead of an error or a pointless state rewrite.
+        """
+        available = self.available_thinking_levels
+        if len(available) <= 1:
+            return f"Thinking mode: {self._thinking_level}"
         return await self.set_thinking_level(
             next_thinking_level(
                 self._thinking_level,
-                available=self.available_thinking_levels,
+                available=available,
             )
         )
 

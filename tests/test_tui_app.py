@@ -255,7 +255,14 @@ class FakeSession:
         self.auto_compact_token_threshold = 200000
         self.context_window_tokens = 216384
         self.thinking_level = "medium"
-        self.available_thinking_levels = ("off", "minimal", "low", "medium", "high", "xhigh")
+        self.available_thinking_levels: tuple[str, ...] = (
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        )
         self.state = FakeSessionState()
         self.resource_diagnostics = ()
         self.extension_names = ("permission-gate", "subagents")
@@ -351,8 +358,6 @@ class FakeSession:
             return CommandResult(handled=True, tools_picker_requested=True)
         if text in {"/scoped-models", "/scoped models"}:
             return CommandResult(handled=True, scoped_models_picker_requested=True)
-        if text.startswith("/effort "):
-            return CommandResult(handled=True, thinking_level=text.removeprefix("/effort "))
         if text == "/theme":
             return CommandResult(handled=True, theme_picker_requested=True)
         if text.startswith("/theme "):
@@ -411,6 +416,8 @@ class FakeSession:
 
     async def cycle_thinking_level(self) -> str:
         levels = self.available_thinking_levels
+        if len(levels) <= 1:
+            return f"Thinking mode: {self.thinking_level}"
         current_index = levels.index(self.thinking_level)
         self.thinking_level = levels[(current_index + 1) % len(levels)]
         self.state.thinking_level = self.thinking_level
@@ -7469,28 +7476,6 @@ async def test_tui_prompt_ctrl_u_clears_text() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_effort_command_changes_thinking_level() -> None:
-    session = FakeSession()
-    app = _tui_app(session)
-    notifications: list[str] = []
-
-    def fake_notify(message: str, **kwargs: object) -> None:
-        del kwargs
-        notifications.append(message)
-
-    app._notify = fake_notify  # ty: ignore[invalid-assignment]
-
-    async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt", PromptInput)
-        prompt.value = "/effort high"
-        await pilot.press("enter")
-        await pilot.pause()
-
-    assert session.thinking_level == "high"
-    assert "Thinking mode: high" in notifications
-
-
-@pytest.mark.anyio
 async def test_tui_app_cycles_thinking_from_keybinding() -> None:
     session = FakeSession()
     app = _tui_app(session)
@@ -7507,6 +7492,29 @@ async def test_tui_app_cycles_thinking_from_keybinding() -> None:
         await pilot.pause()
 
     assert session.thinking_level == "high"
+    assert notifications == []
+
+
+@pytest.mark.anyio
+async def test_tui_app_cycles_thinking_is_noop_with_single_level() -> None:
+    session = FakeSession()
+    session.available_thinking_levels = ("xhigh",)
+    app = _tui_app(session)
+    notifications: list[str] = []
+
+    def fake_notify(message: str, **kwargs: object) -> None:
+        del kwargs
+        notifications.append(message)
+
+    app._notify = fake_notify  # ty: ignore[invalid-assignment]
+
+    async with app.run_test() as pilot:
+        await pilot.press("shift+tab")
+        await pilot.pause()
+
+    # The model exposes a single thinking level: cycling changes nothing and
+    # produces no notification.
+    assert session.thinking_level == "medium"
     assert notifications == []
 
 

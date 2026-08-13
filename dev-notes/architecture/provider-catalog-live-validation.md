@@ -177,8 +177,8 @@ These are real Tau catalog/runtime issues:
 |---|---|
 | `model ... does not exist`, `No endpoints found`, `deprecated` | Remove the model from the packaged catalog. |
 | `not a chat model`, requires audio/tools/search/file/MCP | Remove from coding-chat API catalog for now. |
-| `Unsupported value: 'minimal'`, expected `low/medium/high` | Add per-model `unsupported_thinking_levels`. |
-| Provider expects a different reasoning value | Add `thinking_level_map`. |
+| `Unsupported value: 'minimal'`, expected `low/medium/high` | Remove that level from the model's `thinking_levels`. |
+| Provider expects a different reasoning value | Drop the level from the model's `thinking_levels`; Tau sends level names verbatim. |
 | Provider needs special routing/header/compat option | Add provider/model `compat` metadata and runtime support. |
 | Provider-wide invalid JSON/payload | Fix the adapter and add a regression test. |
 
@@ -232,8 +232,7 @@ Common code/catalog changes:
 
 - Remove stale model IDs from `src/tau_coding/data/catalog.toml`.
 - Set validated defaults for providers whose previous default was removed.
-- Add `unsupported_thinking_levels` under `providers.model_metadata.<model>`.
-- Add `thinking_level_map` for provider-specific value mapping.
+- Add `thinking_levels` / `thinking_default` for validated model thinking support.
 - Add model `compat` fields for adapter-specific behavior.
 - Add adapter regression tests for any provider-wide payload fixes.
 - Update stale tests that hardcoded old defaults or provider lists.
@@ -244,7 +243,7 @@ For this validation pass, notable fixes were:
 - OpenRouter: Tau passes `compat.openrouterProvider` as OpenRouter's `provider` routing
   option.
 - Catalog: stale/deprecated/unroutable model IDs were pruned.
-- Catalog: unsupported reasoning levels were hidden per model.
+- Catalog: unsupported reasoning levels were hidden per model (models now list only accepted levels).
 - Anthropic: adaptive-thinking metadata was tightened for current adaptive models.
 
 ## Final report format

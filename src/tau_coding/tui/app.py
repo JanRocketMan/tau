@@ -3920,8 +3920,6 @@ class TauTuiApp(App[None]):
                 self._open_skills_picker()
             if command.theme_picker_requested:
                 self._open_theme_picker()
-            if command.thinking_level is not None:
-                await self._set_thinking_level(command.thinking_level)
             if command.theme is not None:
                 self._set_tui_theme(command.theme)
             self.state.set_skills(self.session.skills)
@@ -5693,22 +5691,6 @@ class TauTuiApp(App[None]):
             return
         self._set_tui_theme(theme)
 
-    async def _set_thinking_level(self, level: str) -> None:
-        setter = getattr(self.session, "set_thinking_level", None)
-        if setter is None:
-            self._notify("Thinking controls are not available.", severity="warning")
-            return
-        try:
-            result = setter(level)
-            if isawaitable(result):
-                result = await result
-        except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
-            self._notify(f"Could not change thinking mode: {exc}", severity="error")
-            return
-        if isinstance(result, str) and result:
-            self._notify(result)
-        self._refresh_chrome()
-
     async def _cycle_thinking_level(self) -> None:
         cycler = getattr(self.session, "cycle_thinking_level", None)
         if cycler is None:
@@ -5984,7 +5966,6 @@ class TauTuiApp(App[None]):
                 *self.session.available_providers,
                 *LOGIN_PROVIDER_ALIASES,
             ),
-            thinking_levels=getattr(self.session, "available_thinking_levels", ()),
             theme_names=available_tui_theme_names(),
             session_options=_session_options(self.session),
             cwd=self.session.cwd,

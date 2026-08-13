@@ -28,12 +28,14 @@ For changes to a first-party provider or model, use this workflow:
    tests/test_provider_runtime.py
    ```
 
-Tau thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Provider-level `thinking_levels` must include every level needed by its models. Use model metadata when the wire value differs, a model has a different default, or a model supports only a subset:
+Tau thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Thinking support lives in model metadata: every `[providers.model_metadata.<model>]` entry declares `thinking_default` and a `thinking_levels` list, and the provider entry sets `thinking_parameter` (the request field used to change effort). The value sent to the provider is the Tau level name itself, so only list levels the provider accepts:
 
 ```toml
+thinking_parameter = "reasoning_effort"
+
+[providers.model_metadata."example-model"]
 thinking_default = "max"
-thinking_level_map = { xhigh = "max" }
-unsupported_thinking_levels = ["off", "minimal", "low", "medium", "high"]
+thinking_levels = ["low", "medium", "high", "max"]
 ```
 
 When withdrawing a model from one built-in provider, add it to that provider's

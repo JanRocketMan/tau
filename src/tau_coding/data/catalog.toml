@@ -8,17 +8,13 @@ base_url = "https://chatgpt.com/backend-api"
 api_key_env = "OPENAI_CODEX_ACCESS_TOKEN"
 credential_name = "openai-codex"
 auth_methods = ["oauth"]
-models = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]
+models = ["gpt-5.6-luna", "gpt-5.6-sol"]
 default_model = "gpt-5.6-luna"
 docs_url = "https://chatgpt.com/codex"
-thinking_levels = ["low", "medium", "high", "xhigh"]
-thinking_models = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]
-thinking_default = "xhigh"
 thinking_parameter = "reasoning.effort"
 
 [providers.context_windows]
 "gpt-5.6-luna" = 272000
-"gpt-5.6-terra" = 272000
 "gpt-5.6-sol" = 272000
 
 [providers.model_metadata."gpt-5.6-luna"]
@@ -28,16 +24,8 @@ input = ["text", "image"]
 context_window = 272000
 max_tokens = 128000
 cost = { input = 0.2, output = 1.2, cacheRead = 0.02, cacheWrite = 0.25 }
-thinking_level_map = { xhigh = "xhigh" }
-
-[providers.model_metadata."gpt-5.6-terra"]
-name = "GPT-5.6 Terra"
-reasoning = true
-input = ["text", "image"]
-context_window = 272000
-max_tokens = 128000
-cost = { input = 0.2, output = 1.2, cacheRead = 0.02, cacheWrite = 0.25 }
-thinking_level_map = { xhigh = "xhigh" }
+thinking_default = "xhigh"
+thinking_levels = ["low", "medium", "high", "xhigh"]
 
 [providers.model_metadata."gpt-5.6-sol"]
 name = "GPT-5.6 Sol"
@@ -46,7 +34,8 @@ input = ["text", "image"]
 context_window = 272000
 max_tokens = 128000
 cost = { input = 5, output = 30, cacheRead = 0.5, cacheWrite = 6.25 }
-thinking_level_map = { xhigh = "xhigh" }
+thinking_default = "xhigh"
+thinking_levels = ["low", "medium", "high", "xhigh"]
 
 [[providers]]
 name = "opencode-go"
@@ -55,18 +44,15 @@ kind = "openai-compatible"
 base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_API_KEY"
 credential_name = "opencode"
-models = ["gpt-5.6-luna", "deepseek-v4-flash", "kimi-k3"]
+models = ["gpt-5.6-luna", "deepseek-v4-flash"]
 default_model = "deepseek-v4-flash"
 docs_url = "https://opencode.ai/docs/go"
 api = "openai-completions"
-thinking_levels = ["low", "medium", "high", "xhigh", "max"]
-thinking_default = "xhigh"
 thinking_parameter = "reasoning_effort"
 
 [providers.context_windows]
 "gpt-5.6-luna" = 1000000
 "deepseek-v4-flash" = 1000000
-"kimi-k3" = 1000000
 
 [providers.model_metadata."gpt-5.6-luna"]
 api = "openai-responses"
@@ -75,63 +61,12 @@ context_window = 1000000
 max_tokens = 128000
 cost = { input = 0.2, output = 1.2, cacheRead = 0.02, cacheWrite = 0.25 }
 thinking_default = "xhigh"
-thinking_level_map = { xhigh = "xhigh" }
-
-[providers.model_metadata."deepseek-v4-flash"]
-input = ["text"]
-context_window = 1000000
-max_tokens = 384000
-cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
-thinking_default = "high"
-thinking_level_map = { xhigh = "high" }
-
-[providers.model_metadata."kimi-k3"]
-input = ["text", "image"]
-context_window = 1000000
-cost = { input = 3.0, output = 15.0, cacheRead = 0.3, cacheWrite = 0.0 }
-thinking_default = "max"
-thinking_level_map = { xhigh = "max" }
-
-[[providers]]
-name = "opencode"
-display_name = "OpenCode Zen"
-kind = "openai-compatible"
-base_url = "https://opencode.ai/zen/v1"
-api_key_env = "OPENCODE_API_KEY"
-credential_name = "opencode"
-models = ["gpt-5.6-luna", "deepseek-v4-flash", "kimi-k3"]
-default_model = "gpt-5.6-luna"
-docs_url = "https://opencode.ai/docs/zen"
-api = "openai-completions"
 thinking_levels = ["low", "medium", "high", "xhigh", "max"]
-thinking_default = "xhigh"
-thinking_parameter = "reasoning_effort"
-
-[providers.context_windows]
-"gpt-5.6-luna" = 1000000
-"deepseek-v4-flash" = 1000000
-"kimi-k3" = 1000000
-
-[providers.model_metadata."gpt-5.6-luna"]
-api = "openai-responses"
-input = ["text", "image"]
-context_window = 1000000
-max_tokens = 128000
-cost = { input = 0.2, output = 1.2, cacheRead = 0.02, cacheWrite = 0.25 }
-thinking_default = "xhigh"
-thinking_level_map = { xhigh = "xhigh" }
 
 [providers.model_metadata."deepseek-v4-flash"]
 input = ["text"]
 context_window = 1000000
 max_tokens = 384000
 cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
-thinking_default = "high"
-thinking_level_map = { xhigh = "high" }
-
-[providers.model_metadata."kimi-k3"]
-input = ["text", "image"]
-context_window = 1000000
-cost = { input = 3.0, output = 15.0, cacheRead = 0.3, cacheWrite = 0.0 }
 thinking_default = "max"
-thinking_level_map = { xhigh = "max" }
+thinking_levels = ["high", "max"]
