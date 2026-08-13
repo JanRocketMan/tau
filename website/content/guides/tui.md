@@ -117,6 +117,26 @@ Tool calls keep a static marker in the transcript while they run: orange means
 in progress, green means success, and red means failure. The terminal tab title
 also animates during a run without adding a second spinner to each tool row.
 
+## Message status badges
+
+While the agent works, the assistant message that is currently streaming shows
+a one-row status footer inside the message block:
+
+- **bottom-left**: `running 1m 23s` - how long the agent turn has been running,
+  ticking once per second
+- **bottom-right**: `010 TPS` - the estimated streaming speed, always shown as
+  three zero-padded digits (for example `010`, capped at `999`)
+
+TPS is an estimate (characters divided by four per second) because provider
+token usage only arrives after a response completes. It appears while tokens are
+streaming and disappears when the message stops growing, such as while a tool
+runs.
+
+When the turn settles, the final assistant message reports
+`finished in 1m 23s` with the total turn duration, and the TPS badge is
+removed. Earlier messages of the same turn lose their `running` badge at that
+point, so only the final message keeps a time reference.
+
 Tool results (like long `read` or `bash` output) render as compact previews so
 the transcript stays readable. Toggle full tool output with **Ctrl+O**. Markdown
 link hover styling underlines only the linked text, never the rest of its row. User

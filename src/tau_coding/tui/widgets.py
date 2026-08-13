@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,7 @@ from textual.widgets.markdown import MarkdownBlock, MarkdownStream
 
 from tau_coding.tui.autocomplete import CompletionState
 from tau_coding.tui.config import TAU_DARK_THEME, TuiRoleStyle, TuiTheme
-from tau_coding.tui.state import ChatItem, TuiState
+from tau_coding.tui.state import ChatItem, TuiState, format_elapsed, format_tps
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,9 +331,24 @@ class TranscriptMessageWidget(Horizontal):
             self.styles.border_left = ("tall", self._role_style.border)
             if background:
                 self.styles.background = background
+        self._status_footer = (
+            MessageStatusFooter() if item.role in {"assistant", "thinking"} else None
+        )
 
     def compose(self) -> Any:
         yield self._body_widget()
+        if self._status_footer is not None:
+            yield self._status_footer
+
+    def on_mount(self) -> None:
+        """Render the status footer once the widget is mounted."""
+        self.refresh_status_footer()
+
+    def refresh_status_footer(self) -> None:
+        """Render the running/finished timer badge from item timing."""
+        if self._status_footer is None:
+            return
+        self._status_footer.set_content(_status_timer_text(self.item), None)
 
     def _body_widget(self) -> Static | ThemedMarkdownWidget:
         body: Static | ThemedMarkdownWidget
@@ -448,6 +464,49 @@ class TranscriptMessageWidget(Horizontal):
         return True
 
 
+class MessageStatusFooter(Horizontal):
+    """Bottom status row of a message: running timer (left) and live TPS (right)."""
+
+    DEFAULT_CSS = """
+    MessageStatusFooter {
+        dock: bottom;
+        height: 1;
+        width: 1fr;
+        color: $tau-muted-text;
+        display: none;
+    }
+
+    MessageStatusFooter > .message-status-timer {
+        width: auto;
+    }
+
+    MessageStatusFooter > .message-status-tps {
+        width: 1fr;
+        content-align: right middle;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._timer = Static("", classes="message-status-timer")
+        self._tps = Static("", classes="message-status-tps")
+
+    def compose(self) -> Any:
+        yield self._timer
+        yield self._tps
+
+    def set_content(self, timer: str | None, tps: str | None) -> None:
+        """Show the footer with timer/TPS text, or hide it when both are empty."""
+        if timer is None and tps is None:
+            self.display = False
+            return
+        self.display = True
+        self._timer.update(timer or "")
+        self._tps.update(tps or "")
+        self._timer.display = timer is not None
+        self._tps.display = tps is not None
+
+
 class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
     """One assistant or thinking Markdown block that accepts streamed fragments."""
 
@@ -481,6 +540,11 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         self.selection_text = item.text
         self._stream: MarkdownStream | None = None
         self._is_streaming = True
+        # Monotonic time of the first streamed fragment and the accumulated
+        # character count, used for the live TPS badge on this message.
+        self._stream_started_at: float | None = None
+        self._streamed_chars = 0
+        self._status_footer = MessageStatusFooter()
         super().__init__(item.text, theme=theme)
         self.add_class("transcript-message")
         self.add_class("-streaming")
@@ -489,6 +553,25 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         foreground, _ = _split_rich_style_colors(_chat_item_role_style(item, theme).body)
         if foreground:
             self.styles.color = foreground
+
+    def compose(self) -> Any:
+        yield self._status_footer
+
+    async def on_mount(self) -> None:
+        """Render the status footer once the widget is mounted."""
+        self.refresh_status_footer()
+
+    def refresh_status_footer(self) -> None:
+        """Render the running/finished timer and live TPS from item timing."""
+        timer = _status_timer_text(self.item)
+        tps = self._tps_text() if timer is not None else None
+        self._status_footer.set_content(timer, tps)
+
+    def _tps_text(self) -> str | None:
+        """Return the live TPS badge while this message is streaming."""
+        if not self._is_streaming or self._stream_started_at is None:
+            return None
+        return format_tps(self._streamed_chars, time.monotonic() - self._stream_started_at)
 
     @property
     def stream(self) -> MarkdownStream:
@@ -502,6 +585,9 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
             return
         self.item.text += fragment
         self.selection_text += fragment
+        if self._stream_started_at is None:
+            self._stream_started_at = time.monotonic()
+        self._streamed_chars += len(fragment)
         await self.stream.write(fragment)
 
     async def _stop_stream(self) -> None:
@@ -531,6 +617,8 @@ class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):
         self._is_streaming = False
         self.remove_class("-streaming")
         self.add_class("-finalized")
+        # Streaming stopped: drop the live TPS badge, keep the running timer.
+        self.refresh_status_footer()
 
     async def on_unmount(self) -> None:
         """Cancel the markdown stream task if the widget is removed mid-stream."""
@@ -875,7 +963,7 @@ class TranscriptView(VerticalScroll):
             widgets.append(self._bottom_boundary)
         elif state.assistant_buffer:
             self._active_assistant_widget = StreamingTranscriptMessageWidget(
-                ChatItem(role="assistant", text=state.assistant_buffer),
+                self._streaming_item("assistant", text=state.assistant_buffer),
                 theme=theme,
             )
             self._active_message_widgets.append(self._active_assistant_widget)
@@ -1019,6 +1107,14 @@ class TranscriptView(VerticalScroll):
             self._request_follow_scroll()
         return True
 
+    def _streaming_item(self, role: Literal["assistant", "thinking"], *, text: str) -> ChatItem:
+        """Create a provisional streaming item carrying the active turn's start time."""
+        item = ChatItem(role=role, text=text)
+        state = self._render_state
+        if state is not None and state.agent_started_at is not None:
+            item.run_started_at = state.agent_started_at
+        return item
+
     async def start_assistant_message(
         self,
         *,
@@ -1031,7 +1127,7 @@ class TranscriptView(VerticalScroll):
         await self._finalize_active_thinking_message()
         should_follow = self._should_follow_output if not scroll_end else True
         widget = StreamingTranscriptMessageWidget(
-            ChatItem(role="assistant", text=""),
+            self._streaming_item("assistant", text=""),
             theme=theme,
         )
         self._render_theme = theme
@@ -1100,7 +1196,7 @@ class TranscriptView(VerticalScroll):
         self._hidden_thinking_placeholder_visible = False
         if self._active_thinking_widget is None:
             self._active_thinking_widget = StreamingTranscriptMessageWidget(
-                ChatItem(role="thinking", text=""),
+                self._streaming_item("thinking", text=""),
                 theme=theme,
             )
             await self.mount(
@@ -1133,6 +1229,7 @@ class TranscriptView(VerticalScroll):
         if item is not None:
             widget.item = item
             self._item_widgets[id(item)] = widget
+            widget.refresh_status_footer()
         self._active_assistant_widget = None
         self._active_message_widgets = [
             candidate for candidate in self._active_message_widgets if candidate is not widget
@@ -1196,6 +1293,30 @@ class TranscriptView(VerticalScroll):
             self._redraw(scroll_end=should_follow, preserve_window=True)
         elif should_follow:
             self._request_follow_scroll()
+
+    def refresh_mounted_status_footers(self, *, include_untimed: bool = False) -> None:
+        """Refresh timer/TPS footers on mounted assistant/thinking messages.
+
+        Live ticks only refresh messages that carry run timing; the settle
+        path refreshes every assistant/thinking message so footers that were
+        cleared (intermediate messages) get hidden again.
+        """
+        for child in self.children:
+            if not isinstance(child, TranscriptMessageWidget | StreamingTranscriptMessageWidget):
+                continue
+            if child.item.role not in {"assistant", "thinking"}:
+                continue
+            if (
+                not include_untimed
+                and child.item.run_started_at is None
+                and child.item.run_elapsed is None
+            ):
+                continue
+            child.refresh_status_footer()
+
+    def finish_agent_run(self) -> None:
+        """Refresh status footers after the agent turn's elapsed time is recorded."""
+        self.refresh_mounted_status_footers(include_untimed=True)
 
     @property
     def lines(self) -> tuple[TranscriptLine, ...]:
@@ -1527,6 +1648,16 @@ def _chat_item_role_style(item: ChatItem, theme: TuiTheme) -> TuiRoleStyle:
         if item.tool_result_text.startswith("✗"):
             return TuiRoleStyle(border=theme.error, body=theme.role_styles["tool"].body)
     return theme.role_styles[item.role]
+
+
+def _status_timer_text(item: ChatItem) -> str | None:
+    """Return the timer badge text for an item, or None when it has no timing."""
+    if item.run_elapsed is not None:
+        return f"finished in {format_elapsed(item.run_elapsed)}"
+    if item.run_started_at is None:
+        return None
+    elapsed = max(0.0, time.monotonic() - item.run_started_at)
+    return f"running {format_elapsed(elapsed)}"
 
 
 def _tool_accent_style(item: ChatItem, *, theme: TuiTheme) -> str | None:

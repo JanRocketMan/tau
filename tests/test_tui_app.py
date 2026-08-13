@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from io import StringIO
@@ -139,6 +140,7 @@ from tau_coding.tui.widgets import (
     TRANSCRIPT_WINDOW_OVERSCAN_ITEMS,
     CompactSessionInfo,
     LeftAlignedMarkdownHeading,
+    MessageStatusFooter,
     StreamingTranscriptMessageWidget,
     TauMarkdownBlock,
     ThemedMarkdownWidget,
@@ -2080,6 +2082,149 @@ async def test_tui_streaming_deltas_update_active_message_without_full_refresh(
 
 
 @pytest.mark.anyio
+async def test_tui_streaming_message_shows_running_timer_and_tps_badge() -> None:
+    """The streaming message footer shows a running timer and zero-padded TPS."""
+    app = _tui_app(FakeSession())
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        transcript = app.query_one("#transcript", TranscriptView)
+        widget = await transcript.start_assistant_message(theme=TAU_DARK_THEME)
+        widget.item.run_started_at = time.monotonic() - 65
+        await transcript.append_assistant_delta("x" * 400, theme=TAU_DARK_THEME)
+        widget._stream_started_at = time.monotonic() - 10
+        widget.refresh_status_footer()
+        await pilot.pause()
+
+        footer = widget.query_one(MessageStatusFooter)
+        assert footer.display is True
+        assert _render_plain(footer.query_one(".message-status-timer", Static)) == "running 1m 5s"
+        # 400 chars / 4 = 100 tokens over 10s = 10 TPS, zero-padded to 3 digits.
+        assert _render_plain(footer.query_one(".message-status-tps", Static)) == "010 TPS"
+
+
+@pytest.mark.anyio
+async def test_tui_streaming_message_hides_tps_after_finalize() -> None:
+    """Finalizing a message drops the live TPS badge but keeps the timer."""
+    app = _tui_app(FakeSession())
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        transcript = app.query_one("#transcript", TranscriptView)
+        widget = await transcript.start_assistant_message(theme=TAU_DARK_THEME)
+        widget.item.run_started_at = time.monotonic() - 5
+        await transcript.append_assistant_delta("hello", theme=TAU_DARK_THEME)
+        widget._stream_started_at = time.monotonic() - 1
+        await transcript.finish_assistant_message()
+        await pilot.pause()
+
+        footer = widget.query_one(MessageStatusFooter)
+        assert footer.display is True
+        assert _render_plain(footer.query_one(".message-status-timer", Static)) == "running 5s"
+        assert footer.query_one(".message-status-tps", Static).display is False
+
+
+@pytest.mark.anyio
+async def test_tui_agent_turn_shows_finished_badge_after_settle() -> None:
+    """A settled agent turn reports 'finished in X' on its final message."""
+    partial = AssistantMessage()
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageStartEvent(message=partial),
+            MessageUpdateEvent(
+                message=partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="hello world", partial=partial
+                ),
+            ),
+            MessageEndEvent(message=_assistant("hello world")),
+            AgentSettledEvent(),
+        ]
+    )
+    app = _tui_app(session)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app._run_prompt("stream")
+        await pilot.pause()
+
+        widget = app.query_one(StreamingTranscriptMessageWidget)
+        assert widget.item.run_elapsed is not None
+        footer = widget.query_one(MessageStatusFooter)
+        assert footer.display is True
+        assert _render_plain(footer.query_one(".message-status-timer", Static)).startswith(
+            "finished in"
+        )
+        assert footer.query_one(".message-status-tps", Static).display is False
+        # The run no longer carries a live start time.
+        assert app.state.agent_started_at is None
+        assert app.state.running is False
+
+
+@pytest.mark.anyio
+async def test_tui_agent_turn_intermediate_message_keeps_badge_until_settle() -> None:
+    """Intermediate messages drop their running badge once the turn settles."""
+    first_partial = AssistantMessage()
+    second_partial = AssistantMessage()
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageStartEvent(message=first_partial),
+            MessageUpdateEvent(
+                message=first_partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="first", partial=first_partial
+                ),
+            ),
+            MessageEndEvent(message=_assistant("first")),
+            ToolExecutionStartEvent(tool_call_id="call-1", tool_name="bash", args={}),
+            ToolExecutionEndEvent(
+                tool_call_id="call-1",
+                tool_name="bash",
+                result=AgentToolResult(content=[TextContent(text="ok")]),
+                is_error=False,
+            ),
+            MessageStartEvent(message=second_partial),
+            MessageUpdateEvent(
+                message=second_partial,
+                assistant_message_event=TextDeltaEvent(
+                    content_index=0, delta="second", partial=second_partial
+                ),
+            ),
+            MessageEndEvent(message=_assistant("second")),
+            AgentSettledEvent(),
+        ]
+    )
+    app = _tui_app(session)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app._run_prompt("stream")
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", TranscriptView)
+        messages = [
+            child
+            for child in transcript.children
+            if isinstance(child, TranscriptMessageWidget | StreamingTranscriptMessageWidget)
+            and child.item.role == "assistant"
+        ]
+        assert len(messages) == 2
+        first, second = messages
+        # The intermediate message was finalized and paged through a redraw, so
+        # it is a plain block whose running badge was cleared at settle.
+        assert isinstance(first, TranscriptMessageWidget)
+        assert first.item.run_started_at is None
+        assert first.item.run_elapsed is None
+        assert first.query_one(MessageStatusFooter).display is False
+        assert isinstance(second, StreamingTranscriptMessageWidget)
+        assert second.item.run_elapsed is not None
+        assert second.query_one(MessageStatusFooter).display is True
+        assert _render_plain(second.query_one(".message-status-timer", Static)).startswith(
+            "finished in"
+        )
+
+
+@pytest.mark.anyio
 async def test_tui_submit_prompt_optimistically_appends_user_message_without_full_refresh() -> None:
     session = FakeSession(
         messages=[UserMessage(content=f"Earlier {index}") for index in range(3)],
@@ -3678,7 +3823,10 @@ async def test_activity_animation_throttles_tool_timer_layout_work(
 
         app._last_tool_timer_refresh_at -= 1.0
         app._tick_activity()
-        assert scheduled == [app._refresh_pending_tool_timer]
+        assert scheduled == [
+            app._refresh_pending_tool_timer,
+            app._refresh_message_status_footers,
+        ]
 
 
 @pytest.mark.anyio

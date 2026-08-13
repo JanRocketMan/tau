@@ -34,11 +34,13 @@ class TuiEventAdapter:
         if isinstance(event, AgentStartEvent):
             self.state.running = True
             self.state.error = None
+            self.state.start_agent_run()
             return
         if isinstance(event, AgentEndEvent):
             # A bare harness event is terminal for legacy/direct adapter callers.
             self._flush()
             self.state.running = False
+            self.state.end_agent_run()
             return
         if isinstance(event, SessionAgentEndEvent):
             # Session orchestration may still compact, retry, or drain queued work.
@@ -50,6 +52,7 @@ class TuiEventAdapter:
                 self.state.add_assistant_error(self._pending_overflow_error)
                 self._pending_overflow_error = None
             self.state.running = False
+            self.state.end_agent_run()
             return
         if isinstance(event, QueueUpdateEvent):
             self.state.update_queue(steering=event.steering, follow_up=event.follow_up)
@@ -93,6 +96,7 @@ class TuiEventAdapter:
                         self._pending_overflow_error = None
                         self.state.add_assistant_error(message)
                         self.state.running = False
+                        self.state.end_agent_run()
                 else:
                     self._pending_overflow_error = None
                     self.state.add_assistant_message(message, include_tool_calls=False)
@@ -130,4 +134,5 @@ class TuiEventAdapter:
     def _flush(self) -> None:
         if self.state.assistant_buffer:
             self.state.add_item("assistant", self.state.assistant_buffer)
+            self.state.attach_run_timing(self.state.items[-1])
             self.state.assistant_buffer = ""

@@ -4731,6 +4731,7 @@ class TauTuiApp(App[None]):
             self.state.error = message
             self.state.add_item("error", message)
             self.state.running = False
+            self.state.end_agent_run()
             self._sync_text_selection_state()
             self._refresh()
         finally:
@@ -4754,6 +4755,11 @@ class TauTuiApp(App[None]):
             return
         if isinstance(event, AgentEndEvent):
             await transcript.finish_assistant_message()
+            transcript.finish_agent_run()
+            self._refresh_chrome()
+            return
+        if isinstance(event, AgentSettledEvent):
+            transcript.finish_agent_run()
             self._refresh_chrome()
             return
         if isinstance(event, MessageStartEvent):
@@ -4924,6 +4930,7 @@ class TauTuiApp(App[None]):
         self._prompt_worker = None
         self.state.running = False
         self.state.assistant_buffer = ""
+        self.state.end_agent_run()
         self._sync_text_selection_state()
         self._refresh()
         if notify:
@@ -5805,6 +5812,15 @@ class TauTuiApp(App[None]):
         if now - self._last_tool_timer_refresh_at >= 1.0:
             self._last_tool_timer_refresh_at = now
             self.call_later(self._refresh_pending_tool_timer)
+            self.call_later(self._refresh_message_status_footers)
+
+    def _refresh_message_status_footers(self) -> None:
+        """Refresh running timer and TPS badges on the active turn's messages."""
+        try:
+            transcript = self.query_one("#transcript", TranscriptView)
+        except NoMatches:
+            return
+        transcript.refresh_mounted_status_footers()
 
     async def _refresh_pending_tool_timer(self) -> None:
         """Refresh elapsed time on the tool row that is currently executing."""
