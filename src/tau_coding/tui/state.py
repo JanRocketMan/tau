@@ -67,6 +67,8 @@ class TuiState:
     # Total duration of the last finished turn, shown as "finished in Xm Ys"
     # until the next turn starts.
     last_run_elapsed: float | None = None
+    # Whether the last turn was interrupted, shown as "interrupted after Xm Ys".
+    last_run_interrupted: bool = False
     error: str | None = None
     show_tool_results: bool = False
     show_thinking: bool = True
@@ -292,18 +294,21 @@ class TuiState:
         self.assistant_buffer = ""
         self.agent_started_at = None
         self.last_run_elapsed = None
+        self.last_run_interrupted = False
         self.error = None
 
     def start_agent_run(self) -> None:
         """Record the start of an agent turn for the running timer badge."""
         self.agent_started_at = time.monotonic()
         self.last_run_elapsed = None
+        self.last_run_interrupted = False
 
-    def end_agent_run(self) -> float | None:
+    def end_agent_run(self, *, interrupted: bool = False) -> float | None:
         """End the active agent turn and return its total elapsed seconds.
 
-        The elapsed duration feeds the "finished in Xm Ys" status bar; the
-        value is retained in `last_run_elapsed` until the next turn starts.
+        The elapsed duration feeds the "finished in Xm Ys" status bar (or
+        "interrupted after Xm Ys" when ``interrupted`` is set); the value is
+        retained in `last_run_elapsed` until the next turn starts.
         Returns None when no turn is active.
         """
         if self.agent_started_at is None:
@@ -311,6 +316,7 @@ class TuiState:
         elapsed = time.monotonic() - self.agent_started_at
         self.agent_started_at = None
         self.last_run_elapsed = elapsed
+        self.last_run_interrupted = interrupted
         return elapsed
 
     def set_skills(self, skills: Iterable[Skill]) -> None:

@@ -2190,8 +2190,8 @@ async def test_tui_run_status_bar_reports_finished_after_model_error() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_run_status_bar_reports_finished_after_interrupt() -> None:
-    """Ctrl+C interruption still reports 'finished in X' on the status bar."""
+async def test_tui_run_status_bar_reports_interrupted_after_interrupt() -> None:
+    """Ctrl+C interruption reports 'interrupted after X' on the status bar."""
 
     class StuckSession(FakeSession):
         events: object = None
@@ -2213,8 +2213,9 @@ async def test_tui_run_status_bar_reports_finished_after_interrupt() -> None:
         await pilot.pause()
 
         bar = app.query_one("#run-status", RunStatusBar)
-        assert _render_plain(bar).startswith("finished in")
+        assert _render_plain(bar).startswith("interrupted after")
         assert app.state.last_run_elapsed is not None
+        assert app.state.last_run_interrupted is True
         assert app.state.agent_started_at is None
         assert app.state.running is False
 
@@ -5999,7 +6000,7 @@ async def test_tui_app_name_updates_status() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_name_success_uses_notification_instead_of_modal() -> None:
+async def test_tui_app_name_success_appends_transcript_row() -> None:
     app = _tui_app(FakeSession())
     notifications: list[str] = []
 
@@ -6015,9 +6016,11 @@ async def test_tui_app_name_success_uses_notification_instead_of_modal() -> None
         await pilot.press("enter")
         await pilot.pause()
 
-        assert notifications == ["Session renamed: Customer bugfix"]
+        assert notifications == []
         assert not isinstance(app.screen, CommandOutputScreen)
-        assert app.state.items == []
+        assert [(item.role, item.text) for item in app.state.items] == [
+            ("status", "/name\nSession renamed: Customer bugfix"),
+        ]
 
 
 @pytest.mark.anyio
@@ -6164,13 +6167,6 @@ async def test_tui_app_ctrl_c_stops_running_session_from_prompt() -> None:
 
     session = RunningSession()
     app = _tui_app(session)
-    notifications: list[str] = []
-
-    def fake_notify(message: str, **kwargs: object) -> None:
-        del kwargs
-        notifications.append(message)
-
-    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.adapter.apply(AgentStartEvent())
@@ -6182,8 +6178,8 @@ async def test_tui_app_ctrl_c_stops_running_session_from_prompt() -> None:
 
         assert session.cancel_count == 1
         assert app.state.running is False
+        assert app.state.last_run_interrupted is True
         assert prompt.value == "keep this draft"
-        assert notifications == ["Interrupted current operation."]
 
 
 @pytest.mark.anyio
@@ -6195,13 +6191,6 @@ async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
 
     session = RunningSession()
     app = _tui_app(session)
-    notifications: list[str] = []
-
-    def fake_notify(message: str, **kwargs: object) -> None:
-        del kwargs
-        notifications.append(message)
-
-    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         app.adapter.apply(AgentStartEvent())
@@ -6211,7 +6200,7 @@ async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
 
         assert session.cancel_count == 1
         assert app.state.running is False
-        assert notifications == ["Interrupted current operation."]
+        assert app.state.last_run_interrupted is True
 
 
 @pytest.mark.anyio
@@ -7195,13 +7184,6 @@ async def test_tui_app_limits_terminal_command_output_preview() -> None:
 @pytest.mark.anyio
 async def test_tui_app_toggles_tool_results_from_keybinding() -> None:
     app = _tui_app(FakeSession())
-    notifications: list[str] = []
-
-    def fake_notify(message: str, **kwargs: object) -> None:
-        del kwargs
-        notifications.append(message)
-
-    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
         assert app.state.show_tool_results is False
@@ -7212,7 +7194,6 @@ async def test_tui_app_toggles_tool_results_from_keybinding() -> None:
         await pilot.pause()
 
     assert app.state.show_tool_results is False
-    assert notifications == ["Tool results expanded.", "Tool results collapsed."]
 
 
 @pytest.mark.anyio
@@ -8063,22 +8044,15 @@ async def test_tui_resume_refreshes_context_after_session_swap() -> None:
     session = FakeSession(messages=[UserMessage(content="Earlier")])
     app = _tui_app(session)
     observed_context: list[int] = []
-    notifications: list[str] = []
 
     def fake_refresh() -> None:
         observed_context.append(session.context_token_estimate)
 
-    def fake_notify(message: str, **kwargs: object) -> None:
-        del kwargs
-        notifications.append(message)
-
     app._refresh = fake_refresh  # ty: ignore[invalid-assignment]
-    app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     await app._resume_session("session-1")
 
     assert observed_context == [456]
-    assert notifications == ["Resumed session: session-1"]
     assert [(item.role, item.text) for item in app.state.items] == [
         ("user", "Restored prompt"),
     ]

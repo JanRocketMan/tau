@@ -3927,9 +3927,7 @@ class TauTuiApp(App[None]):
                 self._set_tui_theme(command.theme)
             self.state.set_skills(self.session.skills)
             if command.message:
-                if _command_message_uses_notification(text, command.message):
-                    self._notify(command.message)
-                elif _command_message_uses_transcript(text):
+                if _command_message_uses_transcript(text):
                     self._append_command_message(text, command.message)
                 else:
                     self._show_command_message(text, command.message)
@@ -4881,13 +4879,13 @@ class TauTuiApp(App[None]):
         """Cancel the active compaction or agent turn."""
         if self._cancel_active_compaction(notify=True):
             return
-        self._cancel_active_prompt(notify=True)
+        self._cancel_active_prompt()
 
     def action_interrupt(self) -> None:
         """Stop current work on Ctrl+C, or clear the prompt when Tau is idle."""
         if self._cancel_active_compaction(notify=True):
             return
-        if self._cancel_active_prompt(notify=True):
+        if self._cancel_active_prompt():
             return
         with suppress(NoMatches):
             self.query_one("#prompt", PromptInput).action_clear_prompt()
@@ -4910,9 +4908,12 @@ class TauTuiApp(App[None]):
             self._notify("Cancelled compaction.")
         return True
 
-    def _cancel_active_prompt(self, *, notify: bool, interrupt: bool = False) -> bool:
-        """Cancel the active prompt worker and ignore any late events from it."""
-        del interrupt
+    def _cancel_active_prompt(self) -> bool:
+        """Cancel the active prompt worker and ignore any late events from it.
+
+        The interrupted run keeps its elapsed time so the status bar can report
+        "interrupted after Xm Ys" instead of "finished in Xm Ys".
+        """
         worker = self._prompt_worker
         is_worker_active = worker is not None and not worker.is_cancelled
         is_session_running = bool(getattr(self.session, "is_running", False))
@@ -4928,11 +4929,9 @@ class TauTuiApp(App[None]):
         self._prompt_worker = None
         self.state.running = False
         self.state.assistant_buffer = ""
-        self.state.end_agent_run()
+        self.state.end_agent_run(interrupted=True)
         self._sync_text_selection_state()
         self._refresh()
-        if notify:
-            self._notify("Interrupted current operation.")
         return True
 
     def action_accept_completion(self) -> None:
@@ -5169,9 +5168,8 @@ class TauTuiApp(App[None]):
 
     def action_toggle_tool_results(self) -> None:
         """Toggle inline tool result details without rebuilding unrelated history."""
-        expanded = self.state.toggle_tool_results()
+        self.state.toggle_tool_results()
         self.run_worker(self._update_tool_results_visibility(), exclusive=False)
-        self._notify("Tool results expanded." if expanded else "Tool results collapsed.")
 
     async def _update_tool_results_visibility(self) -> None:
         transcript = self.query_one("#transcript", TranscriptView)
@@ -5196,12 +5194,11 @@ class TauTuiApp(App[None]):
 
     async def _resume_session(self, session_id: str) -> None:
         try:
-            resume_message = await self.session.resume(session_id)
+            await self.session.resume(session_id)
             self._reload_session_themes()
             self.state.clear()
             self.state.set_skills(self.session.skills)
             self._load_session_messages_from_session()
-            self._notify(resume_message)
         except Exception as exc:  # noqa: BLE001 - surface command failures in the TUI
             self._notify(f"Error: {exc}", severity="error")
         self._refresh()
@@ -5269,21 +5266,20 @@ class TauTuiApp(App[None]):
             self.state.clear()
             self.state.set_skills(self.session.skills)
             self._load_session_messages_from_session()
-            if isinstance(result, SessionTreeBranchResult):
-                if result.input_prefill is not None:
-                    prompt = self.query_one("#prompt", PromptInput)
-                    prompt.value = result.input_prefill
-                    prompt.move_cursor(_text_end_location(result.input_prefill))
-                    prompt.focus()
-                self._notify(result.message)
-            elif isinstance(result, str):
-                self._notify(result)
+            if (
+                isinstance(result, SessionTreeBranchResult)
+                and result.input_prefill is not None
+            ):
+                prompt = self.query_one("#prompt", PromptInput)
+                prompt.value = result.input_prefill
+                prompt.move_cursor(_text_end_location(result.input_prefill))
+                prompt.focus()
         except Exception as exc:  # noqa: BLE001 - surface command failures in the TUI
             self._notify(f"Error: {exc}", severity="error")
         self._refresh()
 
     async def _new_session(self) -> None:
-        self._cancel_active_prompt(notify=False, interrupt=True)
+        self._cancel_active_prompt()
         new_session = getattr(self.session, "new_session", None)
         if new_session is None:
             self._notify("Session manager is not available.")
@@ -6446,13 +6442,7 @@ def _filter_model_choices(
 def _command_message_uses_transcript(command_text: str) -> bool:
     """Return whether slash-command output should appear inline in the transcript."""
     command_name = command_text.split(maxsplit=1)[0].casefold()
-    return command_name in {"/reload", "/system"}
-
-
-def _command_message_uses_notification(command_text: str, message: str) -> bool:
-    """Return whether slash-command output should appear as a notification."""
-    command_name = command_text.split(maxsplit=1)[0].casefold()
-    return command_name == "/name" and message.startswith("Session renamed: ")
+    return command_name in {"/reload", "/system", "/name"}
 
 
 def _command_output_title(command_text: str) -> str:

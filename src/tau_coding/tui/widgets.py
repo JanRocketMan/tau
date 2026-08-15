@@ -484,15 +484,17 @@ class RunStatusBar(Static):
 def run_status_text(state: TuiState) -> str | None:
     """Return the timer text for the persistent run status bar.
 
-    While a turn is active the timer counts up; after the turn settles (normally,
-    on error, or on interrupt) the bar reports the total duration; when idle it
+    While a turn is active the timer counts up; after the turn settles (normally
+    or on error) the bar reports the total duration as "finished in Xm Ys";
+    after an interrupt it reports "interrupted after Xm Ys"; when idle it
     returns None so the bar stays empty.
     """
     if state.agent_started_at is not None:
         elapsed = max(0.0, time.monotonic() - state.agent_started_at)
         return f"running {format_elapsed(elapsed)}"
     if state.last_run_elapsed is not None:
-        return f"finished in {format_elapsed(state.last_run_elapsed)}"
+        label = "interrupted after" if state.last_run_interrupted else "finished in"
+        return f"{label} {format_elapsed(state.last_run_elapsed)}"
     return None
 
 

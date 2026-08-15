@@ -47,8 +47,8 @@ While the agent is working you don't have to wait:
   it keeps the former behavior and clears the prompt. Use **Ctrl+U** to clear the
   prompt directly.
 - **Esc** also cancels the active run. Cancellation is treated as an intentional
-  stop, not an error. After an interrupt, the status bar above the prompt still
-  reports `finished in Xm Ys` with the elapsed time.
+  stop, not an error. After an interrupt, the status bar above the prompt
+  reports `interrupted after Xm Ys` with the elapsed time.
 - **Enter** (while running) queues your text as **steering** — extra guidance
   applied to the current run.
 - **Alt+Enter** queues a **follow-up** — a prompt that waits until the current
@@ -127,11 +127,12 @@ grows:
 
 - `running 1m 23s` while the agent works, ticking once per second
 - `finished in 1m 23s` once the turn settles, with the total turn duration
+- `interrupted after 1m 23s` when the run is stopped with **Ctrl+C** or **Esc**
 
-The finished report appears whether the run completed normally, failed with a
-provider error, or was interrupted with **Ctrl+C** or **Esc**. The bar keeps
-its row even when idle, so nothing shifts when a run starts or ends. The
-finished duration stays visible until your next prompt.
+The finished and interrupted reports appear whether the run completed normally,
+failed with a provider error, or was stopped early. The bar keeps its row even
+when idle, so nothing shifts when a run starts or ends. The final duration stays
+visible until your next prompt.
 
 Tool results (like long `read` or `bash` output) render as compact previews so
 the transcript stays readable. Toggle full tool output with **Ctrl+O**. Markdown
