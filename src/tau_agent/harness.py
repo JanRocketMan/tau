@@ -20,6 +20,7 @@ from tau_agent.messages import (
 )
 from tau_agent.provider import ModelProvider
 from tau_agent.tools import AgentTool
+from tau_agent.types import JSONValue
 
 EventListener = Callable[[AgentEvent], Awaitable[None] | None]
 QueueMode = Literal["one_at_a_time", "all"]
@@ -44,6 +45,10 @@ class AgentHarnessConfig:
     max_turns: int | None = None
     queue_mode: QueueMode = "one_at_a_time"
     session_id: str | None = None
+    # Provider-native input items persisted by a previous compaction (only the
+    # Responses transports consume them). Owned and mutated by the coding
+    # session, which clears it on model change or tree navigation.
+    remote_input_items: list[JSONValue] | None = None
     before_tool_call: BeforeToolCall | None = None
     after_tool_call: AfterToolCall | None = None
 
@@ -177,6 +182,7 @@ class AgentHarness:
                 max_turns=self._config.max_turns,
                 signal=signal,
                 session_id=self._config.session_id,
+                remote_input_items=self._config.remote_input_items,
                 get_steering_messages=self._drain_steering_messages,
                 get_follow_up_messages=self._drain_follow_up_messages,
                 before_tool_call=self._config.before_tool_call,

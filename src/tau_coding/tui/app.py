@@ -211,9 +211,10 @@ class LoginRequiredProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         """Surface a login-needed provider error."""
-        del system, messages, tools, signal, session_id
+        del system, messages, tools, signal, session_id, remote_input_items
 
         async def iterator() -> AsyncIterator[AssistantMessageEvent]:
             error = AssistantMessage(
@@ -4005,6 +4006,7 @@ class TauTuiApp(App[None]):
         self.state.set_skills(self.session.skills)
         self._load_session_messages_from_session()
         self._notify(compact_message)
+        self._refresh_run_status_bar()
         self._refresh()
         if not self._app_has_focus:
             self._terminal_notification.notify_turn_finished()
@@ -5752,7 +5754,12 @@ class TauTuiApp(App[None]):
         compact_info = self.query_one("#compact-session-info", CompactSessionInfo)
         compact_info.update_from_session(self.session, theme=theme)
         run_status = self.query_one("#run-status", RunStatusBar)
-        run_status.set_content(run_status_text(self.state))
+        run_status.set_content(
+            run_status_text(
+                self.state,
+                getattr(self.session, "remote_compaction_status", None),
+            )
+        )
         queued_messages = self.query_one("#queued-messages", Static)
         queue_render_key = (
             self.state.queued_steering,
@@ -5816,7 +5823,12 @@ class TauTuiApp(App[None]):
             run_status = self.query_one("#run-status", RunStatusBar)
         except NoMatches:
             return
-        run_status.set_content(run_status_text(self.state))
+        run_status.set_content(
+            run_status_text(
+                self.state,
+                getattr(self.session, "remote_compaction_status", None),
+            )
+        )
 
     async def _refresh_pending_tool_timer(self) -> None:
         """Refresh elapsed time on the tool row that is currently executing."""

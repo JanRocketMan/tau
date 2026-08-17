@@ -770,6 +770,26 @@ def test_state_load_messages_projects_custom_type_on_resume() -> None:
     assert state.items[1].details == {"id": "run-1"}
 
 
+def test_run_status_text_shows_persistent_notice_alongside_timer() -> None:
+    from tau_coding.tui.widgets import run_status_text
+
+    state = TuiState()
+    state.agent_started_at = time.monotonic()
+    text = run_status_text(state, notice="Remote compaction failed; used text summary")
+    assert text is not None
+    assert text.startswith("running ")
+    assert "⚠" in text
+    assert "[bold red]" in text
+    assert "Remote compaction failed" in text
+
+    state.agent_started_at = None
+    idle = run_status_text(state, notice="Remote compaction failed; used text summary")
+    assert idle == "[bold red]⚠ Remote compaction failed; used text summary[/]"
+
+    assert run_status_text(state) is None
+    assert run_status_text(TuiState(), None) is None
+
+
 def test_chat_items_render_as_unlabeled_blocks() -> None:
     console = Console(record=True, width=40)
 

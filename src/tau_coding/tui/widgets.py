@@ -481,21 +481,32 @@ class RunStatusBar(Static):
         self.update(timer or "")
 
 
-def run_status_text(state: TuiState) -> str | None:
+def run_status_text(state: TuiState, notice: str | None = None) -> str | None:
     """Return the timer text for the persistent run status bar.
 
     While a turn is active the timer counts up; after the turn settles (normally
     or on error) the bar reports the total duration as "finished in Xm Ys";
     after an interrupt it reports "interrupted after Xm Ys"; when idle it
     returns None so the bar stays empty.
+
+    ``notice`` is a persistent warning appended loudly (bold red) to the bar,
+    e.g. a failed remote compaction. It is additive: it shows alongside the
+    timer and persists until the notice is cleared.
     """
+    timer: str | None = None
     if state.agent_started_at is not None:
         elapsed = max(0.0, time.monotonic() - state.agent_started_at)
-        return f"running {format_elapsed(elapsed)}"
-    if state.last_run_elapsed is not None:
+        timer = f"running {format_elapsed(elapsed)}"
+    elif state.last_run_elapsed is not None:
         label = "interrupted after" if state.last_run_interrupted else "finished in"
-        return f"{label} {format_elapsed(state.last_run_elapsed)}"
-    return None
+        timer = f"{label} {format_elapsed(state.last_run_elapsed)}"
+
+    if notice:
+        rendered = f"[bold red]⚠ {notice}[/]"
+        if timer:
+            return f"{timer} · {rendered}"
+        return rendered
+    return timer
 
 
 class StreamingTranscriptMessageWidget(ThemedMarkdownWidget):

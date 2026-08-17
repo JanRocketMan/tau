@@ -150,6 +150,7 @@ class OpenAICodexProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         """Stream one response as Pi-compatible assistant message events."""
         raw = self._stream_provider_events(
@@ -159,6 +160,7 @@ class OpenAICodexProvider:
             tools=tools,
             signal=signal,
             session_id=session_id,
+            remote_input_items=remote_input_items,
         )
         return canonicalize_provider_stream(
             raw, api="openai-codex-responses", provider="openai-codex", model=model
@@ -173,6 +175,7 @@ class OpenAICodexProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         """Stream one Codex Responses request as provider-neutral events."""
 
@@ -188,6 +191,7 @@ class OpenAICodexProvider:
                 reasoning_summary=self._config.reasoning_summary,
                 supports_images=self._config.supports_images,
                 prompt_cache_key=cache_key,
+                prepend_input=remote_input_items,
             )
             url = _resolve_codex_url(self._config.base_url)
 
@@ -404,13 +408,17 @@ def _build_codex_payload(
     reasoning_summary: str = "auto",
     supports_images: bool = False,
     prompt_cache_key: str | None = None,
+    prepend_input: list[JSONValue] | None = None,
 ) -> dict[str, JSONValue]:
     payload: dict[str, JSONValue] = {
         "model": model,
         "store": False,
         "stream": True,
         "instructions": system or "You are a helpful assistant.",
-        "input": _messages_to_responses_input(messages, supports_images=supports_images),
+        "input": [
+            *(prepend_input or []),
+            *_messages_to_responses_input(messages, supports_images=supports_images),
+        ],
         "text": {"verbosity": "low"},
         "include": ["reasoning.encrypted_content"],
         "tool_choice": "auto",

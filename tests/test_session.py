@@ -320,6 +320,12 @@ def test_session_state_applies_compaction_and_branch_summary() -> None:
             id="compact",
             summary="The user asked about sessions.",
             replaces_entry_ids=["user", "assistant"],
+            details={
+                "provider": "openai-responses-compaction",
+                "version": 2,
+                "model": "gpt-x",
+                "replacement_history": [{"type": "compaction", "encrypted_content": "blob"}],
+            },
         ),
         BranchSummaryEntry(id="branch", summary="A side branch explored storage."),
     ]
@@ -329,6 +335,42 @@ def test_session_state_applies_compaction_and_branch_summary() -> None:
     assert [message.role for message in state.messages] == ["user", "user"]
     assert "The user asked about sessions." in message_text(state.messages[0])
     assert "A side branch explored storage." in message_text(state.messages[1])
+    # Replay folds the summary text and never depends on the sidecar details.
+    assert state.compaction_entries[0].details == {
+        "provider": "openai-responses-compaction",
+        "version": 2,
+        "model": "gpt-x",
+        "replacement_history": [{"type": "compaction", "encrypted_content": "blob"}],
+    }
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        None,
+        {"provider": "openai-responses-compaction", "version": 2, "model": "gpt-x"},
+        {
+            "provider": "openai-responses-compaction",
+            "version": 2,
+            "model": "gpt-x",
+            "replacement_history": [{"type": "compaction", "encrypted_content": "blob"}],
+        },
+    ],
+)
+def test_compaction_entry_details_round_trips_jsonl(details: object | None) -> None:
+    entry = CompactionEntry(
+        id="compact-1",
+        timestamp=1,
+        summary="Summary text",
+        replaces_entry_ids=["user", "assistant"],
+        details=details,
+    )
+    line = entry_to_json_line(entry)
+    parsed = entry_from_json_line(line)
+    assert isinstance(parsed, CompactionEntry)
+    assert parsed.summary == "Summary text"
+    assert parsed.replaces_entry_ids == ["user", "assistant"]
+    assert parsed.details == details
 
 
 def test_path_to_entry_follows_parent_chain() -> None:

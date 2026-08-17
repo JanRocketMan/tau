@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Iterable
 
 from tau_agent.messages import AgentMessage
 from tau_agent.tools import AgentTool
+from tau_agent.types import JSONValue
 from tau_ai.events import AssistantMessageEvent
 from tau_ai.provider import CancellationToken
 
@@ -17,6 +18,7 @@ class FakeProvider:
         self._streams = [list(stream) for stream in streams]
         self.calls: list[tuple[str, str, list[AgentMessage], list[AgentTool]]] = []
         self.session_ids: list[str | None] = []
+        self.remote_input_items: list[list[JSONValue]] = []
 
     def stream_response(
         self,
@@ -27,9 +29,11 @@ class FakeProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         self.calls.append((model, system, list(messages), list(tools)))
         self.session_ids.append(session_id)
+        self.remote_input_items.append(list(remote_input_items or []))
         stream = self._streams.pop(0) if self._streams else []
 
         async def iterator() -> AsyncIterator[AssistantMessageEvent]:

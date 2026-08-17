@@ -39,8 +39,10 @@ from tau_agent.session import (
     SessionState,
     ThinkingLevelChangeEntry,
 )
+from tau_agent.types import JSONValue
 from tau_ai import CancellationToken, FakeProvider, ModelProvider, RuntimeModelLimits
 from tau_ai.events import AssistantMessageEvent
+from tau_ai.openai_remote_compaction import RemoteCompactionResult
 from tau_coding import (
     CodingSession,
     CodingSessionConfig,
@@ -65,7 +67,12 @@ from tau_coding.context_window import ContextUsageEstimate, estimate_context_usa
 from tau_coding.events import QueueUpdateEvent
 from tau_coding.prompt_templates import PromptTemplate
 from tau_coding.provider_config import ProviderModelMetadata
-from tau_coding.session import _ordered_tree_entries, parse_terminal_command
+from tau_coding.session import (
+    RemoteCompactionParams,
+    _ordered_tree_entries,
+    default_remote_compaction_params,
+    parse_terminal_command,
+)
 from tau_coding.skills import Skill
 from tau_coding.system_prompt import ProjectContextFile
 
@@ -145,8 +152,9 @@ class RaisingProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
-        del model, system, messages, tools, signal, session_id
+        del model, system, messages, tools, signal, session_id, remote_input_items
         self.call_count += 1
         should_fail = self.call_count == self.fail_on_call
 
@@ -175,8 +183,9 @@ class WaitingProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
-        del model, system, tools, signal, session_id
+        del model, system, tools, signal, session_id, remote_input_items
         call_index = self.call_count
         self.call_count += 1
         self.calls.append(list(messages))
@@ -209,8 +218,9 @@ class CancellableWaitingProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
-        del model, system, tools, session_id
+        del model, system, tools, session_id, remote_input_items
         self.calls.append(list(messages))
 
         async def iterator() -> AsyncIterator[AssistantMessageEvent]:
@@ -3054,6 +3064,408 @@ async def test_session_compact_persists_summary_and_rebuilds_context(tmp_path: P
             UserMessage(content="Continue."),
         ],
     )
+
+
+@pytest.mark.anyio
+async def test_session_compact_stores_remote_details_and_replays_items(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    provider = FakeProvider(
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Session answer")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Generated session summary")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Next answer")),
+            ],
+        ]
+    )
+    remote_calls: list[dict[str, object]] = []
+
+    async def fake_remote_compact(**kwargs: object) -> RemoteCompactionResult:
+        remote_calls.append(kwargs)
+        return RemoteCompactionResult(
+            output=[{"type": "compaction", "encrypted_content": "opaque"}],
+            usage={"total_tokens": 7},
+        )
+
+    async def fake_params() -> RemoteCompactionParams:
+        return RemoteCompactionParams(
+            base_url="https://chatgpt.com/backend-api",
+            api_key="jwt-access-token",
+            account_id="acct_123",
+            headers={"X-Custom": "1"},
+            model="fake",
+            supports_images=False,
+        )
+
+    session = await CodingSession.load(
+        _config(tmp_path, provider, storage),
+        remote_compaction_call=fake_remote_compact,
+        remote_compaction_params=fake_params,
+    )
+    await _collect_session_events(session.prompt("Explain sessions."))
+
+    result = await session.compact()
+    assert result == "Compacted 2 context entries."
+
+    entries = await storage.read_all()
+    compactions = [entry for entry in entries if entry.type == "compaction"]
+    assert len(compactions) == 1
+    details = compactions[0].details
+    assert details is not None
+    assert details["provider"] == "openai-responses-compaction"
+    assert details["version"] == 2
+    assert details["model"] == "fake"
+    assert details["replacement_history"] == [{"type": "compaction", "encrypted_content": "opaque"}]
+    assert details["usage"] == {"total_tokens": 7}
+
+    # The remote call saw the branch messages converted to Responses items.
+    assert len(remote_calls) == 1
+    assert remote_calls[0]["api_key"] == "jwt-access-token"
+    assert remote_calls[0]["base_url"] == "https://chatgpt.com/backend-api"
+    assert remote_calls[0]["instructions"] == session.system_prompt
+    assert remote_calls[0]["input_items"] == [
+        {"role": "user", "content": "Explain sessions."},
+        {"role": "assistant", "content": "Session answer"},
+    ]
+    # The compaction request carries the Codex subscription headers.
+    codex_headers = remote_calls[0]["headers"]
+    assert isinstance(codex_headers, dict)
+    assert codex_headers["chatgpt-account-id"] == "acct_123"
+    assert codex_headers["x-codex-beta-features"] == "remote_compaction_v2"
+
+    # The next prompt replays the opaque artifacts on the provider request.
+    await _collect_session_events(session.prompt("Continue."))
+    assert provider.remote_input_items[-1] == [
+        {"type": "compaction", "encrypted_content": "opaque"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_session_compact_falls_back_to_summary_when_remote_fails(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    provider = FakeProvider(
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Session answer")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Generated session summary")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Next answer")),
+            ],
+        ]
+    )
+
+    async def failing_remote_compact(**kwargs: object) -> RemoteCompactionResult:
+        raise RuntimeError("remote compaction exploded")
+
+    async def fake_params() -> RemoteCompactionParams:
+        return RemoteCompactionParams(
+            base_url="https://chatgpt.com/backend-api",
+            api_key="jwt-access-token",
+            account_id="acct_123",
+            headers={},
+            model="fake",
+            supports_images=False,
+        )
+
+    session = await CodingSession.load(
+        _config(tmp_path, provider, storage),
+        remote_compaction_call=failing_remote_compact,
+        remote_compaction_params=fake_params,
+    )
+    await _collect_session_events(session.prompt("Explain sessions."))
+
+    result = await session.compact()
+    assert result == "Compacted 2 context entries."
+
+    entries = await storage.read_all()
+    compactions = [entry for entry in entries if entry.type == "compaction"]
+    assert len(compactions) == 1
+    # A remote failure must never break compaction: the portable summary
+    # survives and no sidecar artifact is recorded.
+    assert compactions[0].summary == "Generated session summary"
+    assert compactions[0].details is None
+
+    await _collect_session_events(session.prompt("Continue."))
+    assert provider.remote_input_items[-1] == []
+
+
+async def _write_compacted_journal(
+    storage: JsonlSessionStorage,
+    *,
+    details_model: str,
+) -> None:
+    """Write a minimal journal with one compaction entry carrying remote details."""
+    info = SessionInfoEntry(cwd="unused")
+    model_change = ModelChangeEntry(parent_id=info.id, model="fake")
+    user = MessageEntry(parent_id=model_change.id, message=UserMessage(content="first question"))
+    assistant = MessageEntry(
+        parent_id=user.id,
+        message=AssistantMessage(content=[TextContent(text="first answer")]),
+    )
+    compaction = CompactionEntry(
+        parent_id=assistant.id,
+        summary="summary text",
+        replaces_entry_ids=[user.id, assistant.id],
+        details={
+            "provider": "openai-responses-compaction",
+            "version": 2,
+            "model": details_model,
+            "replacement_history": [{"type": "compaction", "encrypted_content": "opaque"}],
+        },
+    )
+    leaf = LeafEntry(parent_id=compaction.id, entry_id=compaction.id)
+    for entry in (info, model_change, user, assistant, compaction, leaf):
+        await storage.append(entry)
+
+
+@pytest.mark.anyio
+async def test_session_reload_reconstructs_remote_replay_for_matching_model(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    await _write_compacted_journal(storage, details_model="fake")
+
+    provider = FakeProvider(
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Next answer")),
+            ],
+        ]
+    )
+    session = await CodingSession.load(_config(tmp_path, provider, storage))
+    await _collect_session_events(session.prompt("Continue."))
+
+    # The persisted sidecar artifact is replayed on the first request after
+    # reload, without any live remote state.
+    assert provider.remote_input_items[0] == [
+        {"type": "compaction", "encrypted_content": "opaque"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_session_reload_clears_remote_replay_for_foreign_model(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    await _write_compacted_journal(storage, details_model="some-other-model")
+
+    provider = FakeProvider(
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Next answer")),
+            ],
+        ]
+    )
+    session = await CodingSession.load(_config(tmp_path, provider, storage))
+    await _collect_session_events(session.prompt("Continue."))
+
+    # A compaction artifact produced for a different model must not leak into
+    # the current provider request.
+    assert provider.remote_input_items[0] == []
+
+
+@pytest.mark.anyio
+async def test_session_remote_compaction_status_loud_on_failure_and_cleared_on_success(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    provider = FakeProvider(
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Session answer")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Generated session summary")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Next answer")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("More work answer")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Second summary")),
+            ],
+        ]
+    )
+
+    async def failing_remote_compact(**kwargs: object) -> RemoteCompactionResult:
+        raise RuntimeError("remote compaction exploded")
+
+    async def fake_params() -> RemoteCompactionParams:
+        return RemoteCompactionParams(
+            base_url="https://chatgpt.com/backend-api",
+            api_key="jwt-access-token",
+            account_id="acct_123",
+            headers={},
+            model="fake",
+            supports_images=False,
+        )
+
+    session = await CodingSession.load(
+        _config(tmp_path, provider, storage),
+        remote_compaction_call=failing_remote_compact,
+        remote_compaction_params=fake_params,
+    )
+    await _collect_session_events(session.prompt("Explain sessions."))
+
+    await session.compact()
+    # The failure must be loud and persistent on the session, even though
+    # compaction itself succeeded with the text summary.
+    assert session.remote_compaction_status == "Remote compaction failed; used text summary"
+
+    # A later successful remote compaction clears the notice.
+    async def succeeding_remote_compact(**kwargs: object) -> RemoteCompactionResult:
+        return RemoteCompactionResult(
+            output=[{"type": "compaction", "encrypted_content": "opaque"}],
+            usage=None,
+        )
+
+    session._remote_compaction_call = succeeding_remote_compact
+    await _collect_session_events(session.prompt("More work."))
+    await session.compact()
+    assert session.remote_compaction_status is None
+
+
+@pytest.mark.anyio
+async def test_session_remote_compaction_status_silent_when_kill_switch_off(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    provider = FakeProvider(
+        [
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Session answer")),
+            ],
+            [
+                assistant_start(model="fake"),
+                assistant_done(message=_assistant("Generated session summary")),
+            ],
+        ]
+    )
+    monkeypatch.setenv("TAU_REMOTE_COMPACTION_ENABLED", "0")
+
+    async def failing_remote_compact(**kwargs: object) -> RemoteCompactionResult:
+        raise RuntimeError("should never be called")
+
+    async def fake_params() -> RemoteCompactionParams:
+        return RemoteCompactionParams(
+            base_url="https://chatgpt.com/backend-api",
+            api_key="jwt-access-token",
+            account_id="acct_123",
+            headers={},
+            model="fake",
+            supports_images=False,
+        )
+
+    session = await CodingSession.load(
+        _config(tmp_path, provider, storage),
+        remote_compaction_call=failing_remote_compact,
+        remote_compaction_params=fake_params,
+    )
+    await _collect_session_events(session.prompt("Explain sessions."))
+    await session.compact()
+
+    # A deliberate kill switch is silent: no persistent warning and no access.
+    assert session.remote_compaction_status is None
+
+
+@pytest.mark.anyio
+async def test_session_remote_compaction_skip_status_codex_missing_credentials(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    provider = FakeProvider([])
+    session = await CodingSession.load(_config(tmp_path, provider, storage))
+    session._runtime_provider_config = OpenAICodexProviderConfig(name="openai-codex")
+
+    assert (
+        session._remote_compaction_skip_status()
+        == "Remote compaction skipped: OpenAI Codex credentials unavailable"
+    )
+
+
+def _fake_codex_jwt(account_id: str = "acct_1") -> str:
+    """Fabricate a Codex access JWT with the ChatGPT account claim."""
+    import base64
+    import json as json_module
+
+    def _b64(data: dict[str, object]) -> str:
+        raw = json_module.dumps(data).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    header = _b64({"alg": "none", "typ": "JWT"})
+    payload = _b64({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}})
+    return f"{header}.{payload}.sig"
+
+
+@pytest.mark.anyio
+async def test_default_remote_compaction_params_resolves_codex_env_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OPENAI_CODEX_ACCESS_TOKEN", _fake_codex_jwt("acct_1"))
+    config = OpenAICodexProviderConfig(name="openai-codex")
+    store = FileCredentialStore(tmp_path / "credentials.json")
+
+    params = await default_remote_compaction_params(config, "gpt-5.4", store)
+
+    assert params is not None
+    assert params.account_id == "acct_1"
+    assert params.api_key.startswith("ey")
+    assert params.base_url == "https://chatgpt.com/backend-api"
+    assert params.supports_images is False
+
+
+@pytest.mark.anyio
+async def test_default_remote_compaction_params_skips_non_codex_providers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Even with a valid API key present, non-Codex providers stay on the old
+    # text-summary compaction path.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-123")
+    compatible = OpenAICompatibleProviderConfig(name="openai", api="openai-responses")
+    store = FileCredentialStore(tmp_path / "credentials.json")
+
+    assert await default_remote_compaction_params(compatible, "gpt-5.4", store) is None
+    assert await default_remote_compaction_params(None, "gpt-5.4", store) is None
+
+
+@pytest.mark.anyio
+async def test_default_remote_compaction_params_skips_codex_without_credentials(
+    tmp_path: Path,
+) -> None:
+    config = OpenAICodexProviderConfig(name="openai-codex")
+    store = FileCredentialStore(tmp_path / "credentials.json")
+
+    assert await default_remote_compaction_params(config, "gpt-5.4", store) is None
 
 
 @pytest.mark.anyio

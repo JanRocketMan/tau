@@ -107,6 +107,7 @@ class OpenAICompatibleProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[AssistantMessageEvent]:
         """Stream one response as Pi-compatible assistant message events."""
         raw = self._stream_provider_events(
@@ -116,6 +117,7 @@ class OpenAICompatibleProvider:
             tools=tools,
             signal=signal,
             session_id=session_id,
+            remote_input_items=remote_input_items,
         )
         return canonicalize_provider_stream(
             raw,
@@ -133,6 +135,7 @@ class OpenAICompatibleProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         """Stream one model response as provider-neutral events."""
         if self._config.api == "openai-responses" or _use_responses_api(model):
@@ -143,7 +146,11 @@ class OpenAICompatibleProvider:
                 tools=tools,
                 signal=signal,
                 session_id=session_id,
+                remote_input_items=remote_input_items,
             )
+        # Replay items are provider-native Responses artifacts; the chat
+        # completion path cannot consume them and never receives them (the
+        # session only sets them for Responses-capable models).
         return self._stream_chat_completions(
             model=model,
             system=system,
@@ -200,6 +207,7 @@ class OpenAICompatibleProvider:
         tools: list[AgentTool],
         signal: CancellationToken | None = None,
         session_id: str | None = None,
+        remote_input_items: list[JSONValue] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         """Stream one `/v1/responses` response as provider-neutral events."""
         affinity_id = openai_prompt_cache_key(session_id)
@@ -213,6 +221,7 @@ class OpenAICompatibleProvider:
             max_tokens=self._config.max_tokens,
             supports_images=self._config.supports_images,
             prompt_cache_key=cache_key,
+            prepend_input=remote_input_items,
         )
         return self._stream(
             model=model,
@@ -910,6 +919,7 @@ def _build_responses_payload(
     max_tokens: int | None = None,
     supports_images: bool = False,
     prompt_cache_key: str | None = None,
+    prepend_input: list[JSONValue] | None = None,
 ) -> dict[str, JSONValue]:
     payload: dict[str, JSONValue] = {
         "model": model,
@@ -919,7 +929,10 @@ def _build_responses_payload(
         # path usable for zero-data-retention orgs, which reject ``store: true``.
         "store": False,
         "instructions": system,
-        "input": _messages_to_responses_input(messages, supports_images=supports_images),
+        "input": [
+            *(prepend_input or []),
+            *_messages_to_responses_input(messages, supports_images=supports_images),
+        ],
     }
     if prompt_cache_key is not None:
         payload["prompt_cache_key"] = prompt_cache_key

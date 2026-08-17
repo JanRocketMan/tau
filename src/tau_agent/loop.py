@@ -33,6 +33,7 @@ from tau_agent.provider_events import (
     AssistantStartEvent,
 )
 from tau_agent.tools import AgentTool, AgentToolResult
+from tau_agent.types import JSONValue
 
 BeforeToolCall = Callable[[ToolCall], Awaitable[tuple[bool, str | None]]]
 AfterToolCall = Callable[
@@ -52,6 +53,7 @@ async def run_agent_loop(
     max_turns: int | None = None,
     signal: CancellationToken | None = None,
     session_id: str | None = None,
+    remote_input_items: list[JSONValue] | None = None,
     get_steering_messages: Callable[[], Sequence[AgentMessage]] | None = None,
     get_follow_up_messages: Callable[[], Sequence[AgentMessage]] | None = None,
     before_tool_call: BeforeToolCall | None = None,
@@ -119,6 +121,7 @@ async def run_agent_loop(
                 tools=tools,
                 signal=signal,
                 session_id=session_id,
+                remote_input_items=remote_input_items,
             ):
                 yield event
                 if isinstance(event, MessageEndEvent) and isinstance(
@@ -147,7 +150,7 @@ async def run_agent_loop(
                     tool_by_name,
                     signal,
                     before_tool_call,
-                    after_tool_call,
+                    after_tool_call=after_tool_call,
                 ):
                     yield event
                     if isinstance(event, MessageEndEvent) and isinstance(
@@ -197,6 +200,7 @@ async def _assistant_events(
     tools: list[AgentTool],
     signal: CancellationToken | None,
     session_id: str | None,
+    remote_input_items: list[JSONValue] | None = None,
 ) -> AsyncIterator[AgentEvent]:
     source: AsyncIterator[AssistantMessageEvent] = provider.stream_response(
         model=model,
@@ -205,6 +209,7 @@ async def _assistant_events(
         tools=tools,
         signal=signal,
         session_id=session_id,
+        remote_input_items=remote_input_items,
     )
     started = False
     async for event in source:

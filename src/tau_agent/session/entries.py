@@ -59,6 +59,14 @@ class CompactionEntry(BaseSessionEntry):
     type: Literal["compaction"] = "compaction"
     summary: str
     replaces_entry_ids: list[str] = Field(default_factory=list)
+    details: dict[str, JSONValue] | None = None
+    """Optional provider-native sidecar data for this compaction.
+
+    Tau keeps ``summary`` as the authoritative portable representation;
+    ``details`` carries best-effort provider extensions such as OpenAI
+    Responses server-side compaction artifacts (see ``tau_ai.openai_remote_compaction``).
+    Replay and session semantics never depend on it.
+    """
 
 
 class BranchSummaryEntry(BaseSessionEntry):

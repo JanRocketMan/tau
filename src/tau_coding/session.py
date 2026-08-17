@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import string
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
@@ -40,6 +42,14 @@ from tau_agent.session.tree import SessionTreeError, path_to_entry
 from tau_agent.tools import AgentTool
 from tau_agent.types import JSONValue
 from tau_ai.model_limits import ModelLimitsProvider, RuntimeModelLimits
+from tau_ai.openai_remote_compaction import (
+    REMOTE_COMPACTION_PROVIDER,
+    RemoteCompactionCall,
+    build_codex_compaction_headers,
+    call_remote_compaction_v2,
+    messages_to_response_items,
+    responses_tools_payload,
+)
 from tau_coding.branch_summary import summarize_branch_messages_with_model
 from tau_coding.brave_search import BraveSearchConfig
 from tau_coding.catalog_loader import effective_provider_labels
@@ -90,6 +100,7 @@ from tau_coding.prompt_templates import (
     load_prompt_templates_with_diagnostics,
 )
 from tau_coding.provider_config import (
+    OpenAICodexProviderConfig,
     OpenAICompatibleProviderConfig,
     ProviderConfig,
     ProviderConfigError,
@@ -108,7 +119,11 @@ from tau_coding.provider_config import (
     validate_huggingface_inference_provider,
     validate_provider_model,
 )
-from tau_coding.provider_runtime import ClosableModelProvider, create_model_provider
+from tau_coding.provider_runtime import (
+    ClosableModelProvider,
+    OpenAICodexCredentialResolver,
+    create_model_provider,
+)
 from tau_coding.reload import CodingReloadSummary, ReloadCategorySummary
 from tau_coding.resources import (
     ResourceDiagnostic,
@@ -216,6 +231,76 @@ class CompactionPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class RemoteCompactionParams:
+    """Resolved parameters for one best-effort remote compaction attempt.
+
+    Computed at compaction time from the active runtime provider config and
+    the current model. ``None`` from a resolver means the attempt is skipped
+    and only the portable text summary is produced.
+    """
+
+    base_url: str
+    api_key: str
+    account_id: str
+    headers: dict[str, str]
+    model: str
+    supports_images: bool
+
+
+RemoteCompactionParamsSource = Callable[[], Awaitable[RemoteCompactionParams | None]]
+
+_REMOTE_COMPACTION_ENABLED_ENV = "TAU_REMOTE_COMPACTION_ENABLED"
+_FALSY_ENV_VALUES = frozenset({"", "0", "false", "no", "off"})
+
+
+def remote_compaction_enabled_by_env() -> bool:
+    """Return whether remote compaction is enabled via the kill switch.
+
+    ``TAU_REMOTE_COMPACTION_ENABLED`` unset (or set to a truthy value) means
+    enabled. Set it to ``0``, ``false``, ``no``, or ``off`` to keep all
+    sessions on the plain text-summary compaction.
+    """
+    raw = os.environ.get(_REMOTE_COMPACTION_ENABLED_ENV, "1")
+    return raw.strip().casefold() not in _FALSY_ENV_VALUES
+
+
+async def default_remote_compaction_params(
+    provider_config: ProviderConfig | None,
+    model: str,
+    credential_store: FileCredentialStore | None,
+) -> RemoteCompactionParams | None:
+    """Resolve remote-compaction eligibility for the active provider.
+
+    Only the ``openai-codex`` subscription provider qualifies. Credentials use
+    the exact production flow (OAuth store first, ``OPENAI_CODEX_ACCESS_TOKEN``
+    JWT fallback) via ``OpenAICodexCredentialResolver``. Every other provider
+    setup - direct OpenAI-compatible, Chat Completions, OAuth-backed, Hugging
+    Face - returns ``None`` and keeps the plain text-summary compaction.
+    The ``TAU_REMOTE_COMPACTION_ENABLED`` kill switch short-circuits to ``None``.
+    """
+    if not remote_compaction_enabled_by_env():
+        return None
+    if not isinstance(provider_config, OpenAICodexProviderConfig):
+        return None
+    try:
+        resolver = OpenAICodexCredentialResolver(
+            provider_config,
+            credential_store=credential_store or FileCredentialStore(),
+        )
+        credentials = await resolver()
+    except Exception:
+        return None
+    return RemoteCompactionParams(
+        base_url=provider_config.base_url,
+        api_key=credentials.access_token,
+        account_id=credentials.account_id,
+        headers=dict(provider_config.headers),
+        model=model,
+        supports_images=provider_model_supports_images(provider_config, model),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class CodingSessionConfig:
     """Configuration for a persistent coding session."""
 
@@ -300,6 +385,8 @@ class CodingSession:
         extension_runtime: ExtensionRuntime | None = None,
         image_support: ImageSupportState | None = None,
         project_trust_resolution: ProjectTrustResolution | None = None,
+        remote_compaction_call: RemoteCompactionCall | None = None,
+        remote_compaction_params: RemoteCompactionParamsSource | None = None,
     ) -> None:
         self._config = config
         self._state = state
@@ -338,13 +425,24 @@ class CodingSession:
         )
         self._last_diagnostic_log_path: Path | None = None
         self._runtime_model_limits: RuntimeModelLimits | None = None
+        self._remote_compaction_call = remote_compaction_call or call_remote_compaction_v2
+        self._remote_compaction_params_source = remote_compaction_params
+        self._remote_replay_items: list[JSONValue] | None = None
+        self._remote_compaction_status: str | None = None
+        self._last_remote_compaction_error: str | None = None
         self._runtime_model_limits_key: tuple[str, str] | None = None
         self._model_limits_discovery_error: str | None = None
         self._project_trust_resolution = project_trust_resolution
         self._project_trust_commit_pending = False
 
     @classmethod
-    async def load(cls, config: CodingSessionConfig) -> CodingSession:
+    async def load(
+        cls,
+        config: CodingSessionConfig,
+        *,
+        remote_compaction_call: RemoteCompactionCall | None = None,
+        remote_compaction_params: RemoteCompactionParamsSource | None = None,
+    ) -> CodingSession:
         """Load a coding session from append-only storage."""
         entries: list[SessionEntry] = await config.storage.read_all()
         pending_initial_entries: tuple[SessionEntry, ...] = ()
@@ -509,11 +607,16 @@ class CodingSession:
             extension_runtime=extension_runtime,
             image_support=image_support,
             project_trust_resolution=trust_resolution,
+            remote_compaction_call=remote_compaction_call,
+            remote_compaction_params=remote_compaction_params,
         )
         await session._persist_loaded_interrupted_tool_repairs()
         session._sync_thinking_level_to_active_model()
         session._refresh_runtime_provider()
         await session._refresh_runtime_model_limits()
+        # Reconstruct any persisted remote compaction artifact for the resumed
+        # model before the first provider request can fire.
+        session._sync_remote_replay_from_state()
         extension_runtime.bind(session)
         # Attach to session._harness, not the local `harness`:
         # _persist_loaded_interrupted_tool_repairs() above may have replaced the
@@ -799,6 +902,17 @@ class CodingSession:
     def system_prompt(self) -> str:
         """Return the effective system prompt sent to the model."""
         return self._harness.config.system
+
+    @property
+    def remote_compaction_status(self) -> str | None:
+        """Return a short notice for the last remote-compaction outcome.
+
+        Set when the remote compaction was expected to run (Codex provider
+        active, kill switch on) but could not (credentials missing, call
+        failed); cleared on success or when the attempt was not applicable.
+        Frontends may display this persistently, e.g. in the run-status bar.
+        """
+        return self._remote_compaction_status
 
     @property
     def auto_compact_token_threshold(self) -> int | None:
@@ -1845,6 +1959,7 @@ class CodingSession:
         self._pending_initial_entries = replacement._pending_initial_entries
         self._extension_runtime = replacement._extension_runtime
         self._image_support = replacement._image_support
+        self._remote_replay_items = replacement._remote_replay_items
         self._project_trust_resolution = replacement._project_trust_resolution
         self._project_trust_commit_pending = False
         self._session_start_pending = False
@@ -1854,13 +1969,14 @@ class CodingSession:
     async def compact(self, instructions: str | None = None) -> str:
         """Generate a manual compaction summary and rebuild active context."""
         plan = self._manual_compaction_plan()
-        summary = await self._generate_compaction_summary(
+        summary, details = await self._generate_compaction_summary_and_details(
             plan.messages_to_summarize,
             custom_instructions=instructions,
         )
         compaction = await self._append_compaction(
             summary,
             replace_entry_ids=plan.replace_entry_ids,
+            details=details,
         )
         return f"Compacted {len(compaction.replaces_entry_ids)} context entries."
 
@@ -2237,6 +2353,7 @@ class CodingSession:
     async def _refresh_persisted_state(self, *, leaf_id: str | None) -> None:
         entries = await self._read_session_entries()
         self._state = SessionState.from_entries(entries, leaf_id=leaf_id)
+        self._sync_remote_replay_from_state()
         if self._config.session_id is not None and self._config.session_manager is not None:
             self._config.session_manager.touch_session(
                 self._config.session_id,
@@ -2313,8 +2430,14 @@ class CodingSession:
             plan = self._recent_preserving_compaction_plan()
             if plan is None:
                 return False
-            summary = await self._generate_compaction_summary(plan.messages_to_summarize)
-            await self._append_compaction(summary, replace_entry_ids=plan.replace_entry_ids)
+            summary, details = await self._generate_compaction_summary_and_details(
+                plan.messages_to_summarize
+            )
+            await self._append_compaction(
+                summary,
+                replace_entry_ids=plan.replace_entry_ids,
+                details=details,
+            )
             return True
         except Exception as exc:  # noqa: BLE001 - the original overflow remains visible
             self._last_diagnostic_log_path = self._diagnostic_logger.log_exception(
@@ -2418,8 +2541,14 @@ class CodingSession:
         plan = self._recent_preserving_compaction_plan()
         if plan is None:
             return False
-        summary = await self._generate_compaction_summary(plan.messages_to_summarize)
-        await self._append_compaction(summary, replace_entry_ids=plan.replace_entry_ids)
+        summary, details = await self._generate_compaction_summary_and_details(
+            plan.messages_to_summarize
+        )
+        await self._append_compaction(
+            summary,
+            replace_entry_ids=plan.replace_entry_ids,
+            details=details,
+        )
         return True
 
     async def _generate_compaction_summary(
@@ -2454,6 +2583,148 @@ class CodingSession:
         if not summary:
             raise RuntimeError("Compaction summarization returned an empty summary")
         return summary
+
+    async def _generate_compaction_summary_and_details(
+        self,
+        messages: tuple[AgentMessage, ...],
+        *,
+        custom_instructions: str | None = None,
+    ) -> tuple[str, dict[str, JSONValue] | None]:
+        """Produce the portable summary and, in parallel, a best-effort remote artifact.
+
+        The text summary stays authoritative: it is always produced and its
+        failure still propagates. The remote compaction attempt is advisory -
+        it never raises into the compaction flow and simply yields ``None`` on
+        any failure or when the active provider is not eligible.
+        """
+        summary_task = asyncio.create_task(
+            self._generate_compaction_summary(messages, custom_instructions=custom_instructions)
+        )
+        details_task = asyncio.create_task(self._maybe_remote_compact(messages))
+        summary_result, details = await asyncio.gather(
+            summary_task, details_task, return_exceptions=True
+        )
+        if isinstance(summary_result, BaseException):
+            raise summary_result
+        if isinstance(details, BaseException):
+            # Defensive: _maybe_remote_compact never raises, so this is unreachable.
+            details = None
+        return summary_result, details
+
+    async def _remote_compaction_params_or_none(self) -> RemoteCompactionParams | None:
+        """Resolve remote-compaction eligibility, honoring the injected test seam."""
+        if self._remote_compaction_params_source is not None:
+            return await self._remote_compaction_params_source()
+        return await default_remote_compaction_params(
+            self._runtime_provider_config,
+            self.model,
+            self._credential_store,
+        )
+
+    async def _maybe_remote_compact(
+        self,
+        messages: tuple[AgentMessage, ...],
+    ) -> dict[str, JSONValue] | None:
+        """Attempt Codex Responses server-side compaction for the current model.
+
+        Returns the sidecar ``details`` payload, or ``None`` when the provider
+        is not the ``openai-codex`` subscription provider, credentials are
+        unavailable, or the remote call fails. Never raises: the portable text
+        summary is the required artifact and compaction must keep working
+        regardless of this best-effort attempt.
+        """
+        params = await self._remote_compaction_params_or_none()
+        if not remote_compaction_enabled_by_env():
+            # The kill switch is authoritative over every source of params,
+            # injected test seams included: a disabled feature stays silent.
+            self._remote_compaction_status = None
+            return None
+        if params is None:
+            self._remote_compaction_status = self._remote_compaction_skip_status()
+            return None
+        try:
+            input_items = messages_to_response_items(
+                messages,
+                supports_images=params.supports_images,
+            )
+            tools = responses_tools_payload(self.tools)
+            codex_headers = {
+                **params.headers,
+                **build_codex_compaction_headers(
+                    params.api_key,
+                    account_id=params.account_id,
+                    session_id=self.session_id,
+                ),
+            }
+            result = await self._remote_compaction_call(
+                base_url=params.base_url,
+                api_key=params.api_key,
+                headers=codex_headers,
+                model=params.model,
+                input_items=input_items,
+                instructions=self.system_prompt,
+                tools=tools,
+                session_id=self.session_id,
+            )
+        except Exception as exc:
+            # Best-effort only: any remote failure falls back to the summary,
+            # but the user must hear about it loudly and persistently.
+            self._remote_compaction_status = "Remote compaction failed; used text summary"
+            self._last_remote_compaction_error = f"{type(exc).__name__}: {exc}"
+            return None
+        self._remote_compaction_status = None
+        self._last_remote_compaction_error = None
+        return {
+            "provider": REMOTE_COMPACTION_PROVIDER,
+            "version": 2,
+            "model": params.model,
+            "replacement_history": result.output,
+            "usage": result.usage,
+        }
+
+    def _remote_compaction_skip_status(self) -> str | None:
+        """Return the persistent notice for a skipped attempt, if any.
+
+        Deliberate cases stay silent: the kill switch is off by design and
+        non-Codex providers fall back by design. Only an eligible Codex setup
+        that cannot run the remote call gets a loud persistent notice.
+        """
+        if not remote_compaction_enabled_by_env():
+            return None
+        if not isinstance(self._runtime_provider_config, OpenAICodexProviderConfig):
+            return None
+        return "Remote compaction skipped: OpenAI Codex credentials unavailable"
+
+    def _sync_remote_replay_from_state(self) -> None:
+        """Reconstruct the active replay items from the latest compatible compaction.
+
+        Scans the active-path compaction entries in order; the newest entry
+        whose remote artifact was produced for the current model wins. A model
+        change or a branch without a matching artifact clears the replay items.
+        The kill switch clears them too, so a disabled remote compaction stays
+        fully inert even when a persisted artifact exists.
+        """
+        replay: list[JSONValue] | None = None
+        if remote_compaction_enabled_by_env():
+            replay = self._latest_replay_history()
+        self._remote_replay_items = replay
+        self._harness.config.remote_input_items = replay
+
+    def _latest_replay_history(self) -> list[JSONValue] | None:
+        """Return the newest persisted replacement history for the active model."""
+        replay: list[JSONValue] | None = None
+        for entry in self._state.compaction_entries:
+            if entry.details is None:
+                continue
+            details = entry.details
+            if details.get("provider") != REMOTE_COMPACTION_PROVIDER:
+                continue
+            if details.get("model") != self.model:
+                continue
+            history = details.get("replacement_history")
+            if isinstance(history, list) and history:
+                replay = history
+        return replay
 
     async def _summarize_branch_messages(
         self,
@@ -2511,6 +2782,7 @@ class CodingSession:
         summary: str,
         *,
         replace_entry_ids: tuple[str, ...],
+        details: dict[str, JSONValue] | None = None,
     ) -> CompactionEntry:
         if not replace_entry_ids:
             raise ValueError("No active context messages to compact")
@@ -2519,6 +2791,7 @@ class CodingSession:
             parent_id=self._last_parent_id,
             summary=summary,
             replaces_entry_ids=list(replace_entry_ids),
+            details=details,
         )
         await self._append_session_entry(compaction)
         leaf = LeafEntry(parent_id=compaction.id, entry_id=compaction.id)
