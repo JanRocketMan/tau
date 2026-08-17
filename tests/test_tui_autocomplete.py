@@ -1,11 +1,19 @@
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
 from tau_coding.commands import create_default_command_registry
 from tau_coding.prompt_templates import PromptTemplate
 from tau_coding.skills import Skill
-from tau_coding.tui.autocomplete import CompletionOption, build_completion_state
+from tau_coding.tui.autocomplete import (
+    FILE_REFERENCE_WALK_BUDGET,
+    MAX_FILE_COMPLETIONS,
+    CompletionOption,
+    _file_walk_cache,
+    _iter_file_reference_paths,
+    build_completion_state,
+)
 from tau_coding.tui.widgets import render_completion_suggestions
 
 
@@ -644,3 +652,83 @@ def test_shell_path_completion_adds_trailing_slash_for_directories(tmp_path: Pat
     assert directory_state.selected is not None
     assert directory_state.selected.apply("!cat sr") == "!cat src/"
     assert [item.display for item in child_state.items] == ["src/main.py"]
+
+
+def test_file_reference_walk_is_bounded_by_budget(tmp_path: Path) -> None:
+    # Regression coverage for the big-repo hang: the @-reference walk must stop
+    # after FILE_REFERENCE_WALK_BUDGET entries instead of walking every file.
+    for index in range(40):
+        directory = tmp_path / f"dir{index:03d}"
+        directory.mkdir()
+        for file_index in range(100):
+            (directory / f"file{file_index:03d}.py").write_text("x\n", encoding="utf-8")
+
+    paths = tuple(_iter_file_reference_paths(tmp_path))
+    assert len(paths) <= FILE_REFERENCE_WALK_BUDGET
+
+    state = build_completion_state(
+        "read @",
+        command_registry=create_default_command_registry(),
+        skills=(),
+        prompt_templates=(),
+        cwd=tmp_path,
+    )
+    assert 0 < len(state.items) <= MAX_FILE_COMPLETIONS
+    # The bounded walk still returns usable shallow entries (the root dirs).
+    assert {item.display for item in state.items} >= {"@dir000/", "@dir001/"}
+
+
+def test_file_reference_walk_never_descends_into_symlinked_directories(
+    tmp_path: Path,
+) -> None:
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "deep.py").write_text("x\n", encoding="utf-8")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real_dir, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks unavailable")
+
+    paths = set(_iter_file_reference_paths(tmp_path))
+    # The symlink itself is a valid @ target, but its contents must not be
+    # walked through it (that is what multiplies work and feeds cycles).
+    assert paths == {("link", True), ("real", True), ("real/deep.py", False)}
+
+
+def test_file_reference_walk_is_cycle_safe(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "loop").symlink_to(tmp_path, target_is_directory=True)
+
+    paths = set(_iter_file_reference_paths(tmp_path))
+    assert ("loop", True) in paths
+    # A cycle must not expand the walk into repeated loop/loop/... entries.
+    assert not any(relative.startswith("loop/") for relative, _ in paths)
+    assert len(paths) <= 4  # app.py, loop, plus the two top-level dirs
+
+
+def test_file_reference_walk_cache_reuses_entries_for_cwd(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("x\n", encoding="utf-8")
+    registry = create_default_command_registry()
+
+    def completions() -> tuple[str, ...]:
+        state = build_completion_state(
+            "read @",
+            command_registry=registry,
+            skills=(),
+            prompt_templates=(),
+            cwd=tmp_path,
+        )
+        return tuple(item.display for item in state.items)
+
+    _file_walk_cache.clear()
+    assert completions() == ("@a.txt",)
+    assert tmp_path in _file_walk_cache
+
+    # A newly created file is only visible after the cache window expires
+    # (the cache exists so typing "@sr", "@src/" does not re-walk the tree
+    # on every keystroke); clearing it forces a fresh, correcting walk.
+    (tmp_path / "b.txt").write_text("x\n", encoding="utf-8")
+    assert completions() == ("@a.txt",)
+    _file_walk_cache.clear()
+    assert completions() == ("@a.txt", "@b.txt")

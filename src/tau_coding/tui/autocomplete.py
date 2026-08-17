@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,44 @@ IGNORED_FILE_COMPLETION_DIRS = frozenset(
     }
 )
 MAX_FILE_COMPLETIONS = 50
+
+# Bound the synchronous @-file-reference walk so a single keystroke cannot
+# block the Textual UI thread for seconds on a large workspace. The walk stops
+# after this many entries have been examined; combined with the 50-item early
+# exit in _file_reference_completions, one completion build stays cheap even
+# when the prefix matches nothing.
+FILE_REFERENCE_WALK_BUDGET = 2500
+
+# Reuse the most recent budgeted walk per cwd within this window. Typing
+# "@sr", "@src/", "@src/ap" fires a completion rebuild per keystroke; the
+# cache turns those into in-memory prefix filters instead of repeated
+# filesystem walks. Cost: newly created files can take up to this long to
+# appear in @ completions.
+FILE_REFERENCE_CACHE_TTL_SECONDS = 3.0
+
+# Bound the number of cached workspaces so long-lived processes (sessions that
+# switch between many cwds) do not grow the cache without limit.
+FILE_REFERENCE_CACHE_MAX_ENTRIES = 64
+
+
+@dataclass(frozen=True, slots=True)
+class _FileReferenceEntry:
+    """One cacheable @-completion target with precomputed display data."""
+
+    relative: str
+    relative_lower: str
+    is_dir: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _FileWalkCacheEntry:
+    """A cached, budget-bounded walk of one workspace root."""
+
+    entries: tuple[_FileReferenceEntry, ...]
+    walked_at: float
+
+
+_file_walk_cache: dict[Path, _FileWalkCacheEntry] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,12 +197,12 @@ def _file_reference_completions(*, text: str, cwd: Path) -> tuple[CompletionItem
         return ()
     start, end = token
     prefix = text[start + 1 : end]
+    prefix_lower = prefix.lower()
     suggestions: list[CompletionItem] = []
-    for path in _iter_file_reference_paths(cwd):
-        relative = path.relative_to(cwd).as_posix()
-        if prefix.lower() not in relative.lower():
+    for entry in _cached_file_references(cwd):
+        if prefix_lower not in entry.relative_lower:
             continue
-        display = f"@{relative}{'/' if path.is_dir() else ''}"
+        display = f"@{entry.relative}{'/' if entry.is_dir else ''}"
         suggestions.append(
             CompletionItem(
                 display=display,
@@ -178,6 +217,35 @@ def _file_reference_completions(*, text: str, cwd: Path) -> tuple[CompletionItem
     return tuple(suggestions)
 
 
+def _cached_file_references(cwd: Path) -> tuple[_FileReferenceEntry, ...]:
+    """Return @-completion targets for a cwd, walking at most once per window.
+
+    Builds the autocomplete state on every keystroke, so the filesystem walk
+    must be amortized: the first request for a cwd walks the tree (bounded by
+    FILE_REFERENCE_WALK_BUDGET), and requests within the TTL window reuse the
+    result as an in-memory prefix filter. Display data (relative path and
+    directory flag) is precomputed here so the per-keystroke filter loop only
+    does cheap string comparisons.
+    """
+    cached = _file_walk_cache.get(cwd)
+    if cached is not None:
+        if time.monotonic() - cached.walked_at < FILE_REFERENCE_CACHE_TTL_SECONDS:
+            return cached.entries
+        del _file_walk_cache[cwd]
+    entries = tuple(
+        _FileReferenceEntry(
+            relative=relative,
+            relative_lower=relative.lower(),
+            is_dir=is_dir,
+        )
+        for relative, is_dir in _iter_file_reference_paths(cwd)
+    )
+    if len(_file_walk_cache) >= FILE_REFERENCE_CACHE_MAX_ENTRIES:
+        _file_walk_cache.clear()
+    _file_walk_cache[cwd] = _FileWalkCacheEntry(entries=entries, walked_at=time.monotonic())
+    return entries
+
+
 def _active_file_reference_token(text: str) -> tuple[int, int] | None:
     cursor = len(text)
     token_start = max(text.rfind(" ", 0, cursor), text.rfind("\n", 0, cursor)) + 1
@@ -187,24 +255,46 @@ def _active_file_reference_token(text: str) -> tuple[int, int] | None:
     return at_index, cursor
 
 
-def _iter_file_reference_paths(cwd: Path) -> tuple[Path, ...]:
+def _iter_file_reference_paths(cwd: Path) -> Iterator[tuple[str, bool]]:
+    """Yield ``(relative_path, is_dir)`` pairs for @ completions.
+
+    The walk is bounded and cycle-safe: it stops after FILE_REFERENCE_WALK_BUDGET
+    entries, never descends into symlinked directories (a directory loop such as
+    ``link -> .`` would otherwise expand forever on platforms without a kernel
+    symlink cap, and monorepo-style symlink farms would re-walk the same tree
+    once per link), and is lazy so callers that only need a few suggestions (the
+    50-item cap in _file_reference_completions) stop it early instead of forcing
+    a full traversal. Relative paths are built incrementally while walking so no
+    per-entry ``Path.relative_to`` work is needed.
+    """
     if not cwd.exists() or not cwd.is_dir():
-        return ()
-    paths: list[Path] = []
-    stack = [cwd]
+        return
+    stack: list[tuple[Path, str]] = [(cwd, "")]
+    examined = 0
     while stack:
-        directory = stack.pop()
+        if examined >= FILE_REFERENCE_WALK_BUDGET:
+            return
+        directory, prefix = stack.pop()
         try:
             children = sorted(directory.iterdir(), key=lambda path: path.name.lower())
         except OSError:
             continue
         for child in children:
-            if _is_ignored_file_completion_path(child, cwd=cwd):
+            if examined >= FILE_REFERENCE_WALK_BUDGET:
+                return
+            examined += 1
+            relative = f"{prefix}/{child.name}" if prefix else child.name
+            if _is_ignored_file_completion_parts(relative.split("/")):
                 continue
-            paths.append(child)
-            if child.is_dir():
-                stack.append(child)
-    return tuple(paths)
+            is_dir = child.is_dir()
+            yield relative, is_dir
+            if is_dir and not child.is_symlink():
+                stack.append((child, relative))
+
+
+def _is_ignored_file_completion_parts(parts: Sequence[str]) -> bool:
+    """Return True when any path component is an ignored completion directory."""
+    return any(part in IGNORED_FILE_COMPLETION_DIRS for part in parts)
 
 
 def _is_ignored_file_completion_path(path: Path, *, cwd: Path) -> bool:
@@ -212,7 +302,7 @@ def _is_ignored_file_completion_path(path: Path, *, cwd: Path) -> bool:
         relative_parts = path.relative_to(cwd).parts
     except ValueError:
         return True
-    return any(part in IGNORED_FILE_COMPLETION_DIRS for part in relative_parts)
+    return _is_ignored_file_completion_parts(relative_parts)
 
 
 def _shell_path_completions(*, text: str, cwd: Path) -> tuple[CompletionItem, ...] | None:
