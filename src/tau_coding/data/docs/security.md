@@ -19,19 +19,21 @@ shell, network, tool, credential, provider, model, package-install,
 prompt-injection, or exfiltration sandbox. Use OS/container/VM isolation and
 restricted credentials/network when isolation is required.
 
-## Brave Search
+## Web search
 
-When `BRAVE_SEARCH_API_KEY` is set, Tau registers a `brave_search` tool that
-lets the model send search queries to Brave's Web Search API. Queries may
-contain text derived from your prompt or repository, and returned snippets
-enter the agent's context as untrusted external content that may carry
-prompt-injection attempts. The tool description and prompt guidelines tell the
-model never to search for secrets, credentials, or private source code.
+When a search-provider API key is set (`PARALLEL_SEARCH_API_KEY` by default,
+or `BRAVE_SEARCH_API_KEY` for migrated setups), Tau registers a `search` tool
+that lets the model send search queries to the configured provider's web-search
+API. Queries may contain text derived from your prompt or repository, and
+returned snippets enter the agent's context as untrusted external content that
+may carry prompt-injection attempts. The tool description and prompt guidelines
+tell the model never to search for secrets, credentials, or private source
+code.
 
 The API key is read from the process environment at startup. It is never a
 model-visible tool argument, never written to session history, and is redacted
-from tool error output. The optional `BRAVE_SEARCH_API_URL` override is process
-configuration intended for tests; remove it where strict egress control is
-required.
+from tool error output. The optional `PARALLEL_SEARCH_API_URL` and
+`BRAVE_SEARCH_API_URL` overrides are process configuration intended for tests;
+remove them where strict egress control is required.
 
 Published details: `website/content/guides/project-trust.md`.

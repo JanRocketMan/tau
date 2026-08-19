@@ -28,8 +28,8 @@ You pick a provider + model; you can switch either mid-session.
 **Tools** are the actions the agent can take in your project. Tau ships four:
 `read`, `write`, `edit`, and `bash`. The model decides when to call them; Tau
 executes them in your working directory and streams the results. An optional
-fifth tool, `brave_search`, searches the web when you configure a Brave Search
-API key.
+fifth tool, `search`, searches the web when you configure a web-search
+provider API key (Parallel Search by default).
 → [Tools reference]({{< relref "./reference/tools.md" >}})
 
 ## Sessions

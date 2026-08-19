@@ -31,7 +31,6 @@ from tau_agent.tools import (
     ToolUpdateCallback,
 )
 from tau_agent.types import JSONValue
-from tau_coding.brave_search import BraveSearchConfig, run_brave_search
 from tau_coding.image_processing import (
     DEFAULT_MAX_SOURCE_IMAGE_BYTES,
     ImageProcessingFailure,
@@ -40,6 +39,8 @@ from tau_coding.image_processing import (
     process_image,
     unsupported_image_reason,
 )
+from tau_coding.search import SearchConfig, SearchProvider, run_search
+from tau_coding.search.brave import BraveSearchConfig, BraveSearchProvider
 
 DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024
 DEFAULT_MAX_OUTPUT_LINES = 2_000
@@ -169,7 +170,7 @@ def create_coding_tools(
     cwd: str | Path | None = None,
     shell_command_prefix: str | None = None,
     image_support: ImageSupportState | None = None,
-    brave_search: BraveSearchConfig | None = None,
+    search: SearchConfig | None = None,
 ) -> list[AgentTool]:
     """Create the default coding-tool set for a local project.
 
@@ -179,9 +180,8 @@ def create_coding_tools(
     used. The tools share per-path write/edit locks within this process so
     concurrent mutations of the same file do not interleave. When configured,
     `shell_command_prefix` is prepended to every bash tool command. When
-    `brave_search` is set, the `brave_search` web-search tool is appended;
-    web search is disabled by default and only enabled with an explicit
-    `BraveSearchConfig`.
+    `search` is set, the `search` web-search tool is appended; web search is
+    disabled by default and only enabled with an explicit `SearchConfig`.
     """
     root = Path.cwd() if cwd is None else Path(cwd)
     tools = [
@@ -190,9 +190,26 @@ def create_coding_tools(
         create_edit_tool(cwd=root),
         create_bash_tool(cwd=root, shell_command_prefix=shell_command_prefix),
     ]
-    if brave_search is not None:
-        tools.append(create_brave_search_tool(brave_search))
+    if search is not None:
+        tools.append(create_search_tool(search))
     return tools
+
+
+def create_search_tool(
+    config: SearchConfig,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> AgentTool:
+    """Create the provider-agnostic web-search tool.
+
+    The tool sends the model's search query to the web-search provider selected
+    by `config` (Parallel Search by default, Brave as the migrator-friendly
+    alternative) and returns titles, URLs, descriptions, and optional extra
+    snippets. The API key comes from `config`, never from model-visible
+    arguments, and never appears in tool output. `transport` is injectable so
+    tests can use `httpx.MockTransport` instead of performing network access.
+    """
+    return _create_search_tool(config.provider, transport=transport)
 
 
 def create_brave_search_tool(
@@ -200,14 +217,35 @@ def create_brave_search_tool(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> AgentTool:
-    """Create the optional Brave Search web-search tool.
+    """Create a Brave-pinned web-search tool (legacy compatibility helper).
 
-    The tool sends the model's search query to the Brave Web Search endpoint
-    and returns titles, URLs, descriptions, and optional extra snippets. The
-    subscription key comes from `config`, never from model-visible arguments,
-    and never appears in tool output. `transport` is injectable so tests can
-    use `httpx.MockTransport` instead of performing network access.
+    New code should use `create_search_tool` with a `SearchConfig` so sessions
+    stay provider-agnostic. This helper preserves the pre-migration factory
+    signature and exposes the tool under its historical `brave_search` name.
     """
+    return _create_search_tool(
+        BraveSearchProvider(config),
+        transport=transport,
+        tool_name="brave_search",
+        label="Brave Search",
+    )
+
+
+def _create_search_tool(
+    provider: SearchProvider,
+    *,
+    transport: httpx.AsyncBaseTransport | None,
+    tool_name: str = "search",
+    label: str | None = None,
+) -> AgentTool:
+    """Build one search tool around a provider instance.
+
+    `tool_name` defaults to the provider-agnostic `search`; the legacy
+    `brave_search` name is only used by the backward-compatible
+    `create_brave_search_tool` helper.
+    """
+    display_name = provider.display_name
+    final_label = label or display_name
 
     async def execute(
         tool_call_id: str,
@@ -216,13 +254,13 @@ def create_brave_search_tool(
         on_update: ToolUpdateCallback | None = None,
     ) -> AgentToolResult:
         del tool_call_id, signal, on_update
-        return await run_brave_search(arguments, config=config, transport=transport)
+        return await run_search(provider, arguments, transport=transport)
 
     return AgentTool(
-        name="brave_search",
-        label="Brave Search",
+        name=tool_name,
+        label=final_label,
         description=(
-            "Search the public web using Brave Search. Use this for current information, "
+            f"Search the public web using {display_name}. Use this for current information, "
             "external documentation, error messages, libraries, products, standards, and "
             "facts not available in the local repository. Returns titles, URLs, "
             "descriptions, and optional additional snippets."
@@ -230,77 +268,16 @@ def create_brave_search_tool(
         parameters={
             "type": "object",
             "additionalProperties": False,
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 400,
-                    "description": "Web search query. Keep it focused and below 50 words.",
-                },
-                "count": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 20,
-                    "default": 10,
-                    "description": "Number of web results to request.",
-                },
-                "offset": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 9,
-                    "default": 0,
-                    "description": "Zero-based result-page offset for pagination.",
-                },
-                "country": {
-                    "type": "string",
-                    "minLength": 2,
-                    "maxLength": 2,
-                    "description": (
-                        "Optional two-letter result country code, for example US, GB, or DE."
-                    ),
-                },
-                "search_lang": {
-                    "type": "string",
-                    "description": (
-                        "Optional search-result language code, for example en, de, or fr."
-                    ),
-                },
-                "ui_lang": {
-                    "type": "string",
-                    "description": "Optional UI locale, for example en-US or de-DE.",
-                },
-                "safesearch": {
-                    "type": "string",
-                    "enum": ["off", "moderate", "strict"],
-                    "default": "moderate",
-                    "description": "Adult-content filtering level.",
-                },
-                "freshness": {
-                    "type": "string",
-                    "description": (
-                        "Optional date filter: pd, pw, pm, py, or YYYY-MM-DDtoYYYY-MM-DD."
-                    ),
-                },
-                "spellcheck": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": "Allow Brave to correct the search query.",
-                },
-                "extra_snippets": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": "Request additional excerpts for each result.",
-                },
-            },
+            "properties": dict(provider.describe_arguments()),
             "required": ["query"],
         },
         execute_fn=execute,
         prompt_snippet=(
-            "Search the web with Brave Search when the task requires external "
+            f"Search the web with {display_name} when the task requires external "
             "or current information."
         ),
         prompt_guidelines=(
-            "Use brave_search instead of guessing current facts.",
+            "Use search instead of guessing current facts.",
             "Prefer focused queries and inspect several independent results.",
             "Never include secrets, credentials, or private source code in search queries.",
             "Include source URLs in answers based on search results.",

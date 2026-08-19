@@ -173,7 +173,8 @@ no code changes required.
 
 - Interactive Textual TUI and non-interactive print mode.
 - Built-in coding tools: `read`, `write`, `edit`, and `bash`, plus optional
-  web search via `brave_search` when `BRAVE_SEARCH_API_KEY` is set.
+  web search via `search` when a search-provider API key is set (Parallel by
+  default).
 - Durable JSONL sessions under `~/.tau/sessions/` with resume and branching.
 - Slash commands for login, model selection, sessions, compaction, export, theme,
   and more.

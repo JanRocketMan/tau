@@ -84,6 +84,53 @@ class ProviderCatalogEntry:
     auth_methods: tuple[AuthMethod, ...] = ("api_key",)
 
 
+DEFAULT_SEARCH_PROVIDER = "parallel"
+"""Default web-search provider used when the catalog does not say otherwise."""
+
+
+@dataclass(frozen=True, slots=True)
+class SearchCatalogEntry:
+    """Catalog metadata for a web-search provider.
+
+    Mirrors the `[[search_providers]]` tables in `catalog.toml`. `modes` holds
+    the modes a provider exposes (for example Parallel's `turbo`, `fast`,
+    `basic`, `advanced`); `default_mode` is the mode used when the user does
+    not override it. Providers that have no modes (Brave) leave both empty.
+    """
+
+    name: str
+    display_name: str
+    api_key_env: str
+    endpoint: str
+    docs_url: str
+    modes: tuple[str, ...] = ()
+    default_mode: str | None = None
+    timeout_env: str | None = None
+
+
+# Defined before `BUILTIN_PROVIDER_CATALOG` so that a lazy import of
+# `catalog_loader` (which imports these names from this module) can resolve
+# them while this module is still being initialized.
+
+
+def _load_builtin_search_catalog() -> tuple[SearchCatalogEntry, ...]:
+    # Imported lazily: catalog_loader imports SearchCatalogEntry from this module.
+    from tau_coding.catalog_loader import builtin_search_catalog
+
+    return builtin_search_catalog()
+
+
+BUILTIN_SEARCH_CATALOG: tuple[SearchCatalogEntry, ...] = _load_builtin_search_catalog()
+
+
+def builtin_search_entry(name: str) -> SearchCatalogEntry | None:
+    """Return a built-in search-catalog entry by provider name."""
+    for entry in BUILTIN_SEARCH_CATALOG:
+        if entry.name == name:
+            return entry
+    return None
+
+
 def _load_builtin_catalog() -> tuple[ProviderCatalogEntry, ...]:
     # Imported lazily: catalog_loader imports ProviderCatalogEntry from this module.
     from tau_coding.catalog_loader import builtin_catalog

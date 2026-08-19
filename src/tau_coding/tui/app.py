@@ -64,7 +64,6 @@ from tau_agent.provider_events import (
 )
 from tau_agent.tools import AgentTool
 from tau_agent.types import JSONValue
-from tau_coding.brave_search import BraveSearchConfig
 from tau_coding.catalog_loader import save_user_catalog_entries
 from tau_coding.commands import (
     LOGIN_PROVIDER_ALIASES,
@@ -121,6 +120,7 @@ from tau_coding.provider_config import (
 )
 from tau_coding.provider_runtime import create_model_provider
 from tau_coding.resources import TauResourcePaths
+from tau_coding.search import SearchConfig
 from tau_coding.session import (
     TREE_RUNNING_MESSAGE,
     CodingSession,
@@ -5268,10 +5268,7 @@ class TauTuiApp(App[None]):
             self.state.clear()
             self.state.set_skills(self.session.skills)
             self._load_session_messages_from_session()
-            if (
-                isinstance(result, SessionTreeBranchResult)
-                and result.input_prefill is not None
-            ):
+            if isinstance(result, SessionTreeBranchResult) and result.input_prefill is not None:
                 prompt = self.query_one("#prompt", PromptInput)
                 prompt.value = result.input_prefill
                 prompt.move_cursor(_text_end_location(result.input_prefill))
@@ -6920,7 +6917,7 @@ async def run_tui_app(
                 auto_compact_token_threshold=auto_compact_token_threshold,
                 index_on_first_persist=index_on_first_persist,
                 shell_command_prefix=shell_settings.shell_command_prefix,
-                brave_search=BraveSearchConfig.from_env(),
+                search=SearchConfig.from_env(),
                 extension_paths=extension_paths,
                 extensions_enabled=extensions_enabled,
                 project_extensions_enabled=project_extensions_enabled,

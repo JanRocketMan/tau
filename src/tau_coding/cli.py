@@ -20,7 +20,6 @@ from tau_ai.env import (
     DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
 )
-from tau_coding.brave_search import BraveSearchConfig
 from tau_coding.catalog_loader import user_catalog_path
 from tau_coding.commands import format_reload_summary
 from tau_coding.credentials import FileCredentialStore
@@ -44,6 +43,7 @@ from tau_coding.provider_runtime import create_model_provider
 from tau_coding.release_notes import startup_release_notes_notice
 from tau_coding.rendering import PrintOutputMode, create_event_renderer
 from tau_coding.resources import TauResourcePaths
+from tau_coding.search import SearchConfig
 from tau_coding.session import (
     CodingSession,
     CodingSessionConfig,
@@ -861,7 +861,7 @@ async def run_print_mode(
             provider_settings=provider_settings,
             runtime_provider_config=runtime_provider_config,
             shell_command_prefix=shell_command_prefix,
-            brave_search=BraveSearchConfig.from_env(),
+            search=SearchConfig.from_env(),
             extension_paths=extension_paths,
             extensions_enabled=extensions_enabled,
             project_extensions_enabled=project_extensions_enabled,

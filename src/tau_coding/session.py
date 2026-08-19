@@ -51,7 +51,6 @@ from tau_ai.openai_remote_compaction import (
     responses_tools_payload,
 )
 from tau_coding.branch_summary import summarize_branch_messages_with_model
-from tau_coding.brave_search import BraveSearchConfig
 from tau_coding.catalog_loader import effective_provider_labels
 from tau_coding.commands import CommandRegistry, CommandResult, create_default_command_registry
 from tau_coding.context import discover_project_context_with_diagnostics
@@ -133,6 +132,7 @@ from tau_coding.resources import (
     resource_paths_with_cwd,
     resource_paths_with_project_trust,
 )
+from tau_coding.search import SearchConfig
 from tau_coding.session_export import (
     default_session_export_artifact_path,
     export_session_artifact,
@@ -326,12 +326,12 @@ class CodingSessionConfig:
     thinking_level: ThinkingLevel = DEFAULT_THINKING_LEVEL
     index_on_first_persist: bool = False
     shell_command_prefix: str | None = None
-    brave_search: BraveSearchConfig | None = None
-    """Optional Brave Search configuration.
+    search: SearchConfig | None = None
+    """Optional web-search configuration.
 
-    When set, the ``brave_search`` web-search tool is appended to the default
+    When set, the ``search`` web-search tool is appended to the default
     coding tools. ``None`` (the default) keeps web search disabled. Hosts
-    typically resolve this once at startup via ``BraveSearchConfig.from_env()``.
+    typically resolve this once at startup via ``SearchConfig.from_env()``.
     """
     skills_enabled: bool = True
     """Whether skill discovery is enabled for this session.
@@ -550,7 +550,7 @@ class CodingSession:
                 cwd=config.cwd,
                 shell_command_prefix=config.shell_command_prefix,
                 image_support=image_support,
-                brave_search=config.brave_search,
+                search=config.search,
             )
         )
         tools = extension_runtime.compose_tools(base_tools)
@@ -1653,7 +1653,7 @@ class CodingSession:
                 cwd=self._config.cwd,
                 shell_command_prefix=self._config.shell_command_prefix,
                 image_support=self._image_support,
-                brave_search=self._config.brave_search,
+                search=self._config.search,
             )
         )
         staged_tools = staged_runtime.compose_tools(base_tools)
@@ -1822,7 +1822,7 @@ class CodingSession:
                 auto_compact_enabled=self._auto_compact_enabled,
                 thinking_level=self._thinking_level,
                 shell_command_prefix=self._config.shell_command_prefix,
-                brave_search=self._config.brave_search,
+                search=self._config.search,
                 skills_enabled=self._config.skills_enabled,
                 extension_paths=self._config.extension_paths,
                 extensions_enabled=self._config.extensions_enabled,

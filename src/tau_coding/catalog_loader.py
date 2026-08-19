@@ -25,6 +25,7 @@ from pydantic import (
 from tau_agent.types import JSONValue
 from tau_coding.paths import TauPaths
 from tau_coding.provider_catalog import (
+    DEFAULT_SEARCH_PROVIDER,
     AuthMethod,
     ModelCatalogMetadata,
     ModelCostTier,
@@ -32,6 +33,7 @@ from tau_coding.provider_catalog import (
     ProviderApi,
     ProviderCatalogEntry,
     ProviderKind,
+    SearchCatalogEntry,
 )
 from tau_coding.thinking import ThinkingLevel, ThinkingParameter
 
@@ -105,12 +107,27 @@ class _CatalogProvider(BaseModel):
     auth_methods: tuple[AuthMethod, ...] = ("api_key",)
 
 
+class _CatalogSearchProvider(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: _NonEmptyString
+    display_name: _NonEmptyString
+    api_key_env: _NonEmptyString
+    endpoint: _NonEmptyString
+    docs_url: _NonEmptyString
+    modes: tuple[_NonEmptyString, ...] = ()
+    default_mode: _NonEmptyString | None = None
+    timeout_env: _NonEmptyString | None = None
+
+
 class _CatalogFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1]
     provider_labels: dict[_NonEmptyString, _NonEmptyString] = {}
     providers: tuple[_CatalogProvider, ...] = ()
+    default_search_provider: _NonEmptyString | None = None
+    search_providers: tuple[_CatalogSearchProvider, ...] = ()
 
 
 def builtin_catalog_resource_text() -> str:
@@ -124,6 +141,48 @@ def builtin_catalog() -> tuple[ProviderCatalogEntry, ...]:
     raw = _builtin_raw()
     filtered = _apply_model_tombstones(raw, base=raw)
     return _entries_from_raw(filtered, source="built-in catalog.toml")
+
+
+def builtin_search_catalog() -> tuple[SearchCatalogEntry, ...]:
+    """Return Tau's built-in search provider catalog from the packaged file."""
+    return _search_entries_from_raw(_builtin_raw(), source="built-in catalog.toml")
+
+
+def effective_search_catalog(
+    paths: TauPaths | None = None,
+) -> tuple[SearchCatalogEntry, ...]:
+    """Return the builtin search catalog with the user catalog overlaid."""
+    path = user_catalog_path(paths)
+    if not path.exists():
+        return builtin_search_catalog()
+    overlay_raw = _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
+    _validate_catalog_root(overlay_raw, source=str(path))
+    merged = _merge_raw_catalogs(_builtin_raw(), overlay_raw)
+    return _search_entries_from_raw(merged, source=str(path))
+
+
+def default_search_provider(paths: TauPaths | None = None) -> str:
+    """Return the configured default web-search provider name.
+
+    Reads the ``default_search_provider`` root key from the effective catalog
+    (builtin overlaid with the user catalog) and falls back to
+    `DEFAULT_SEARCH_PROVIDER` when it is absent.
+    """
+    raw = _effective_raw(paths)
+    name = raw.get("default_search_provider")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return DEFAULT_SEARCH_PROVIDER
+
+
+def _effective_raw(paths: TauPaths | None = None) -> dict[str, Any]:
+    """Return the merged builtin + user catalog as raw parsed TOML data."""
+    path = user_catalog_path(paths)
+    if not path.exists():
+        return _builtin_raw()
+    overlay_raw = _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
+    _validate_catalog_root(overlay_raw, source=str(path))
+    return _merge_raw_catalogs(_builtin_raw(), overlay_raw)
 
 
 def user_catalog_path(paths: TauPaths | None = None) -> Path:
@@ -197,6 +256,12 @@ def save_user_catalog_entries(
         "provider_labels": raw.get("provider_labels", {}),
         "providers": providers,
     }
+    default_search = raw.get("default_search_provider")
+    if isinstance(default_search, str) and default_search.strip():
+        updated["default_search_provider"] = default_search
+    search_providers = _raw_search_providers(raw)
+    if search_providers:
+        updated["search_providers"] = search_providers
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_text(path, _catalog_to_toml(updated))
     return path
@@ -215,7 +280,13 @@ def _parse_catalog_text(text: str, *, source: str) -> dict[str, Any]:
 
 
 def _validate_catalog_root(raw: dict[str, Any], *, source: str) -> None:
-    allowed = {"schema_version", "provider_labels", "providers"}
+    allowed = {
+        "schema_version",
+        "provider_labels",
+        "providers",
+        "default_search_provider",
+        "search_providers",
+    }
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise CatalogError(f"{source}: unknown catalog keys: {', '.join(unknown)}")
@@ -243,7 +314,8 @@ def _merge_raw_catalogs(base: dict[str, Any], overlay: dict[str, Any]) -> dict[s
         else:
             by_name[name] = provider
             order.append(name)
-    return {
+
+    merged: dict[str, Any] = {
         "schema_version": overlay.get("schema_version", base.get("schema_version")),
         "provider_labels": {
             **base.get("provider_labels", {}),
@@ -251,6 +323,29 @@ def _merge_raw_catalogs(base: dict[str, Any], overlay: dict[str, Any]) -> dict[s
         },
         "providers": [by_name[name] for name in order],
     }
+
+    base_search = _raw_search_providers(base)
+    overlay_search = _raw_search_providers(overlay)
+    search_by_name: dict[str, dict[str, Any]] = {}
+    search_order: list[str] = []
+    for entry in base_search:
+        name = _raw_provider_name(entry)
+        search_by_name[name] = entry
+        search_order.append(name)
+    for entry in overlay_search:
+        name = _raw_provider_name(entry)
+        if name in search_by_name:
+            search_by_name[name] = entry
+        else:
+            search_by_name[name] = entry
+            search_order.append(name)
+    if search_by_name:
+        merged["search_providers"] = [search_by_name[name] for name in search_order]
+
+    default_search = overlay.get("default_search_provider") or base.get("default_search_provider")
+    if isinstance(default_search, str) and default_search.strip():
+        merged["default_search_provider"] = default_search
+    return merged
 
 
 def _merge_raw_provider(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -338,6 +433,17 @@ def _raw_providers(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return providers
 
 
+def _raw_search_providers(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    entries = raw.get("search_providers", [])
+    if not entries:
+        return []
+    if not isinstance(entries, list) or not all(isinstance(item, dict) for item in entries):
+        raise CatalogError(
+            "catalog search_providers must be an array of tables ([[search_providers]])"
+        )
+    return entries
+
+
 def _raw_provider_name(provider: dict[str, Any]) -> str:
     name = provider.get("name")
     if not isinstance(name, str) or not name.strip():
@@ -361,6 +467,58 @@ def _entries_from_raw(raw: dict[str, Any], *, source: str) -> tuple[ProviderCata
         source=source,
     )
     return entries
+
+
+def _search_entries_from_raw(raw: dict[str, Any], *, source: str) -> tuple[SearchCatalogEntry, ...]:
+    """Build validated search provider entries from raw catalog data."""
+    try:
+        catalog = _CatalogFile.model_validate(raw)
+    except ValidationError as error:
+        raise CatalogError(f"{source}: {_format_validation_error(raw, error)}") from error
+
+    entries = tuple(
+        _search_entry_from_provider(provider, source=source)
+        for provider in catalog.search_providers
+    )
+    names = [entry.name for entry in entries]
+    if len(set(names)) != len(names):
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        raise CatalogError(f"{source}: duplicate search provider names: {', '.join(duplicates)}")
+    _validate_search_default(catalog.default_search_provider, names, source=source)
+    return entries
+
+
+def _validate_search_default(default: str | None, search_names: list[str], *, source: str) -> None:
+    """Reject a default search provider that has no matching catalog entry."""
+    if default is None:
+        return
+    if not search_names:
+        raise CatalogError(f"{source}: default_search_provider {default!r} has no search_providers")
+    if default not in search_names:
+        joined = ", ".join(search_names)
+        raise CatalogError(
+            f"{source}: default_search_provider {default!r} is not among search_providers: {joined}"
+        )
+
+
+def _search_entry_from_provider(
+    provider: _CatalogSearchProvider, *, source: str
+) -> SearchCatalogEntry:
+    prefix = f"{source}: search_providers.{provider.name}"
+    if provider.default_mode is not None and provider.default_mode not in provider.modes:
+        raise CatalogError(f"{prefix}.default_mode: {provider.default_mode!r} is not in modes")
+    if provider.default_mode is None and provider.modes:
+        raise CatalogError(f"{prefix}.default_mode: is required when modes is declared")
+    return SearchCatalogEntry(
+        name=provider.name,
+        display_name=provider.display_name,
+        api_key_env=provider.api_key_env,
+        endpoint=provider.endpoint,
+        docs_url=provider.docs_url,
+        modes=provider.modes,
+        default_mode=provider.default_mode,
+        timeout_env=provider.timeout_env,
+    )
 
 
 def _validate_provider_labels(
@@ -639,6 +797,10 @@ def _raw_model_metadata_from_entry(metadata: ModelCatalogMetadata) -> dict[str, 
 
 def _catalog_to_toml(raw: dict[str, Any]) -> str:
     lines = [f"schema_version = {raw.get('schema_version', CATALOG_SCHEMA_VERSION)}", ""]
+    default_search = raw.get("default_search_provider")
+    if isinstance(default_search, str) and default_search.strip():
+        lines.append(f"default_search_provider = {_toml_value(default_search)}")
+        lines.append("")
     provider_labels = raw.get("provider_labels")
     if isinstance(provider_labels, dict) and provider_labels:
         lines.append("[provider_labels]")
@@ -681,6 +843,22 @@ def _catalog_to_toml(raw: dict[str, Any]) -> str:
                 lines.append(f"[providers.model_metadata.{_toml_key(model)}]")
                 for key, value in metadata.items():
                     lines.append(f"{key} = {_toml_value(value)}")
+        lines.append("")
+
+    for provider in _raw_search_providers(raw):
+        lines.append("[[search_providers]]")
+        for key in (
+            "name",
+            "display_name",
+            "api_key_env",
+            "endpoint",
+            "docs_url",
+            "modes",
+            "default_mode",
+            "timeout_env",
+        ):
+            if key in provider and provider[key] is not None:
+                lines.append(f"{key} = {_toml_value(provider[key])}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

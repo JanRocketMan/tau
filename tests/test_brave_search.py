@@ -1,7 +1,9 @@
-"""Deterministic tests for the Brave Search tool.
+"""Deterministic tests for the Brave Search provider.
 
 All HTTP traffic runs through `httpx.MockTransport`; no test performs network
-access or consumes Brave quota.
+access or consumes Brave quota. These tests use the legacy
+`create_brave_search_tool` / `run_brave_search` entry points, which pin the
+Brave provider and keep the historical tool name.
 """
 
 from collections.abc import Callable
@@ -14,6 +16,7 @@ from tau_agent.tools import AgentTool
 from tau_agent.types import JSONValue
 from tau_coding import BraveSearchConfig, create_brave_search_tool, create_coding_tools
 from tau_coding.brave_search import BRAVE_SEARCH_ENDPOINT, run_brave_search
+from tau_coding.search import BraveSearchProvider, SearchConfig
 
 TEST_API_KEY = "test-secret"
 
@@ -25,7 +28,7 @@ def _config() -> BraveSearchConfig:
 
 
 def _tool_for(handler: Handler, requests: list[httpx.Request]) -> AgentTool:
-    """Build a `brave_search` tool backed by a recording mock transport."""
+    """Build a Brave-pinned tool backed by a recording mock transport."""
 
     def record(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -84,16 +87,19 @@ def test_from_env_rejects_invalid_timeout() -> None:
         )
 
 
-def test_create_coding_tools_omits_brave_search_by_default(tmp_path: Path) -> None:
+def test_create_coding_tools_omits_search_by_default(tmp_path: Path) -> None:
     tools = create_coding_tools(cwd=tmp_path)
 
     assert [tool.name for tool in tools] == ["read", "write", "edit", "bash"]
 
 
-def test_create_coding_tools_appends_brave_search_when_configured(tmp_path: Path) -> None:
-    tools = create_coding_tools(cwd=tmp_path, brave_search=_config())
+def test_create_coding_tools_appends_search_when_configured(tmp_path: Path) -> None:
+    tools = create_coding_tools(
+        cwd=tmp_path,
+        search=SearchConfig(provider=BraveSearchProvider(_config())),
+    )
 
-    assert [tool.name for tool in tools] == ["read", "write", "edit", "bash", "brave_search"]
+    assert [tool.name for tool in tools] == ["read", "write", "edit", "bash", "search"]
 
 
 def test_tool_schema_has_no_credential_arguments() -> None:
@@ -194,7 +200,7 @@ async def test_corrected_query_is_reported() -> None:
 
 
 @pytest.mark.anyio
-async def test_optional_arguments_are_forwarded() -> None:
+async def test_common_arguments_are_forwarded() -> None:
     requests: list[httpx.Request] = []
     tool = _tool_for(lambda request: _ok(request, []), requests)
 
@@ -203,25 +209,49 @@ async def test_optional_arguments_are_forwarded() -> None:
         {
             "query": "python releases",
             "country": "de",
-            "search_lang": "de",
-            "ui_lang": "de-DE",
-            "safesearch": "strict",
             "freshness": "2025-01-01to2025-01-31",
-            "spellcheck": False,
-            "extra_snippets": False,
-            "offset": 2,
+            "count": 7,
         },
     )
 
     params = requests[0].url.params
     assert params["country"] == "DE"
-    assert params["search_lang"] == "de"
-    assert params["ui_lang"] == "de-DE"
-    assert params["safesearch"] == "strict"
     assert params["freshness"] == "2025-01-01to2025-01-31"
-    assert params["spellcheck"] == "false"
-    assert params["extra_snippets"] == "false"
-    assert params["offset"] == "2"
+    assert params["count"] == "7"
+    assert params["safesearch"] == "moderate"
+    assert params["spellcheck"] == "true"
+    assert params["extra_snippets"] == "true"
+
+
+@pytest.mark.anyio
+async def test_provider_only_arguments_are_not_forwarded() -> None:
+    requests: list[httpx.Request] = []
+    tool = _tool_for(lambda request: _ok(request, []), requests)
+
+    # offset, search_lang, ui_lang were Brave-specific tool arguments. They are
+    # dropped from the neutral schema, and any user-supplied values for them
+    # must not leak into the request. safesearch/spellcheck/extra_snippets are
+    # no longer model-visible either; the Brave provider applies its own fixed
+    # defaults regardless of what was passed.
+    await tool.execute(
+        "call-1",
+        {
+            "query": "python releases",
+            "offset": 5,
+            "search_lang": "de",
+            "ui_lang": "de-DE",
+            "safesearch": "off",
+            "spellcheck": False,
+            "extra_snippets": False,
+        },
+    )
+
+    for name in ("offset", "search_lang", "ui_lang"):
+        assert name not in requests[0].url.params
+    params = requests[0].url.params
+    assert params["safesearch"] == "moderate"
+    assert params["spellcheck"] == "true"
+    assert params["extra_snippets"] == "true"
 
 
 @pytest.mark.anyio
@@ -232,12 +262,11 @@ async def test_optional_arguments_are_forwarded() -> None:
         ({"query": "x", "count": 21}, "count"),
         ({"query": "x", "count": True}, "count"),
         ({"query": "x", "count": "5"}, "count"),
-        ({"query": "x", "offset": 10}, "offset"),
         ({"query": ""}, "query"),
         ({"query": "   "}, "query"),
         ({"query": "x" * 401}, "400 characters"),
         ({"query": " ".join(["word"] * 51)}, "50 words"),
-        ({"query": "x", "safesearch": "everything"}, "safesearch"),
+        ({"query": "x", "country": "usa"}, "two-letter"),
         ({"query": "x", "freshness": "last-week"}, "freshness"),
     ],
 )

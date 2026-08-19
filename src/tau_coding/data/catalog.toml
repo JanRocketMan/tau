@@ -1,5 +1,9 @@
 schema_version = 1
 
+# Default web-search provider used by the optional `search` tool when the
+# TAU_SEARCH_PROVIDER environment variable is unset.
+default_search_provider = "parallel"
+
 [[providers]]
 name = "openai-codex"
 display_name = "OpenAI Codex subscription"
@@ -70,3 +74,26 @@ max_tokens = 384000
 cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
 thinking_default = "max"
 thinking_levels = ["high", "max"]
+
+# Web-search providers for the optional `search` tool. Select a provider by
+# setting TAU_SEARCH_PROVIDER; when unset, default_search_provider wins.
+# The API key env var listed for each provider is read from the process
+# environment at session startup.
+
+[[search_providers]]
+name = "parallel"
+display_name = "Parallel Search"
+api_key_env = "PARALLEL_SEARCH_API_KEY"
+endpoint = "https://api.parallel.ai/v1/search"
+docs_url = "https://docs.parallel.ai/api-reference/search/search"
+modes = ["turbo", "fast", "basic", "advanced"]
+default_mode = "fast"
+timeout_env = "PARALLEL_SEARCH_TIMEOUT_SECONDS"
+
+[[search_providers]]
+name = "brave"
+display_name = "Brave Search"
+api_key_env = "BRAVE_SEARCH_API_KEY"
+endpoint = "https://api.search.brave.com/res/v1/web/search"
+docs_url = "https://brave.com/search/api/"
+timeout_env = "BRAVE_SEARCH_TIMEOUT_SECONDS"

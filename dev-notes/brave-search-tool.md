@@ -1,5 +1,9 @@
 # Brave Search tool
 
+> Superseded: Tau's search tool is now provider-agnostic and defaults to the
+> Parallel Search API. See `dev-notes/search-provider.md` for the current
+> design; this note documents the original Brave-only phase.
+
 Tau now ships an optional fifth built-in tool, `brave_search`, that queries the
 Brave Web Search API. It gives the agent current, external information
 (documentation, error messages, releases) without coupling a third-party search

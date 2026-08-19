@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from tau_coding.brave_search import BraveSearchConfig
 from tau_coding.commands import (
     CommandRegistry,
     CommandResult,
@@ -101,6 +100,13 @@ from tau_coding.rendering import (
     create_event_renderer,
 )
 from tau_coding.resources import ResourceDiagnostic, ResourceError, TauResourcePaths
+from tau_coding.search import (
+    BraveSearchConfig,
+    ParallelSearchConfig,
+    SearchConfig,
+    SearchProvider,
+    run_search,
+)
 from tau_coding.session import (
     CodingSession,
     CodingSessionConfig,
@@ -164,6 +170,7 @@ from tau_coding.tools import (
     create_edit_tool_definition,
     create_read_tool,
     create_read_tool_definition,
+    create_search_tool,
     create_write_tool,
     create_write_tool_definition,
 )
@@ -200,6 +207,7 @@ __all__ = [
     "OAuthPrompt",
     "OAuthProvider",
     "OAuthRuntimeAuth",
+    "ParallelSearchConfig",
     "PrintOutputMode",
     "ProjectContextFile",
     "PromptTemplate",
@@ -225,6 +233,8 @@ __all__ = [
     "ThinkingLevel",
     "ThinkingParameter",
     "ReasoningEffort",
+    "SearchConfig",
+    "SearchProvider",
     "build_skill_index",
     "build_system_prompt",
     "builtin_provider_configs",
@@ -242,6 +252,7 @@ __all__ = [
     "create_event_renderer",
     "create_read_tool",
     "create_read_tool_definition",
+    "create_search_tool",
     "create_write_tool",
     "create_write_tool_definition",
     "credentials_path",
@@ -290,6 +301,7 @@ __all__ = [
     "provider_thinking_unavailable_reason",
     "normalize_thinking_levels",
     "reasoning_effort_for_level",
+    "run_search",
     "register_oauth_provider",
     "render_prompt_template",
     "reset_oauth_providers",

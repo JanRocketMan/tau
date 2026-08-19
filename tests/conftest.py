@@ -19,9 +19,15 @@ def isolate_external_service_configuration(monkeypatch: pytest.MonkeyPatch) -> N
     """Keep developer credentials from changing offline test behavior."""
 
     for variable in (
+        "TAU_SEARCH_PROVIDER",
         "BRAVE_SEARCH_API_KEY",
         "BRAVE_SEARCH_API_URL",
         "BRAVE_SEARCH_TIMEOUT_SECONDS",
+        "PARALLEL_SEARCH_API_KEY",
+        "PARALLEL_API_KEY",
+        "PARALLEL_SEARCH_API_URL",
+        "PARALLEL_SEARCH_TIMEOUT_SECONDS",
+        "PARALLEL_SEARCH_MODE",
     ):
         monkeypatch.delenv(variable, raising=False)
 

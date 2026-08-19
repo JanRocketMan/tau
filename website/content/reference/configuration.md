@@ -357,27 +357,42 @@ Then start a new session and try `! gst`. Notes:
 - Unrecognized fields are ignored for compatibility with newer Tau versions;
   recognized fields remain strictly validated.
 
-## Brave Search
+## Web search
 
-Tau can register an optional `brave_search` tool that queries the
-[Brave Search API](https://brave.com/search/api/). It is disabled by default
-and enabled only when a subscription key is present in the process environment:
+Tau can register an optional `search` tool backed by a configurable web-search
+provider. It is disabled by default and enabled only when the selected
+provider's API key is present in the process environment. The default provider
+is [Parallel Search](https://docs.parallel.ai/api-reference/search/search),
+running in Fast mode; [Brave Search](https://brave.com/search/api/) remains
+available as a migration alternative.
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `BRAVE_SEARCH_API_KEY` | yes | Brave Search API subscription key. |
-| `BRAVE_SEARCH_TIMEOUT_SECONDS` | no | Request timeout in seconds, > 0 (default `20`). |
-| `BRAVE_SEARCH_API_URL` | no | Endpoint override, intended for tests. |
+| `TAU_SEARCH_PROVIDER` | no | Provider name: `parallel` (default) or `brave`. |
+| `PARALLEL_SEARCH_API_KEY` | no | Parallel Search API key (enables the `search` tool). |
+| `PARALLEL_SEARCH_API_URL` | no | Parallel endpoint override, intended for tests. |
+| `PARALLEL_SEARCH_TIMEOUT_SECONDS` | no | Parallel request timeout, > 0 (default `20`). |
+| `PARALLEL_SEARCH_MODE` | no | Parallel search mode: `turbo`, `fast` (default), `basic`, `advanced`. |
+| `BRAVE_SEARCH_API_KEY` | no | Brave Search API subscription key. |
+| `BRAVE_SEARCH_TIMEOUT_SECONDS` | no | Brave request timeout, > 0 (default `20`). |
+| `BRAVE_SEARCH_API_URL` | no | Brave endpoint override, intended for tests. |
 
-Tau does **not** read `.env` files. Export the variable in your shell profile
-(`~/.zshrc`, `~/.bashrc`), set it inline (`BRAVE_SEARCH_API_KEY=... tau`), or
-use a tool like `direnv` that injects real environment variables. Restart Tau
-after changing it; new sessions pick up the value. A malformed
-`BRAVE_SEARCH_TIMEOUT_SECONDS` fails loudly at startup.
+`PARALLEL_API_KEY` (the name used in Parallel's own docs and SDKs) is accepted
+as a fallback for `PARALLEL_SEARCH_API_KEY`. For a smooth migration, when
+`TAU_SEARCH_PROVIDER` is unset and only a Brave key is configured, Tau falls
+back to the Brave provider so existing setups keep searching.
 
-The key is sent to Brave in the `X-Subscription-Token` header. It is never a
-model-visible tool argument, never written to session history, and is redacted
-from error output. Do not commit it to Git or put it in project files. See
+Tau does **not** read `.env` files. Export the variables in your shell profile
+(`~/.zshrc`, `~/.bashrc`), set them inline
+(`TAU_SEARCH_PROVIDER=parallel PARALLEL_SEARCH_API_KEY=... tau`), or use a tool
+like `direnv` that injects real environment variables. Restart Tau after
+changing them; new sessions pick up the values. A malformed timeout or an
+unknown provider/mode fails loudly at startup.
+
+The key is sent to the provider (in `x-api-key` for Parallel, in
+`X-Subscription-Token` for Brave). It is never a model-visible tool argument,
+never written to session history, and is redacted from error output. Do not
+commit it to Git or put it in project files. See
 [Built-in tools]({{< relref "./tools.md" >}}) for tool behavior.
 
 ## TUI settings

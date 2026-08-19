@@ -3255,9 +3255,7 @@ async def test_session_reload_reconstructs_remote_replay_for_matching_model(
 
     # The persisted sidecar artifact is replayed on the first request after
     # reload, without any live remote state.
-    assert provider.remote_input_items[0] == [
-        {"type": "compaction", "encrypted_content": "opaque"}
-    ]
+    assert provider.remote_input_items[0] == [{"type": "compaction", "encrypted_content": "opaque"}]
 
 
 @pytest.mark.anyio
