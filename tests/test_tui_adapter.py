@@ -243,6 +243,44 @@ def test_tui_adapter_records_retry_and_queue_status() -> None:
     assert state.queued_follow_up == ("after",)
 
 
+def test_tui_adapter_tracks_thinking_only_final_assistant_response() -> None:
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+
+    adapter.apply(AgentStartEvent())
+    adapter.apply(
+        MessageEndEvent(
+            message=AssistantMessage(content=[ThinkingContent(thinking="unfinished plan")])
+        )
+    )
+
+    assert state.last_response_was_thinking_only is True
+
+    adapter.apply(
+        MessageEndEvent(
+            message=AssistantMessage(
+                content=[
+                    ThinkingContent(thinking="use a tool"),
+                    ToolCall(id="call-1", name="read", arguments={"path": "README.md"}),
+                ]
+            )
+        )
+    )
+    assert state.last_response_was_thinking_only is False
+
+    adapter.apply(
+        MessageEndEvent(
+            message=AssistantMessage(
+                content=[
+                    ThinkingContent(thinking="final plan"),
+                    TextContent(text="Completed response"),
+                ]
+            )
+        )
+    )
+    assert state.last_response_was_thinking_only is False
+
+
 def test_tui_adapter_records_assistant_error_and_aborted_message() -> None:
     state = TuiState(running=True, assistant_buffer="partial")
     adapter = TuiEventAdapter(state)

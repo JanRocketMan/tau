@@ -7,12 +7,15 @@ import re
 import sys
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from typing import TextIO, cast
+from typing import Literal, TextIO, cast
 
 MAX_TERMINAL_TITLE_LENGTH = 120
 OSC_TERMINATOR = "\a"
 TAU_TITLE_MARK = "τ"
 RUNNING_TITLE_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+SUCCESS_TITLE_MARK = "✓"
+ERROR_TITLE_MARK = "✗"
+type TerminalTitleStatus = Literal["idle", "running", "success", "error"]
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
@@ -52,19 +55,23 @@ def sanitize_terminal_title(
 def build_terminal_title(
     session_title: str | None,
     *,
-    running: bool,
+    status: TerminalTitleStatus,
     frame: int = 0,
 ) -> str:
-    """Return Tau's terminal tab title for the current session/running state."""
+    """Return Tau's terminal tab title for the current session and run status."""
     title = sanitize_terminal_title(session_title)
     title = (
         TAU_TITLE_MARK
         if not title or title.lower() == "untitled session"
         else f"{TAU_TITLE_MARK} | {title}"
     )
-    if not running:
-        return title
-    return f"{RUNNING_TITLE_FRAMES[frame % len(RUNNING_TITLE_FRAMES)]} {title}"
+    if status == "running":
+        return f"{RUNNING_TITLE_FRAMES[frame % len(RUNNING_TITLE_FRAMES)]} {title}"
+    if status == "success":
+        return f"{SUCCESS_TITLE_MARK} {title}"
+    if status == "error":
+        return f"{ERROR_TITLE_MARK} {title}"
+    return title
 
 
 def osc_terminal_title_sequence(title: str) -> str:
@@ -102,11 +109,17 @@ class TerminalTitleController:
         self.enabled = False
         return False
 
-    def update(self, session_title: str | None, *, running: bool, frame: int = 0) -> None:
+    def update(
+        self,
+        session_title: str | None,
+        *,
+        status: TerminalTitleStatus,
+        frame: int = 0,
+    ) -> None:
         """Write the current Tau title if it differs from the last emitted title."""
         if not self.enabled:
             return
-        title = build_terminal_title(session_title, running=running, frame=frame)
+        title = build_terminal_title(session_title, status=status, frame=frame)
         if title == self._last_title:
             return
         if self._write(osc_terminal_title_sequence(title)):

@@ -69,6 +69,10 @@ class TuiState:
     last_run_elapsed: float | None = None
     # Whether the last turn was interrupted, shown as "interrupted after Xm Ys".
     last_run_interrupted: bool = False
+    # Whether the latest completed assistant message contained thinking but no
+    # visible response or tool call. A settled run in this state likely ended
+    # before the model produced its user-facing answer.
+    last_response_was_thinking_only: bool = False
     error: str | None = None
     show_tool_results: bool = False
     show_thinking: bool = True
@@ -295,6 +299,7 @@ class TuiState:
         self.agent_started_at = None
         self.last_run_elapsed = None
         self.last_run_interrupted = False
+        self.last_response_was_thinking_only = False
         self.error = None
 
     def start_agent_run(self) -> None:
@@ -302,6 +307,13 @@ class TuiState:
         self.agent_started_at = time.monotonic()
         self.last_run_elapsed = None
         self.last_run_interrupted = False
+        self.last_response_was_thinking_only = False
+
+    def record_assistant_completion(self, message: AssistantMessage) -> None:
+        """Record whether an assistant response stopped after thinking only."""
+        self.last_response_was_thinking_only = bool(
+            message.thinking_text.strip() and not message.text.strip() and not message.tool_calls
+        )
 
     def end_agent_run(self, *, interrupted: bool = False) -> float | None:
         """End the active agent turn and return its total elapsed seconds.

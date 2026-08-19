@@ -156,7 +156,7 @@ from tau_coding.tui.file_drop import normalize_dropped_paths
 from tau_coding.tui.project_trust import ProjectTrustScreen, prompt_project_trust
 from tau_coding.tui.state import TuiState, format_terminal_command_result_block
 from tau_coding.tui.terminal_notification import TerminalNotificationController
-from tau_coding.tui.terminal_title import TerminalTitleController
+from tau_coding.tui.terminal_title import TerminalTitleController, TerminalTitleStatus
 from tau_coding.tui.themes import (
     available_tui_theme_names,
     load_custom_tui_themes,
@@ -3527,11 +3527,23 @@ class TauTuiApp(App[None]):
         """Return whether the latest completed model run ended with an error."""
         return not self._is_working() and self.state.error is not None
 
+    def _terminal_title_status(self) -> TerminalTitleStatus:
+        """Return the semantic run status exposed through the terminal title."""
+        if self._is_working():
+            return "running"
+        if self._prompt_run_failed():
+            return "error"
+        if self.state.last_run_elapsed is not None and not self.state.last_run_interrupted:
+            if self.state.last_response_was_thinking_only:
+                return "error"
+            return "success"
+        return "idle"
+
     def _sync_terminal_title(self) -> None:
-        """Reflect the active session name and running state in the terminal tab title."""
+        """Reflect the active session name and run status in the terminal tab title."""
         self._terminal_title.update(
             getattr(self.session, "session_title", None),
-            running=self._is_working(),
+            status=self._terminal_title_status(),
             frame=self._activity_frame,
         )
 
@@ -4741,6 +4753,10 @@ class TauTuiApp(App[None]):
             self._clear_optimistic_user_messages(run_id=active_run_id)
             if active_run_id == self._prompt_run_id:
                 self._prompt_worker = None
+                # The worker itself keeps `_is_working()` true while it handles
+                # the settlement event. Refresh once after releasing it so the
+                # terminal title can publish the final success or error state.
+                self._refresh_chrome_if_mounted()
 
     async def _apply_streaming_transcript_event(self, event: CodingSessionEvent) -> None:
         """Apply an agent event to mounted transcript widgets without full redraws."""

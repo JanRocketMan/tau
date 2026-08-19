@@ -19,7 +19,10 @@ while the agent works it stays neutral, because the status bar above the prompt
 already reports `running`. A new prompt resets the previous failure state. In
 supported terminal emulators, Tau also updates the tab title. Named sessions show as
 `τ | <name>`, and active runs add an animated running indicator so you can see
-work continuing from another tab. When a run fully settles while Tau's terminal
+work continuing from another tab. A settled successful run gets a `✓` prefix.
+A terminal model error, or a run that settles after producing thinking but no
+visible answer or tool call, gets a `✗` prefix. An interrupted run returns to the
+neutral title. When a run fully settles while Tau's terminal
 surface is unfocused, Tau emits a desktop notification by default on supported
 terminals: OSC 9 for Ghostty, iTerm2, and MinTTY, and OSC 99 for Kitty. Unknown
 terminals are left untouched. Set `turn_notification` to `"bell"` to let the

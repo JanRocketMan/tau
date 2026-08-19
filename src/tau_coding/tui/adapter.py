@@ -80,6 +80,7 @@ class TuiEventAdapter:
                     details=message.details if isinstance(message.details, dict) else None,
                 )
             elif isinstance(message, AssistantMessage):
+                self.state.record_assistant_completion(message)
                 # Replace provisional delta rows with the final canonical
                 # message so persisted block boundaries and ordering win.
                 start = self._assistant_start_item_index

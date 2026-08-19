@@ -2225,6 +2225,8 @@ async def test_tui_run_status_bar_reports_interrupted_after_interrupt() -> None:
             await asyncio.sleep(3600)
 
     app = _tui_app(StuckSession())
+    titles: list[str] = []
+    app._terminal_title = TerminalTitleController(enabled=True, writer=titles.append)
 
     async with app.run_test(size=(120, 30)) as pilot:
         await app._submit_prompt("stream")
@@ -2238,6 +2240,7 @@ async def test_tui_run_status_bar_reports_interrupted_after_interrupt() -> None:
         assert app.state.last_run_interrupted is True
         assert app.state.agent_started_at is None
         assert app.state.running is False
+        assert titles[-1] == "\x1b]0;τ\x07"
 
 
 @pytest.mark.anyio
@@ -3194,9 +3197,71 @@ async def test_tui_app_updates_terminal_title_for_running_and_named_session() ->
 
         app.adapter.apply(AgentEndEvent())
         app._refresh()
-        assert writes[-1] == "\x1b]0;τ | ship notes\x07"
+        assert writes[-1] == "\x1b]0;✓ τ | ship notes\x07"
 
     assert writes[-1] == "\x1b]0;τ\x07"
+
+
+@pytest.mark.anyio
+async def test_tui_app_publishes_success_after_prompt_worker_settles() -> None:
+    session = FakeSession(events=[AgentStartEvent(), AgentEndEvent(), AgentSettledEvent()])
+    app = _tui_app(session)
+    writes: list[str] = []
+    app._terminal_title = TerminalTitleController(enabled=True, writer=writes.append)
+
+    async with app.run_test() as pilot:
+        await app._submit_prompt("finish work")
+        for _ in range(5):
+            await pilot.pause()
+            if app._prompt_worker is None:
+                break
+
+        assert app._prompt_worker is None
+        assert writes[-1] == "\x1b]0;✓ τ\x07"
+
+
+@pytest.mark.anyio
+async def test_tui_app_marks_settled_thinking_only_response_as_error_title() -> None:
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageEndEvent(message=_assistant([ThinkingContent(thinking="unfinished plan")])),
+            AgentEndEvent(),
+            AgentSettledEvent(),
+        ]
+    )
+    app = _tui_app(session)
+    writes: list[str] = []
+    app._terminal_title = TerminalTitleController(enabled=True, writer=writes.append)
+
+    async with app.run_test() as pilot:
+        await app._submit_prompt("finish work")
+        for _ in range(5):
+            await pilot.pause()
+            if app._prompt_worker is None:
+                break
+
+        assert app._prompt_worker is None
+        assert app.state.error is None
+        assert app.state.last_response_was_thinking_only is True
+        assert _render_plain(app.query_one("#run-status", RunStatusBar)).startswith("finished in")
+        assert writes[-1] == "\x1b]0;✗ τ\x07"
+
+        session.events = (
+            AgentStartEvent(),
+            MessageEndEvent(message=_assistant("Completed response")),
+            AgentEndEvent(),
+            AgentSettledEvent(),
+        )
+        await app._submit_prompt("retry")
+        for _ in range(5):
+            await pilot.pause()
+            if app._prompt_worker is None:
+                break
+
+        assert app._prompt_worker is None
+        assert app.state.last_response_was_thinking_only is False
+        assert writes[-1] == "\x1b]0;✓ τ\x07"
 
 
 @pytest.mark.anyio
@@ -3267,17 +3332,19 @@ async def test_tui_app_updates_terminal_title_after_auto_session_naming() -> Non
 
         await app._run_prompt("debug the login flow")
 
-        assert "\x1b]0;τ | Debug login\x07" in writes
+        assert "\x1b]0;✓ τ | Debug login\x07" in writes
         compact_info = app.query_one("#compact-session-info", Static)
         console = Console(record=True, width=80, file=StringIO())
         console.print(compact_info.content)
         assert "Debug login" in console.export_text()
-        assert writes[-1] == "\x1b]0;τ | Debug login\x07"
+        assert writes[-1] == "\x1b]0;✓ τ | Debug login\x07"
 
 
 @pytest.mark.anyio
 async def test_tui_app_clears_activity_status_on_error() -> None:
     app = _tui_app(FakeSession())
+    titles: list[str] = []
+    app._terminal_title = TerminalTitleController(enabled=True, writer=titles.append)
 
     async with app.run_test():
         prompt = app.query_one("#prompt", PromptInput)
@@ -3298,6 +3365,7 @@ async def test_tui_app_clears_activity_status_on_error() -> None:
         assert prompt.styles.border_right[0] == ""
         assert prompt.styles.border_bottom[0] == ""
         assert _render_plain(indicator) == "τ"
+        assert titles[-1] == "\x1b]0;✗ τ\x07"
 
 
 @pytest.mark.anyio

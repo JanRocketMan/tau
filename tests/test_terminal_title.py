@@ -22,14 +22,16 @@ class PipeStringIO(StringIO):
         return False
 
 
-def test_build_terminal_title_uses_session_name_and_running_frame() -> None:
-    assert build_terminal_title("build notes", running=False) == "τ | build notes"
-    assert build_terminal_title("build notes", running=True, frame=1) == "⠙ τ | build notes"
+def test_build_terminal_title_uses_session_name_and_run_status() -> None:
+    assert build_terminal_title("build notes", status="idle") == "τ | build notes"
+    assert build_terminal_title("build notes", status="running", frame=1) == "⠙ τ | build notes"
+    assert build_terminal_title("build notes", status="success") == "✓ τ | build notes"
+    assert build_terminal_title("build notes", status="error") == "✗ τ | build notes"
 
 
 def test_build_terminal_title_falls_back_for_unnamed_sessions() -> None:
-    assert build_terminal_title(None, running=False) == "τ"
-    assert build_terminal_title(" Untitled session ", running=True) == "⠋ τ"
+    assert build_terminal_title(None, status="idle") == "τ"
+    assert build_terminal_title(" Untitled session ", status="running") == "⠋ τ"
 
 
 def test_sanitize_terminal_title_strips_control_bytes_and_caps_length() -> None:
@@ -66,14 +68,18 @@ def test_terminal_title_controller_writes_running_idle_and_restore_titles() -> N
     writes: list[str] = []
     controller = TerminalTitleController(enabled=True, writer=writes.append)
 
-    controller.update("build notes", running=False)
-    controller.update("build notes", running=False)
-    controller.update("build notes", running=True, frame=2)
+    controller.update("build notes", status="idle")
+    controller.update("build notes", status="idle")
+    controller.update("build notes", status="running", frame=2)
+    controller.update("build notes", status="success")
+    controller.update("build notes", status="error")
     controller.restore()
 
     assert writes == [
         "\x1b]0;τ | build notes\x07",
         "\x1b]0;⠹ τ | build notes\x07",
+        "\x1b]0;✓ τ | build notes\x07",
+        "\x1b]0;✗ τ | build notes\x07",
         "\x1b]0;τ\x07",
     ]
 
@@ -82,7 +88,7 @@ def test_terminal_title_controller_noops_when_disabled() -> None:
     writes: list[str] = []
     controller = TerminalTitleController(enabled=False, writer=writes.append)
 
-    controller.update("build notes", running=True)
+    controller.update("build notes", status="running")
     controller.restore()
 
     assert writes == []
@@ -98,8 +104,8 @@ def test_terminal_title_controller_disables_itself_after_write_failure() -> None
 
     controller = TerminalTitleController(enabled=True, writer=failing_writer)
 
-    controller.update("build notes", running=False)
-    controller.update("other", running=False)
+    controller.update("build notes", status="idle")
+    controller.update("other", status="idle")
 
     assert calls == 1
     assert controller.enabled is False
