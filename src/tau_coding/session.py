@@ -2668,7 +2668,14 @@ class CodingSession:
             )
         except Exception as exc:
             # Best-effort only: any remote failure falls back to the summary,
-            # but the user must hear about it loudly and persistently.
+            # but the user must hear about it loudly and persistently. Keep the
+            # exception in Tau's diagnostics because the session entry records
+            # only the successful portable summary.
+            self._last_diagnostic_log_path = self._diagnostic_logger.log_exception(
+                context=self._diagnostic_context(),
+                phase="remote_compaction",
+                exc=exc,
+            )
             self._remote_compaction_status = "Remote compaction failed; used text summary"
             self._last_remote_compaction_error = f"{type(exc).__name__}: {exc}"
             return None

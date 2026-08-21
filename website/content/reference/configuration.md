@@ -41,6 +41,12 @@ Tau does not check for updates or contact a package index at startup. The local
 `~/.tau/cache/release-notes-state.json` file records which bundled release notes
 the TUI has shown.
 
+`~/.tau/logs/agent-calls.jsonl` contains structured failure diagnostics. Each
+JSONL entry identifies the provider, model, session, working directory, and
+failure phase. Remote OpenAI Codex compaction failures use phase
+`remote_compaction`. Tau does not write provider request content or credentials
+to this log
+
 ## System prompt files
 
 Tau can replace or extend its generated system prompt with Tau-native Markdown

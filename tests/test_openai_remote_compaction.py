@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import UUID
 
 import httpx
 import pytest
@@ -95,7 +96,8 @@ def test_build_codex_compaction_headers_shape() -> None:
     assert headers["originator"] == "tau"
     assert headers["OpenAI-Beta"] == "responses=experimental"
     assert headers["x-codex-beta-features"] == "remote_compaction_v2"
-    assert headers["x-codex-installation-id"]
+    installation_id = headers["x-codex-installation-id"]
+    assert str(UUID(installation_id)) == installation_id
     assert headers["x-codex-window-id"] == "session-9:0"
     assert headers["session_id"] == "session-9"
 
@@ -199,6 +201,12 @@ def test_parse_compaction_sse_rejects_error_event() -> None:
         parse_compaction_sse(text)
 
 
+def test_parse_compaction_sse_reads_nested_error_message() -> None:
+    text = _sse(json.dumps({"type": "error", "error": {"message": "nested boom"}}))
+    with pytest.raises(RemoteCompactionError, match="nested boom"):
+        parse_compaction_sse(text)
+
+
 def test_parse_compaction_sse_rejects_failed_response() -> None:
     text = _sse(
         json.dumps(
@@ -281,6 +289,8 @@ def test_call_remote_compaction_v2_round_trip_with_mock_transport() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["headers"] = dict(request.headers)
+        captured["content_type_headers"] = request.headers.get_list("content-type")
+        captured["accept_headers"] = request.headers.get_list("accept")
         captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
@@ -298,6 +308,8 @@ def test_call_remote_compaction_v2_round_trip_with_mock_transport() -> None:
                 "chatgpt-account-id": "acct_123",
                 "originator": "tau",
                 "OpenAI-Beta": "responses=experimental",
+                "content-type": "application/json",
+                "accept": "text/event-stream",
                 "x-codex-beta-features": "remote_compaction_v2",
             },
             model="gpt-5.4",
@@ -310,6 +322,8 @@ def test_call_remote_compaction_v2_round_trip_with_mock_transport() -> None:
         assert captured["headers"]["authorization"] == "Bearer jwt-access-token"
         assert captured["headers"]["x-codex-beta-features"] == "remote_compaction_v2"
         assert captured["headers"]["chatgpt-account-id"] == "acct_123"
+        assert captured["content_type_headers"] == ["application/json"]
+        assert captured["accept_headers"] == ["text/event-stream"]
         body = captured["body"]
         assert body["input"][-1] == {"type": COMPACTION_TRIGGER_TYPE}
         assert result.usage is not None
@@ -323,12 +337,12 @@ def test_call_remote_compaction_v2_round_trip_with_mock_transport() -> None:
     anyio.run(run)
 
 
-def test_call_remote_compaction_v2_raises_on_http_error() -> None:
+def test_call_remote_compaction_v2_reports_safe_json_http_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, text="unauthorized")
+        return httpx.Response(400, json={"detail": "Unsupported content type"})
 
     async def run() -> None:
-        with pytest.raises(RemoteCompactionError, match="401"):
+        with pytest.raises(RemoteCompactionError, match="400.*Unsupported content type"):
             await call_remote_compaction_v2(
                 base_url="https://chatgpt.com/backend-api",
                 api_key="jwt-access-token",
@@ -339,6 +353,29 @@ def test_call_remote_compaction_v2_raises_on_http_error() -> None:
                 tools=[],
                 transport=httpx.MockTransport(handler),
             )
+
+    import anyio
+
+    anyio.run(run)
+
+
+def test_call_remote_compaction_v2_raises_on_http_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="sensitive response body")
+
+    async def run() -> None:
+        with pytest.raises(RemoteCompactionError, match="401") as raised:
+            await call_remote_compaction_v2(
+                base_url="https://chatgpt.com/backend-api",
+                api_key="jwt-access-token",
+                headers={},
+                model="gpt-5.4",
+                input_items=[],
+                instructions="You are Tau.",
+                tools=[],
+                transport=httpx.MockTransport(handler),
+            )
+        assert "sensitive response body" not in str(raised.value)
 
     import anyio
 

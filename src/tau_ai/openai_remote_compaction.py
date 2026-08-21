@@ -47,7 +47,7 @@ REMOTE_COMPACTION_VERSION = 2
 COMPACTION_TRIGGER_TYPE = "compaction_trigger"
 COMPACTION_ITEM_TYPE = "compaction"
 REMOTE_COMPACTION_V2_FEATURE = "remote_compaction_v2"
-CODE_X_INSTALLATION_ID: str = uuid4().hex
+CODE_X_INSTALLATION_ID: str = str(uuid4())
 """Stable per-process Codex installation id (parity with the reference extension)."""
 
 
@@ -221,6 +221,41 @@ def normalize_usage_snapshot(value: object) -> dict[str, JSONValue] | None:
     }
 
 
+def _remote_error_message(event: dict[str, Any], *, fallback: str) -> str:
+    """Extract a safe scalar error message from a Responses event."""
+    sources: list[dict[str, Any]] = [event]
+    nested_error = event.get("error")
+    if isinstance(nested_error, dict):
+        sources.append(nested_error)
+    response = event.get("response")
+    if isinstance(response, dict):
+        response_error = response.get("error")
+        if isinstance(response_error, dict):
+            sources.append(response_error)
+
+    for key in ("message", "detail", "code"):
+        for source in sources:
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
+    for source in sources[1:]:
+        value = source.get("type")
+        if isinstance(value, str) and value:
+            return value
+    return fallback
+
+
+def _http_error_message(response: httpx.Response) -> str:
+    """Return safe HTTP failure details without copying a response body to logs."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.reason_phrase
+    if not isinstance(payload, dict):
+        return response.reason_phrase
+    return _remote_error_message(payload, fallback=response.reason_phrase)
+
+
 def parse_compaction_sse(text: str) -> tuple[JSONValue, dict[str, JSONValue] | None]:
     """Parse a compaction SSE body and return the opaque item plus usage.
 
@@ -235,15 +270,11 @@ def parse_compaction_sse(text: str) -> tuple[JSONValue, dict[str, JSONValue] | N
     for event in _parse_sse_blocks(text):
         event_type = event.get("type")
         if event_type == "error":
-            message = event.get("message") or "unknown error"
+            message = _remote_error_message(event, fallback="unknown error")
             raise RemoteCompactionError(f"OpenAI remote compaction failed: {message}")
         if event_type == "response.failed":
-            response = event.get("response")
-            error = response.get("error") if isinstance(response, dict) else None
-            message = error.get("message") if isinstance(error, dict) else None
-            raise RemoteCompactionError(
-                f"OpenAI remote compaction failed: {message or 'response failed'}"
-            )
+            message = _remote_error_message(event, fallback="response failed")
+            raise RemoteCompactionError(f"OpenAI remote compaction failed: {message}")
         if event_type == "response.output_item.done":
             item = event.get("item")
             if isinstance(item, dict) and item.get("type") == COMPACTION_ITEM_TYPE:
@@ -392,12 +423,13 @@ async def call_remote_compaction_v2(
         tools=tools,
         session_id=session_id,
     )
-    request_headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-        **(headers or {}),
-    }
+    # HTTP field names are case-insensitive, but a plain dict is not. Normalize
+    # first so caller-provided ``content-type`` and these defaults cannot become
+    # duplicate wire headers. The Codex backend rejects duplicate content types.
+    request_headers = {name.lower(): value for name, value in (headers or {}).items()}
+    request_headers["authorization"] = f"Bearer {api_key}"
+    request_headers.setdefault("content-type", "application/json")
+    request_headers.setdefault("accept", "text/event-stream")
     client_kwargs: dict[str, Any] = {
         "timeout": streaming_timeout(
             timeout_seconds=timeout_seconds,
@@ -411,7 +443,7 @@ async def call_remote_compaction_v2(
         if response.status_code >= 400:
             raise RemoteCompactionError(
                 f"OpenAI remote compaction failed ({response.status_code}): "
-                f"{response.text[:500] or response.reason_phrase}"
+                f"{_http_error_message(response)}"
             )
         text = response.text
     compaction_item, usage = parse_compaction_sse(text)

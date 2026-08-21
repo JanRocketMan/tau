@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from typing import cast
@@ -3184,8 +3185,15 @@ async def test_session_compact_falls_back_to_summary_when_remote_fails(
             supports_images=False,
         )
 
-    session = await CodingSession.load(
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    config = replace(
         _config(tmp_path, provider, storage),
+        provider_name="openai-codex",
+        session_id="session-1",
+        resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+    )
+    session = await CodingSession.load(
+        config,
         remote_compaction_call=failing_remote_compact,
         remote_compaction_params=fake_params,
     )
@@ -3201,6 +3209,16 @@ async def test_session_compact_falls_back_to_summary_when_remote_fails(
     # survives and no sidecar artifact is recorded.
     assert compactions[0].summary == "Generated session summary"
     assert compactions[0].details is None
+
+    log_path = tau_paths.agent_calls_log_path
+    assert session.last_diagnostic_log_path == log_path
+    diagnostic = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert diagnostic["phase"] == "remote_compaction"
+    assert diagnostic["provider_name"] == "openai-codex"
+    assert diagnostic["model"] == "fake"
+    assert diagnostic["session_id"] == "session-1"
+    assert diagnostic["exception"]["type"] == "RuntimeError"
+    assert diagnostic["exception"]["message"] == "remote compaction exploded"
 
     await _collect_session_events(session.prompt("Continue."))
     assert provider.remote_input_items[-1] == []
@@ -3324,8 +3342,13 @@ async def test_session_remote_compaction_status_loud_on_failure_and_cleared_on_s
             supports_images=False,
         )
 
-    session = await CodingSession.load(
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    config = replace(
         _config(tmp_path, provider, storage),
+        resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+    )
+    session = await CodingSession.load(
+        config,
         remote_compaction_call=failing_remote_compact,
         remote_compaction_params=fake_params,
     )

@@ -80,6 +80,21 @@ the original context. During successful overflow recovery, the TUI shows compact
 and retry progress instead of presenting the intermediate provider rejection as a
 terminal error. The error becomes visible only if recovery cannot complete.
 
+### OpenAI Codex remote compaction
+
+For the `openai-codex` subscription provider, Tau also requests a provider-native
+compaction artifact in parallel with the portable text summary. Tau stores a
+successful artifact in the compaction entry and reuses it only with the same model
+
+If the remote request fails, Tau continues with the text summary and shows
+`Remote compaction failed; used text summary`. The failure is recorded with phase
+`remote_compaction` in `~/.tau/logs/agent-calls.jsonl`. The diagnostic includes
+the provider, model, session, exception message, and traceback, but not request
+content or credentials
+
+Set `TAU_REMOTE_COMPACTION_ENABLED=0` to disable the remote request and its replay
+while keeping normal text-summary compaction
+
 ## Manual compaction
 
 Compact on demand any time:

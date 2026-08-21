@@ -98,3 +98,22 @@ kill switch on) but could not, and clears on the next successful attempt. The
 TUI renders it persistently in the run-status bar above the prompt, bold red,
 alongside the running/finished timer. Deliberate skips stay silent: kill
 switch off, or a provider that is not the codex subscription provider.
+
+A failed remote attempt writes a structured exception with phase
+`remote_compaction` to `~/.tau/logs/agent-calls.jsonl`. The session journal
+cannot explain the failure because a fallback compaction entry contains only
+the successful portable summary
+
+## Duplicate content-type repair
+
+The first live Tau sessions failed every remote request with HTTP 400 and
+`Unsupported content type`. The request builder combined title-case defaults
+with lower-case Codex headers in a plain Python dictionary. HTTP field names
+are case-insensitive, but dictionary keys are not, so `httpx` sent two
+content-type fields. The Codex backend rejected the request before compaction
+started
+
+`call_remote_compaction_v2` now normalizes all outgoing header names before it
+applies defaults. Tests inspect the actual `httpx.Request` and require exactly
+one content-type and one accept field. Installation IDs also use the canonical
+hyphenated UUID form used by the reference extension
