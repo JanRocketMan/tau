@@ -35,7 +35,7 @@ In addition, the circular dependency between `tau_agent` and `tau_ai` that PR #3
 - **Tool-call content is not inserted at the correct content index.** In `stream.py:112-120`, the start event is yielded before appending the block, so the `partial` snapshot in `ToolCallStartEvent` does not yet contain the tool call.
 - **Retry events are swallowed.** `canonicalize_provider_stream()` drops `ProviderRetryEvent` (`stream.py:71-73`). Pi exposes retry at the coding-session layer, but Tau currently loses it entirely between `tau_ai` and `tau_coding`.
 - **`AssistantErrorEvent` vs `AssistantDoneEvent` ambiguity.** `AssistantDoneEvent` carries `reason: StopReason`, and `AssistantErrorEvent` also carries `reason`. Consumers must check both event type and message `stop_reason` to detect failure.
-- **Provider final message reconstruction is fragile.** `stream.py:145-158` rebuilds `final.content` by taking streamed thinking, final text, and final tools. This can reorder content relative to the provider's actual interleaving.
+- **Provider final message reconstruction is fragile.** `stream.py` rebuilds `final.content` from the streamed blocks. It now coalesces same-kind thinking/text fragments per text/thinking region (tool calls are structural barriers) so gateway-interleaved fragments stay contiguous while kind order is preserved; see `_coalesce_same_kind_blocks`.
 
 ---
 

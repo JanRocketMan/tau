@@ -103,6 +103,56 @@ def test_tui_adapter_builds_assistant_item_from_nested_stream_events() -> None:
     assert [(item.role, item.text) for item in state.items] == [("assistant", "Hello")]
 
 
+def test_tui_adapter_keeps_interleaved_thinking_fragments_in_one_row() -> None:
+    """Interleaved gateway deltas must not split one reasoning stream across
+    multiple provisional thinking rows; the final message then replaces them
+    with the canonical coalesced blocks."""
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+    partial = AssistantMessage()
+
+    adapter.apply(MessageStartEvent(message=partial))
+    adapter.apply(
+        _update(ThinkingDeltaEvent(content_index=0, delta="Let me expl", partial=partial))
+    )
+    adapter.apply(
+        _update(TextDeltaEvent(content_index=1, delta="Let me confirm the st", partial=partial))
+    )
+    adapter.apply(
+        _update(ThinkingDeltaEvent(content_index=2, delta="ore the reference.", partial=partial))
+    )
+    adapter.apply(
+        _update(
+            TextDeltaEvent(
+                content_index=3, delta="ate and then study the reference.", partial=partial
+            )
+        )
+    )
+
+    assert state.assistant_buffer == "Let me confirm the state and then study the reference."
+    assert [(item.role, item.text) for item in state.items] == [
+        ("thinking", "Let me explore the reference.")
+    ]
+
+    adapter.apply(
+        MessageEndEvent(
+            message=AssistantMessage(
+                content=[
+                    ThinkingContent(
+                        thinking="Let me explore the reference.",
+                        thinking_signature="reasoning_content",
+                    ),
+                    TextContent(text="Let me confirm the state and then study the reference."),
+                ]
+            )
+        )
+    )
+    assert [(item.role, item.text) for item in state.items] == [
+        ("thinking", "Let me explore the reference."),
+        ("assistant", "Let me confirm the state and then study the reference."),
+    ]
+
+
 def test_tui_adapter_builds_user_and_compact_skill_items() -> None:
     skill = Skill(
         name="review",

@@ -411,6 +411,72 @@ async def test_openai_compatible_provider_streams_reasoning_content() -> None:
 
 
 @pytest.mark.anyio
+async def test_openai_compatible_provider_coalesces_interleaved_thought_text() -> None:
+    """
+    Gateways can interleave one continuous reasoning stream with the answer
+    stream across chunks. Live deltas keep the streamed order, but the final
+    message must coalesce adjacent same-kind fragments so thinking and answer
+    each stay contiguous.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"choices":[{"delta":{"reasoning_content":"Let me expl"}}]}\n\n'
+                'data: {"choices":[{"delta":{"content":"Let me confirm the st"}}]}\n\n'
+                'data: {"choices":[{"delta":{"reasoning_content":"ore the reference."}}]}\n\n'
+                'data: {"choices":[{"delta":{"content":"ate and then study the reference.",'
+                '"finish_reason":"stop"}}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(api_key="test-key", base_url="https://example.test/v1"),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    # Live deltas reflect the streamed order, one block switch per kind change.
+    assert [event.type for event in events] == [
+        "start",
+        "thinking_start",
+        "thinking_delta",
+        "thinking_end",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "thinking_start",
+        "thinking_delta",
+        "thinking_end",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "done",
+    ]
+    # The final message coalesces the fragments into contiguous blocks.
+    assert isinstance(events[-1], AssistantDoneEvent)
+    blocks = events[-1].message.content
+    assert [block.type for block in blocks] == ["thinking", "text"]
+    assert events[-1].message.thinking_text == "Let me explore the reference."
+    assert events[-1].message.text == "Let me confirm the state and then study the reference."
+    thinking = blocks[0]
+    assert isinstance(thinking, ThinkingContent)
+    assert thinking.thinking_signature == "reasoning_content"
+
+
+@pytest.mark.anyio
 async def test_openai_compatible_provider_replays_persisted_reasoning() -> None:
     requests: list[httpx.Request] = []
 

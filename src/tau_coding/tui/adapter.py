@@ -67,7 +67,9 @@ class TuiEventAdapter:
             if isinstance(nested, TextDeltaEvent):
                 self.state.assistant_buffer += nested.delta
             elif isinstance(nested, ThinkingDeltaEvent):
-                self.state.add_thinking_delta(nested.delta)
+                self.state.add_thinking_delta(
+                    nested.delta, since_index=self._assistant_start_item_index
+                )
             return
         if isinstance(event, MessageEndEvent):
             message = event.message

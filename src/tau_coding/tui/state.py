@@ -222,11 +222,23 @@ class TuiState:
         if skill_invocation.additional_instructions:
             self.add_item("user", skill_invocation.additional_instructions)
 
-    def add_thinking_delta(self, delta: str) -> None:
-        """Append a thinking/reasoning fragment to the current thinking block."""
-        if self.items and self.items[-1].role == "thinking":
-            self.items[-1].text += delta
-            return
+    def add_thinking_delta(self, delta: str, since_index: int | None = None) -> None:
+        """Append a reasoning fragment to the current turn's thinking row.
+
+        Gateways can interleave fragments of one continuous reasoning stream
+        with answer fragments. With ``since_index`` (the transcript position at
+        the start of the assistant turn), any thinking row inside that window
+        is extended so the fragments stay in one row; the completed message
+        later replaces these provisional rows with the canonical block layout.
+        Without a window, only the last item is a candidate.
+        """
+        candidates = self.items if since_index is None else self.items[since_index:]
+        if since_index is None:
+            candidates = candidates[-1:]
+        for item in reversed(candidates):
+            if item.role == "thinking":
+                item.text += delta
+                return
         self.add_item("thinking", delta)
 
     def find_tool_item(self, tool_call_id: str) -> ChatItem | None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from tau_agent.messages import (
+    AssistantContent,
     AssistantMessage,
     AssistantMessageDiagnostic,
     TextContent,
@@ -76,6 +77,56 @@ def _copy_replay_metadata(target: AssistantMessage, source: AssistantMessage) ->
     target_text = [block for block in target.content if isinstance(block, TextContent)]
     for target_text_block, source_text_block in zip(target_text, source_text, strict=False):
         target_text_block.text_signature = source_text_block.text_signature
+
+
+def _coalesce_same_kind_blocks(blocks: list[AssistantContent]) -> list[AssistantContent]:
+    """Merge same-kind text/thinking fragments into one contiguous block.
+
+    Chat-completions gateways can interleave fragments of one continuous
+    reasoning or answer stream across chunks (thinking, text, thinking, text).
+    Each kind switch would otherwise become its own content block even though
+    the fragments belong to a single thinking or answer stream. Fragments are
+    therefore grouped by kind inside each text/thinking region, emitted in
+    first-occurrence order, so thinking and answer each stay contiguous.
+    Tool calls are structural barriers: fragments on either side of a tool
+    call come from genuinely different phases and stay separate. Boundaries
+    attested by the provider itself (for example OpenAI reasoning summary
+    parts) arrive as whitespace or text inside the deltas and survive the
+    merge unchanged.
+    """
+    merged: list[AssistantContent] = []
+    pending_thinking: list[str] = []
+    pending_text: list[str] = []
+    first_kind: str | None = None
+
+    def flush() -> None:
+        nonlocal first_kind
+        if first_kind == "thinking":
+            if pending_thinking:
+                merged.append(ThinkingContent(thinking="".join(pending_thinking)))
+            if pending_text:
+                merged.append(TextContent(text="".join(pending_text)))
+        elif first_kind == "text":
+            if pending_text:
+                merged.append(TextContent(text="".join(pending_text)))
+            if pending_thinking:
+                merged.append(ThinkingContent(thinking="".join(pending_thinking)))
+        pending_thinking.clear()
+        pending_text.clear()
+        first_kind = None
+
+    for block in blocks:
+        if isinstance(block, ThinkingContent):
+            pending_thinking.append(block.thinking)
+            first_kind = first_kind or "thinking"
+        elif isinstance(block, TextContent):
+            pending_text.append(block.text)
+            first_kind = first_kind or "text"
+        else:
+            flush()
+            merged.append(block.model_copy(deep=True))
+    flush()
+    return merged
 
 
 def _finish_reason(value: str | None, *, has_tools: bool) -> DoneReason:
@@ -175,16 +226,18 @@ async def canonicalize_provider_stream(
             active_index = None
             active_kind = None
 
-            # Preserve the exact streamed content order. The parser's final
-            # message remains authoritative only for response metadata/usage.
+            # Keep the streamed kind order while grouping same-kind
+            # fragments into contiguous thinking and answer blocks.
+            # The parser's final message remains authoritative for response
+            # metadata/usage only.
             final = event.message.model_copy(deep=True)
             final.api = api
             final.provider = provider
             final.model = model
             final.response_provider = event.message.response_provider or partial.response_provider
-            final.content = [block.model_copy(deep=True) for block in partial.content]
+            final.content = _coalesce_same_kind_blocks(partial.content)
             if not final.content and event.message.content:
-                final.content = [block.model_copy(deep=True) for block in event.message.content]
+                final.content = _coalesce_same_kind_blocks(event.message.content)
             _copy_replay_metadata(final, event.message)
             reason = _finish_reason(
                 event.finish_reason,
