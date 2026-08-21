@@ -112,9 +112,6 @@ from tau_coding.provider_config import (
     provider_thinking_unavailable_reason,
     resolve_provider_selection,
     resolve_startup_thinking_level,
-    save_default_provider_model,
-    save_provider_thinking_level,
-    toggle_saved_scoped_model,
     validate_huggingface_inference_provider,
     validate_provider_model,
 )
@@ -690,21 +687,6 @@ class CodingSession:
         )
 
     @property
-    def scoped_model_choices(self) -> tuple[ModelChoice, ...]:
-        """Return configured quick-switch model choices that are currently usable."""
-        if self._provider_settings is None:
-            return ()
-        available = set(self.available_model_choices)
-        return tuple(
-            choice
-            for choice in (
-                ModelChoice(provider_name=item.provider, model=item.model)
-                for item in self._provider_settings.scoped_models
-            )
-            if choice in available
-        )
-
-    @property
     def tools(self) -> tuple[AgentTool, ...]:
         """Return the tools available to the agent."""
         return tuple(self._harness.config.tools)
@@ -1171,11 +1153,13 @@ class CodingSession:
         *,
         reset_thinking: bool = False,
     ) -> None:
-        """Switch the active model for future turns and make it the default.
+        """Switch the active model for future turns.
 
-        ``reset_thinking`` resolves the active thinking level to the target
-        model's default (its remembered preference, then its catalog default)
-        instead of carrying the current level over when it is still valid.
+        The switch applies to the current session only; the catalog file stays
+        the single source of truth for defaults. ``reset_thinking`` resolves
+        the active thinking level to the target model's default (its remembered
+        preference, then its catalog default) instead of carrying the current
+        level over when it is still valid.
         """
         provider = self._active_provider_config()
         if provider is not None:
@@ -1185,7 +1169,6 @@ class CodingSession:
         self._sync_thinking_level_to_active_model(reset_to_default=reset_thinking)
         self._refresh_runtime_provider()
         self._sync_image_support()
-        self._persist_default_model_choice()
         if self._config.session_id is not None and self._config.session_manager is not None:
             self._config.session_manager.touch_session(
                 self._config.session_id,
@@ -1225,7 +1208,7 @@ class CodingSession:
         *,
         reset_thinking: bool = False,
     ) -> None:
-        """Switch provider/model as one operation."""
+        """Switch provider/model as one operation (current session only)."""
         if choice.provider_name == self.provider_name:
             self.set_model(choice.model, reset_thinking=reset_thinking)
             return
@@ -1235,67 +1218,67 @@ class CodingSession:
             reset_thinking=reset_thinking,
         )
 
-    def is_scoped_model(self, choice: ModelChoice) -> bool:
-        """Return whether a provider/model pair is in the scoped model list."""
-        return choice in self.scoped_model_choices
+    def model_cycle_choices(self) -> tuple[ModelChoice, ...]:
+        """Return the Ctrl+P cycle order across all usable providers/models.
 
-    def toggle_scoped_model(self, choice: ModelChoice) -> tuple[ModelChoice, ...]:
-        """Add or remove a model from the persisted scoped model list."""
+        The default provider leads with its default model, followed by its
+        remaining models, then every other provider's default model followed by
+        its remaining models.
+        """
         if self._provider_settings is None:
-            raise ProviderConfigError("Provider settings are not available for this session")
-        available = set(self.available_model_choices)
-        if choice not in available:
-            raise ProviderConfigError(
-                f"Model is not available: {choice.provider_name}:{choice.model}"
-            )
-
-        self._provider_settings = toggle_saved_scoped_model(
-            provider_name=choice.provider_name,
-            model=choice.model,
-            paths=self._resource_paths.paths,
-            fallback_settings=self._provider_settings,
+            return ()
+        default_provider = self._provider_settings.default_provider
+        providers = sorted(
+            self._usable_provider_configs(),
+            key=lambda provider: provider.name != default_provider,
         )
-        self._sync_thinking_level_to_active_model()
-        return self.scoped_model_choices
+        choices: list[ModelChoice] = []
+        for provider in providers:
+            models = list(provider.models)
+            if provider.default_model in models:
+                models = [
+                    provider.default_model,
+                    *(model for model in models if model != provider.default_model),
+                ]
+            choices.extend(
+                ModelChoice(provider_name=provider.name, model=model) for model in models
+            )
+        return tuple(choices)
 
-    def cycle_scoped_model(self, *, reverse: bool = False) -> ModelChoice:
-        """Switch to the next configured scoped model.
+    def cycle_model(self, *, reverse: bool = False) -> ModelChoice:
+        """Switch to the next model across all usable providers.
 
         The active thinking level resets to the target model's default (its
         remembered preference, then its catalog default) so quick-cycling with
         Ctrl+P always lands on the level that model starts with, instead of
         carrying the previous model's level over when it happens to be valid.
+        Cycling keeps the catalog defaults untouched.
         """
-        scoped = self.scoped_model_choices
-        if not scoped:
-            raise ProviderConfigError("No scoped models configured.")
+        cycle_choices = self.model_cycle_choices()
+        if not cycle_choices:
+            raise ProviderConfigError("No providers with usable credentials are configured.")
         current = ModelChoice(provider_name=self.provider_name, model=self.model)
         try:
-            current_index = scoped.index(current)
+            current_index = cycle_choices.index(current)
         except ValueError:
             current_index = -1 if not reverse else 0
         delta = -1 if reverse else 1
-        choice = scoped[(current_index + delta) % len(scoped)]
+        choice = cycle_choices[(current_index + delta) % len(cycle_choices)]
         self.set_model_choice(choice, reset_thinking=True)
         return choice
 
-    def set_provider(self, provider_name: str, *, persist_default: bool = True) -> None:
+    def set_provider(self, provider_name: str) -> None:
         """Switch the active provider and reset to that provider's default model."""
         if self._provider_settings is None:
             raise ProviderConfigError("Provider settings are not available for this session")
         provider_config = self._provider_settings.get_provider(provider_name)
-        self._set_provider_model(
-            provider_name,
-            provider_config.default_model,
-            persist_default=persist_default,
-        )
+        self._set_provider_model(provider_name, provider_config.default_model)
 
     def _set_provider_model(
         self,
         provider_name: str,
         model: str,
         *,
-        persist_default: bool = True,
         reset_thinking: bool = False,
     ) -> None:
         """Switch active provider/model without constructing an intermediate provider."""
@@ -1340,8 +1323,6 @@ class CodingSession:
         self._harness.config.model = model
         self._thinking_level = thinking_level
         self._sync_image_support()
-        if persist_default:
-            self._persist_default_model_choice()
         if self._config.session_id is not None and self._config.session_manager is not None:
             self._config.session_manager.touch_session(
                 self._config.session_id,
@@ -1352,7 +1333,7 @@ class CodingSession:
             )
 
     async def set_thinking_level(self, level: str) -> str:
-        """Persist and activate a thinking mode for future turns."""
+        """Activate a thinking mode for future turns (current session only)."""
         normalized = normalize_thinking_level(level)
         available = self.available_thinking_levels
         if not available:
@@ -1383,12 +1364,11 @@ class CodingSession:
         await self._append_session_entry(leaf)
         self._last_parent_id = entry.id
 
-        self._persist_thinking_level_choice()
         await self._refresh_persisted_state(leaf_id=entry.id)
         return f"Thinking mode: {normalized}"
 
     async def cycle_thinking_level(self) -> str:
-        """Cycle to the next supported thinking mode and persist it.
+        """Cycle to the next supported thinking mode.
 
         Models that expose zero or one thinking levels have nothing to cycle:
         the current level is returned unchanged so cycling is a silent no-op
@@ -1433,37 +1413,6 @@ class CodingSession:
         self._image_support.supported = (
             provider_model_supports_images(provider, self.model) if provider is not None else None
         )
-
-    def _persist_default_model_choice(self) -> None:
-        if self._provider_settings is None:
-            return
-        self._provider_settings = save_default_provider_model(
-            provider_name=self.provider_name,
-            model=self.model,
-            paths=self._resource_paths.paths,
-            fallback_settings=self._provider_settings,
-        )
-        self._sync_thinking_level_to_active_model()
-
-    def _persist_thinking_level_choice(self) -> None:
-        if self._provider_settings is None:
-            return
-        provider = self._active_provider_config()
-        if provider is None or self._thinking_level not in provider_thinking_levels(
-            provider,
-            model=self.model,
-        ):
-            return
-        try:
-            self._provider_settings = save_provider_thinking_level(
-                provider_name=self.provider_name,
-                model=self.model,
-                thinking_level=self._thinking_level,
-                paths=self._resource_paths.paths,
-                fallback_settings=self._provider_settings,
-            )
-        except ProviderConfigError:
-            return
 
     def _observe_response_headers(self, headers: Mapping[str, str]) -> None:
         if self.provider_name != "huggingface" or self._inference_provider is not None:

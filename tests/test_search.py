@@ -16,11 +16,10 @@ from tau_agent.tools import AgentTool
 from tau_coding import create_coding_tools, create_search_tool
 from tau_coding.catalog_loader import (
     CatalogError,
+    builtin_catalog_resource_text,
     builtin_search_catalog,
     default_search_provider,
     effective_search_catalog,
-    save_user_catalog_entries,
-    user_catalog_path,
 )
 from tau_coding.paths import TauPaths
 from tau_coding.search import (
@@ -501,81 +500,37 @@ def test_default_search_provider_from_builtin_catalog() -> None:
     assert default_search_provider() == "parallel"
 
 
-def test_effective_search_catalog_overlays_user_entries(tmp_path: Path) -> None:
-    paths = TauPaths(home=tmp_path)
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    user_catalog_path(paths).write_text(
-        "schema_version = 1\n"
-        'default_search_provider = "brave"\n'
-        "[[search_providers]]\n"
-        'name = "brave"\n'
-        'display_name = "Brave Web Search"\n'
-        'api_key_env = "BRAVE_SEARCH_API_KEY"\n'
-        'endpoint = "https://api.search.brave.com/res/v1/web/search"\n'
-        'docs_url = "https://brave.com/search/api/"\n',
+def test_effective_search_catalog_reads_single_catalog_file(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.toml"
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    catalog.write_text(
+        builtin_catalog_resource_text().replace(
+            'default_search_provider = "parallel"', 'default_search_provider = "brave"'
+        ),
         encoding="utf-8",
     )
+    paths = TauPaths(home=tmp_path / ".tau", catalog_path=catalog)
 
     entries = {entry.name: entry for entry in effective_search_catalog(paths)}
 
     assert default_search_provider(paths) == "brave"
-    assert entries["brave"].display_name == "Brave Web Search"
-    assert "parallel" in entries  # builtin entries remain unless overridden
+    assert entries["brave"].display_name == "Brave Search"
+    assert "parallel" in entries  # packaged entries remain
 
 
-def test_user_catalog_rejects_unknown_default_search_provider(tmp_path: Path) -> None:
-    paths = TauPaths(home=tmp_path)
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    user_catalog_path(paths).write_text(
-        'schema_version = 1\ndefault_search_provider = "missing"\n',
+def test_catalog_rejects_unknown_default_search_provider(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.toml"
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    catalog.write_text(
+        builtin_catalog_resource_text().replace(
+            'default_search_provider = "parallel"', 'default_search_provider = "missing"'
+        ),
         encoding="utf-8",
     )
+    paths = TauPaths(home=tmp_path / ".tau", catalog_path=catalog)
 
     with pytest.raises(CatalogError, match="default_search_provider"):
         effective_search_catalog(paths)
-
-
-def test_save_user_catalog_entries_preserves_search_providers(tmp_path: Path) -> None:
-    paths = TauPaths(home=tmp_path)
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    user_catalog_path(paths).write_text(
-        "schema_version = 1\n"
-        'default_search_provider = "parallel"\n'
-        "[[search_providers]]\n"
-        'name = "custom"\n'
-        'display_name = "Custom Search"\n'
-        'api_key_env = "CUSTOM_SEARCH_API_KEY"\n'
-        'endpoint = "https://search.example.test/v1"\n'
-        'docs_url = "https://search.example.test/docs"\n'
-        'modes = ["fast"]\n'
-        'default_mode = "fast"\n',
-        encoding="utf-8",
-    )
-
-    from tau_coding.provider_catalog import ProviderCatalogEntry
-
-    save_user_catalog_entries(
-        [
-            ProviderCatalogEntry(
-                name="custom-llm",
-                display_name="Custom LLM",
-                kind="openai-compatible",
-                base_url="https://llm.example.test/v1",
-                api_key_env="CUSTOM_LLM_KEY",
-                credential_name="custom-llm",
-                models=("m1",),
-                default_model="m1",
-                docs_url="https://llm.example.test/docs",
-            )
-        ],
-        paths=paths,
-    )
-
-    saved = user_catalog_path(paths).read_text(encoding="utf-8")
-    assert "[[search_providers]]" in saved
-    assert 'name = "custom"' in saved
-    assert 'default_search_provider = "parallel"' in saved
-    assert "[[providers]]" in saved
 
 
 def test_brave_search_config_compat_import() -> None:

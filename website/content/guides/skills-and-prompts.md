@@ -13,7 +13,7 @@ Skills are loaded from these locations, in increasing precedence (later
 overrides earlier on name clashes):
 
 ```text
-~/.tau/skills/
+~/.claude/skills/
 ~/.agents/skills/
 <cwd>/.tau/skills/
 <cwd>/.agents/skills/
@@ -40,7 +40,7 @@ The directory name is the skill name. Optional frontmatter gives it a
 description:
 
 ```text
-~/.tau/skills/security-review/SKILL.md
+~/.claude/skills/security-review/SKILL.md
 ```
 
 ```md
@@ -56,11 +56,11 @@ inside the same directory.
 
 {{% tip %}}
 Bare `.md` files at the root of a skills directory (for example
-`~/.tau/skills/review.md`) are **not** loaded as skills. Tau will surface a
+`~/.claude/skills/review.md`) are **not** loaded as skills. Tau will surface a
 diagnostic telling you to move them into their own directory:
 
 ```bash
-cd ~/.tau/skills
+cd ~/.claude/skills
 mkdir review && mv review.md review/SKILL.md
 ```
 

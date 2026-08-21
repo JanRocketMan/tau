@@ -59,11 +59,14 @@ class TauResourcePaths:
     agents_root: Path | None = field(default_factory=lambda: Path.home() / ".agents")
     paths: TauPaths | None = None
     project_resources_enabled: bool = True
+    # Root of the user-level Claude Code directory. When unset, ``~/.claude``
+    # is used so Tau shares ``~/.claude/skills`` with Claude Code.
+    claude_home: Path | None = None
 
     @property
     def skills_dir(self) -> Path:
-        """Return the primary Tau skills directory."""
-        return self.root / "skills"
+        """Return the user-level skills directory (shared with Claude Code)."""
+        return (self.claude_home or Path.home() / ".claude") / "skills"
 
     @property
     def prompts_dir(self) -> Path:
@@ -265,6 +268,7 @@ def resource_paths_with_cwd(
         agents_root=paths.agents_root,
         paths=paths.paths,
         project_resources_enabled=paths.project_resources_enabled,
+        claude_home=paths.claude_home,
     )
 
 
@@ -280,6 +284,7 @@ def resource_paths_with_project_trust(
         agents_root=paths.agents_root,
         paths=paths.paths,
         project_resources_enabled=trusted,
+        claude_home=paths.claude_home,
     )
 
 

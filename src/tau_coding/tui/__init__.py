@@ -18,9 +18,7 @@ from tau_coding.tui.config import (
     TuiThemeName,
     TurnNotificationMode,
     get_tui_theme,
-    load_tui_settings,
-    save_tui_settings,
-    tui_settings_path,
+    tui_settings_from_json,
 )
 from tau_coding.tui.state import ChatItem, TuiState
 from tau_coding.tui.widgets import (
@@ -55,11 +53,9 @@ __all__ = [
     "TurnNotificationMode",
     "TuiState",
     "get_tui_theme",
-    "load_tui_settings",
     "render_chat_item",
     "render_compact_session_info",
     "run_tui_app",
-    "save_tui_settings",
     "transcript_item_selection_text",
-    "tui_settings_path",
+    "tui_settings_from_json",
 ]

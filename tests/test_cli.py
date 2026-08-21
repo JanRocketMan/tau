@@ -13,12 +13,12 @@ from tau_ai import (
     FakeProvider,
 )
 from tau_coding import CodingSessionRecord, SessionManager, cli
+from tau_coding.catalog_loader import catalog_path
 from tau_coding.cli import app, run_print_mode
 from tau_coding.paths import TauPaths
 from tau_coding.provider_config import (
     OpenAICompatibleProviderConfig,
     ProviderSettings,
-    load_provider_settings,
 )
 from tau_coding.release_notes import ReleaseNoteSection, ReleaseNotesEntry, ReleaseNotesNotice
 from tau_coding.rendering import PrintOutputMode
@@ -747,7 +747,11 @@ async def test_run_print_mode_expands_skill_commands(
         model="fake",
         cwd=tmp_path,
         provider=provider,
-        resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+        resource_paths=TauResourcePaths(
+            root=resource_root,
+            agents_root=None,
+            claude_home=resource_root,
+        ),
     )
 
     _captured = capsys.readouterr()
@@ -1428,7 +1432,7 @@ def test_providers_command_lists_default_provider(
     result = CliRunner().invoke(app, ["providers"])
 
     assert result.exit_code == 0
-    assert "*\topenai-codex\topenai-codex\tgpt-5.6-luna" in result.stdout
+    assert "*\topenai-codex\topenai-codex\tgpt-5.6-sol" in result.stdout
     assert " \topencode-go\topenai-compatible\tdeepseek-v4-flash" in result.stdout
 
 
@@ -1473,7 +1477,7 @@ def test_render_provider_settings_shows_credential_source(
     assert "\tMISSING_API_KEY\tmissing\t" in output
 
 
-def test_setup_command_writes_provider_settings(
+def test_setup_command_prints_catalog_entry_without_writing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1503,18 +1507,18 @@ def test_setup_command_writes_provider_settings(
         ],
     )
 
-    settings = load_provider_settings(TauPaths(home=tmp_path / ".tau"))
-    provider = settings.get_provider("local")
     assert result.exit_code == 0
-    assert "Saved provider 'local'" in result.stdout
-    assert settings.default_provider == "local"
-    assert provider.base_url == "http://localhost:11434/v1"
-    assert provider.api_key_env == "LOCAL_API_KEY"
-    assert provider.default_model == "qwen"
-    assert provider.timeout_seconds == 120
-    assert provider.stream_idle_timeout_seconds == 900
-    assert provider.max_retries == 2
-    assert provider.max_retry_delay_seconds == 0.5
+    assert 'name = "local"' in result.stdout
+    assert 'base_url = "http://localhost:11434/v1"' in result.stdout
+    assert 'api_key_env = "LOCAL_API_KEY"' in result.stdout
+    assert 'models = ["qwen"]' in result.stdout
+    assert 'default_model = "qwen"' in result.stdout
+    assert "timeout_seconds = 120" in result.stdout
+    assert "make it the default provider" in result.stdout
+    assert "The current default is 'openai-codex'" in result.stdout
+    # Tau never modifies the catalog; the file on disk is unchanged.
+    saved_catalog = catalog_path()
+    assert 'name = "local"' not in saved_catalog.read_text(encoding="utf-8")
 
 
 def test_setup_command_warns_when_api_key_env_is_missing(
@@ -1538,6 +1542,7 @@ def test_setup_command_warns_when_api_key_env_is_missing(
     )
 
     assert result.exit_code == 0
+    assert 'name = "missing"' in result.stdout
     assert "Set MISSING_API_KEY before running Tau with this provider." in result.stderr
 
 

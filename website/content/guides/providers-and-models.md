@@ -152,20 +152,16 @@ For a new session without an explicit preference, Hugging Face initially routes
 the model automatically. After the first successful response, Tau reads Hugging
 Face's `x-inference-provider` response header and pins that backing provider for
 the rest of the session. To choose the initial provider instead, add a per-model
-`inference_providers` preference to `~/.tau/providers.json`:
+`inference_providers` preference to the `huggingface` entry in the catalog
+(`src/tau_coding/data/catalog.toml`):
 
-```json
-{
-  "schema_version": 2,
-  "default_provider": "huggingface",
-  "provider_preferences": {
-    "huggingface": {
-      "default_model": "zai-org/GLM-5.2",
-      "inference_providers": { "zai-org/GLM-5.2": "deepinfra" }
-    }
-  },
-  "scoped_models": []
-}
+```toml
+default_provider = "huggingface"
+
+[[providers]]
+name = "huggingface"
+default_model = "zai-org/GLM-5.2"
+inference_providers = { "zai-org/GLM-5.2" = "deepinfra" }
 ```
 
 Use the exact provider suffix advertised for that model by Hugging Face. Tau
@@ -215,8 +211,11 @@ Credentials saved through `/login` live in `~/.tau/credentials.json` with
 private `0600` permissions and atomic file replacement. The file is not
 encrypted; protect your Tau home directory and do not share its contents. The custom-provider
 flow asks for the provider name, display name, base URL, API-key environment
-variable, default model, and API key; it writes the provider definition to
-`~/.tau/catalog.toml` and runtime preferences to `~/.tau/providers.json`.
+variable, default model, and API key; it then stores just the API key in
+`~/.tau/credentials.json`. Provider definitions are never written by Tau: add
+an entry with a matching `credential_name` to the catalog file
+(`src/tau_coding/data/catalog.toml`, or the file named by `TAU_CATALOG_PATH`)
+to use the key.
 
 Check what's configured and how each provider will authenticate:
 
@@ -234,7 +233,7 @@ Use these slash commands inside Tau:
 ```
 
 Saved credentials take precedence over environment variables. `/logout` only
-edits saved credentials — it never touches your environment or `providers.json`.
+edits saved credentials — it never touches your environment or the catalog.
 
 {{% note title="OAuth troubleshooting" %}}
 Browser login can fall back to a pasted redirect URL/code when the callback
@@ -255,9 +254,9 @@ provider/model access varies by plan and policy.
   choosing one can switch the active provider too).
 - **`tau -m <model>`** or **`tau --provider <name> -m <model>`** — choose at
   launch.
-- **Ctrl+P** — cycle your *scoped* (favorite) models without opening the picker.
-  Build the list with `/scoped-models`, or press `Space` on a model in the
-  `/model` picker.
+- **Ctrl+P** — cycle through all available models without opening the picker:
+  the default provider leads with its default model, then its remaining
+  models, then each other provider's default model and models.
 
 Tau validates the selected model against the active provider's configured model
 list before creating or refreshing a runtime provider. This prevents accidental
@@ -294,8 +293,10 @@ Ollama. The easiest interactive path is:
 /login custom
 ```
 
-Tau prompts for the provider details, saves the API key, writes the provider
-metadata to `~/.tau/catalog.toml`, and makes the provider available immediately.
+Tau prompts for the provider details and stores the API key in
+`~/.tau/credentials.json`. The provider definition itself must already exist in
+the catalog (`src/tau_coding/data/catalog.toml`); add it by hand with a
+`credential_name` matching the name you logged in with.
 
 ### llama.cpp quickstart
 
@@ -347,12 +348,13 @@ tau --provider local \
   setup
 ```
 
-This writes the provider definition to `~/.tau/catalog.toml`, writes runtime
-preferences to `~/.tau/providers.json`, and (by default) makes it the default
-provider.
+`tau setup` does not modify anything: it prints the `[[providers]]` block to
+add to the catalog file (`src/tau_coding/data/catalog.toml`, or the file named
+by `TAU_CATALOG_PATH`), plus the `default_provider` key if you want the new
+provider to be the default.
 
-For reusable provider definitions, add a user-level catalog overlay at
-`~/.tau/catalog.toml`:
+For reusable provider definitions, edit the catalog file
+(`src/tau_coding/data/catalog.toml`) directly:
 
 ```toml
 schema_version = 1
@@ -372,10 +374,12 @@ docs_url = "https://example.test/local-gateway"
 qwen-coder = 64000
 ```
 
-Tau loads its bundled `src/tau_coding/data/catalog.toml` first, then overlays
-`~/.tau/catalog.toml`. A user entry with the same `name` can extend or override a
-built-in provider: scalar fields replace built-in values, `models` are merged
-with your models first, and `context_windows` are merged.
+The catalog is a single file: `src/tau_coding/data/catalog.toml`. Tau reads no
+user-level overlay and never writes the file: model or thinking changes made
+inside a session apply to that session only, and the defaults change only when
+you edit the catalog. To point Tau at a different catalog file (for example
+when the package directory is not writable), set the `TAU_CATALOG_PATH`
+environment variable.
 
 To shorten provider names in the TUI without changing their canonical IDs, add a
 label mapping to the same file:
@@ -391,8 +395,7 @@ The status block and model picker then show `codex:<model>`. Commands, routing,
 credentials, and saved sessions continue to use `openai-codex`, so the rename is
 deterministic and display-only.
 
-There is intentionally **no project-level** `.tau/catalog.toml`. Only the
-user-level `~/.tau/catalog.toml` is loaded, so cloning a repository cannot
+There is intentionally **no project-level** catalog: cloning a repository cannot
 silently redirect a provider's `base_url` or credentials to an unexpected
 service.
 
@@ -404,35 +407,27 @@ tau --provider local-gateway "summarize this project"    # TUI with an initial p
 tau --provider local-gateway -p "summarize this project" # one-shot print mode
 ```
 
-Catalog TOML is for provider and model metadata. It does **not** accept runtime
-request options such as custom HTTP headers, timeouts, or retry settings. Put
-those in `~/.tau/providers.json` instead. Saved `providers.json` entries support
-`headers`, `timeout_seconds`, `stream_idle_timeout_seconds`, `max_retries`, and
-`max_retry_delay_seconds`. For
-the full JSON shape, the catalog TOML shape, and `thinking_levels` for custom
-models, see [Configuration]({{< relref "../reference/configuration.md#providers" >}}).
+Catalog TOML carries both provider definitions and runtime preferences; the
+preference fields are `default_model`, `headers`, `timeout_seconds`,
+`stream_idle_timeout_seconds`, `max_retries`, `max_retry_delay_seconds`, and
+`thinking_defaults` (plus `inference_providers` for the Hugging Face provider).
+For the full catalog TOML shape and `thinking_levels` for custom models, see
+[Configuration]({{< relref "../reference/configuration.md#providers" >}}).
 
 {{% tip title="Hugging Face org billing" %}}
-To send a Hugging Face billing header, keep the provider definition in the
-catalog, then add the header to the matching provider preference in
-`~/.tau/providers.json`:
+To send a Hugging Face billing header, add the header to the `huggingface`
+provider entry in the catalog:
 
-```json
-{
-  "default_provider": "huggingface",
-  "provider_preferences": {
-    "huggingface": {
-      "default_model": "openai/gpt-oss-120b",
-      "headers": { "X-HF-Bill-To": "my-org" },
-      "thinking_defaults": { "openai/gpt-oss-120b": "low" },
-      "timeout_seconds": 60,
-      "stream_idle_timeout_seconds": 600,
-      "max_retries": 2,
-      "max_retry_delay_seconds": 1
-    }
-  },
-  "scoped_models": []
-}
+```toml
+[[providers]]
+name = "huggingface"
+default_model = "openai/gpt-oss-120b"
+headers = { "X-HF-Bill-To" = "my-org" }
+thinking_defaults = { "openai/gpt-oss-120b" = "low" }
+timeout_seconds = 60.0
+stream_idle_timeout_seconds = 600.0
+max_retries = 2
+max_retry_delay_seconds = 1.0
 ```
 {{% /tip %}}
 

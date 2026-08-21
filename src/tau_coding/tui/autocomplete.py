@@ -525,7 +525,7 @@ def _command_argument_completions(
         return None
 
     command_name = text[:token_end].removeprefix("/").lower()
-    if command_name in {"model", "scoped-models"}:
+    if command_name in {"model"}:
         return _value_completions(
             text=text,
             start=token_end + 1,

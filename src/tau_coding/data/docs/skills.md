@@ -12,7 +12,7 @@ A skill follows the Agent Skills structure:
 
 Tau loads user and project skills in increasing precedence:
 
-1. `~/.tau/skills/`
+1. `~/.claude/skills/` (shared with Claude Code)
 2. `~/.agents/skills/`
 3. `<cwd>/.tau/skills/`
 4. `<cwd>/.agents/skills/`

@@ -82,6 +82,12 @@ class ProviderCatalogEntry:
     thinking_parameter: ThinkingParameter | None = None
     removed_models: tuple[str, ...] = ()
     auth_methods: tuple[AuthMethod, ...] = ("api_key",)
+    timeout_seconds: float | None = None
+    stream_idle_timeout_seconds: float | None = None
+    max_retries: int | None = None
+    max_retry_delay_seconds: float | None = None
+    thinking_defaults: dict[str, ThinkingLevel] = field(default_factory=dict)
+    inference_providers: dict[str, str] = field(default_factory=dict)
 
 
 DEFAULT_SEARCH_PROVIDER = "parallel"

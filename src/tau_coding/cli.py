@@ -20,7 +20,7 @@ from tau_ai.env import (
     DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
 )
-from tau_coding.catalog_loader import user_catalog_path
+from tau_coding.catalog_loader import catalog_path
 from tau_coding.commands import format_reload_summary
 from tau_coding.credentials import FileCredentialStore
 from tau_coding.extensions import StderrUiBridge
@@ -36,8 +36,6 @@ from tau_coding.provider_config import (
     provider_kind,
     resolve_provider_selection,
     resolve_startup_thinking_level,
-    save_provider_settings,
-    upsert_openai_compatible_provider,
 )
 from tau_coding.provider_runtime import create_model_provider
 from tau_coding.release_notes import startup_release_notes_notice
@@ -112,26 +110,52 @@ def setup_command(
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
     set_default: bool = True,
 ) -> None:
-    """Create or update an OpenAI-compatible provider entry."""
-    settings = load_provider_settings()
-    provider = OpenAICompatibleProviderConfig(
-        name=provider_name,
-        base_url=base_url.rstrip("/"),
-        api_key_env=api_key_env,
-        models=(model,),
-        default_model=model,
-        timeout_seconds=timeout_seconds,
-        stream_idle_timeout_seconds=stream_idle_timeout_seconds,
-        max_retries=max_retries,
-        max_retry_delay_seconds=max_retry_delay_seconds,
-    )
-    updated = upsert_openai_compatible_provider(settings, provider, set_default=set_default)
-    path = save_provider_settings(updated)
+    """Print the catalog entry to add for an OpenAI-compatible provider.
+
+    Tau never modifies the catalog file itself: copy the printed
+    `[[providers]]` block into ``src/tau_coding/data/catalog.toml`` (or the
+    file named by ``TAU_CATALOG_PATH``) to register the provider.
+    """
+    model_list = _toml_list([model])
+    typer.echo(f"Add this provider definition to {catalog_path()}:")
     typer.echo(
-        f"Saved provider '{provider.name}' to {user_catalog_path()} and preferences to {path}"
+        "[[providers]]\n"
+        f'name = "{provider_name}"\n'
+        f'display_name = "{provider_name}"\n'
+        'kind = "openai-compatible"\n'
+        f'base_url = "{base_url.rstrip("/")}"\n'
+        f'api_key_env = "{api_key_env}"\n'
+        f'credential_name = "{provider_name}"\n'
+        f"models = {model_list}\n"
+        f'default_model = "{model}"\n'
+        f'docs_url = "{base_url.rstrip("/")}"\n'
+        f"timeout_seconds = {timeout_seconds:g}\n"
+        f"stream_idle_timeout_seconds = {stream_idle_timeout_seconds:g}\n"
+        f"max_retries = {max_retries}\n"
+        f"max_retry_delay_seconds = {max_retry_delay_seconds:g}\n"
     )
-    if provider.api_key_env not in environ:
-        typer.echo(f"Set {provider.api_key_env} before running Tau with this provider.", err=True)
+    if set_default:
+        default_provider = catalog_default_provider_name()
+        if default_provider is not None:
+            typer.echo(
+                f"To make it the default provider, set default_provider = "
+                f'"{provider_name}" at the top of {catalog_path()}. '
+                f"The current default is {default_provider!r}."
+            )
+            typer.echo()
+    if api_key_env not in environ:
+        typer.echo(f"Set {api_key_env} before running Tau with this provider.", err=True)
+
+
+def _toml_list(values: list[str]) -> str:
+    return "[" + ", ".join(f'"{value}"' for value in values) + "]"
+
+
+def catalog_default_provider_name() -> str | None:
+    """Return the catalog's default provider name for setup guidance."""
+    from tau_coding.catalog_loader import default_provider_name
+
+    return default_provider_name()
 
 
 @app.callback(invoke_without_command=True)

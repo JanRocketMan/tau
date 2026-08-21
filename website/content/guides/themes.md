@@ -19,7 +19,8 @@ Drop a `.json` file into one of the theme directories:
 Themes are discovered at startup; restart Tau after adding or editing a file.
 Invalid theme files are skipped with a startup notice — they never prevent Tau
 from starting. Select a theme with `/theme <name>`, the `/theme` picker, or
-Textual's command palette. The selection is persisted in `~/.tau/tui.json` —
+Textual's command palette. The selection applies for the current session only
+(Tau has no TUI settings file) —
 see [Configuration]({{< relref "../reference/configuration.md#tui-settings" >}}).
 
 ## Theme format

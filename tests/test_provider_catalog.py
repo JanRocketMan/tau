@@ -10,10 +10,10 @@ from tau_coding.catalog_loader import (
     CatalogError,
     builtin_catalog,
     builtin_catalog_resource_text,
+    catalog_path,
+    default_provider_name,
     effective_catalog,
     effective_provider_labels,
-    save_user_catalog_entries,
-    user_catalog_path,
 )
 from tau_coding.paths import TauPaths
 from tau_coding.provider_catalog import (
@@ -46,11 +46,32 @@ thinking_levels = ["off", "low", "medium", "high"]
 """
 
 
-def _write_user_catalog(tau_home: Path, body: str) -> TauPaths:
-    paths = TauPaths(home=tau_home)
-    tau_home.mkdir(parents=True, exist_ok=True)
-    user_catalog_path(paths).write_text(f"schema_version = 1\n{body}", encoding="utf-8")
-    return paths
+def _catalog_paths(tmp_path: Path, body: str | None = None) -> TauPaths:
+    """Return TauPaths pointing at an isolated catalog file."""
+    catalog = tmp_path / ".tau" / "catalog.toml"
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    catalog.write_text(
+        body if body is not None else builtin_catalog_resource_text(), encoding="utf-8"
+    )
+    return TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents", catalog_path=catalog)
+
+
+def _strip_provider_labels(text: str) -> str:
+    """Remove the packaged [provider_labels] table from catalog text."""
+    lines = text.splitlines()
+    kept: list[str] = []
+    skipping = False
+    for line in lines:
+        if line.strip() == "[provider_labels]":
+            skipping = True
+            continue
+        if skipping:
+            if line.startswith("["):
+                skipping = False
+            else:
+                continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def test_builtin_catalog_matches_expected_providers() -> None:
@@ -175,6 +196,25 @@ def test_builtin_catalog_auth_and_thinking_metadata() -> None:
     )
 
 
+def test_builtin_catalog_declares_default_and_preferences() -> None:
+    assert default_provider_name() == "openai-codex"
+    codex = builtin_provider_entry("openai-codex")
+    opencode_go = builtin_provider_entry("opencode-go")
+
+    assert codex is not None
+    assert opencode_go is not None
+    assert codex.default_model == "gpt-5.6-sol"
+    assert codex.timeout_seconds == 60.0
+    assert codex.stream_idle_timeout_seconds == 600.0
+    assert codex.max_retries == 2
+    assert codex.max_retry_delay_seconds == 1.0
+    assert codex.thinking_defaults == {"gpt-5.6-luna": "xhigh", "gpt-5.6-sol": "xhigh"}
+    assert opencode_go.thinking_defaults == {
+        "deepseek-v4-flash": "max",
+        "gpt-5.6-luna": "xhigh",
+    }
+
+
 def test_builtin_catalog_entries_are_internally_consistent() -> None:
     for entry in builtin_catalog():
         assert entry.default_model in entry.models
@@ -184,19 +224,21 @@ def test_builtin_catalog_entries_are_internally_consistent() -> None:
             assert metadata.thinking_levels
             assert metadata.thinking_default is not None
             assert metadata.thinking_default in metadata.thinking_levels
+        assert set(entry.thinking_defaults) <= set(entry.models)
 
 
 def test_builtin_catalog_resource_is_packaged() -> None:
     assert "[[providers]]" in builtin_catalog_resource_text()
 
 
-def test_effective_catalog_without_user_file_is_builtin(tmp_path: Path) -> None:
+def test_effective_catalog_without_override_is_builtin(tmp_path: Path) -> None:
     paths = TauPaths(home=tmp_path / ".tau")
     assert effective_catalog(paths) == builtin_catalog()
+    assert catalog_path(paths) == catalog_path()
 
 
-def test_user_catalog_adds_new_provider(tmp_path: Path) -> None:
-    paths = _write_user_catalog(tmp_path / ".tau", VALID_PROVIDER)
+def test_catalog_adds_new_provider(tmp_path: Path) -> None:
+    paths = _catalog_paths(tmp_path, builtin_catalog_resource_text() + VALID_PROVIDER)
     catalog = effective_catalog(paths)
     assert [entry.name for entry in catalog[:-1]] == [e.name for e in builtin_catalog()]
     entry = catalog[-1]
@@ -212,12 +254,11 @@ def test_user_catalog_adds_new_provider(tmp_path: Path) -> None:
     assert entry.model_metadata["deepseek-ai/DeepSeek-V4-Pro"].thinking_default == "medium"
 
 
-def test_user_catalog_provider_labels_rename_display_without_changing_identity(
-    tmp_path: Path,
-) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
+def test_catalog_provider_labels_rename_display_without_changing_identity(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        _strip_provider_labels(builtin_catalog_resource_text())
+        + """
 [provider_labels]
 openai-codex = "codex"
 """,
@@ -230,26 +271,11 @@ openai-codex = "codex"
     )
 
 
-def test_user_catalog_provider_labels_survive_provider_upsert(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        f"""
-[provider_labels]
-openai-codex = "codex"
-{VALID_PROVIDER}
-""",
-    )
-    entry = next(item for item in effective_catalog(paths) if item.name == "nebius")
-
-    save_user_catalog_entries((entry,), paths)
-
-    assert effective_provider_labels(paths) == {"openai-codex": "codex"}
-
-
-def test_user_catalog_provider_labels_reject_duplicate_labels(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
+def test_catalog_provider_labels_reject_duplicate_labels(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        _strip_provider_labels(builtin_catalog_resource_text())
+        + """
 [provider_labels]
 openai-codex = "models"
 opencode-go = "models"
@@ -260,10 +286,11 @@ opencode-go = "models"
         effective_provider_labels(paths)
 
 
-def test_user_catalog_provider_labels_reject_canonical_id_conflict(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
+def test_catalog_provider_labels_reject_canonical_id_conflict(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        _strip_provider_labels(builtin_catalog_resource_text())
+        + """
 [provider_labels]
 openai-codex = "opencode-go"
 """,
@@ -273,10 +300,11 @@ openai-codex = "opencode-go"
         effective_provider_labels(paths)
 
 
-def test_user_catalog_provider_labels_reject_unknown_provider(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
+def test_catalog_provider_labels_reject_unknown_provider(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        _strip_provider_labels(builtin_catalog_resource_text())
+        + """
 [provider_labels]
 missing = "friendly"
 """,
@@ -286,19 +314,23 @@ missing = "friendly"
         effective_provider_labels(paths)
 
 
-def test_user_catalog_overlays_builtin_provider(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
-[[providers]]
-name = "opencode-go"
-models = ["custom-model"]
-default_model = "custom-model"
-
-[providers.context_windows]
-"custom-model" = 500000
-""",
+def test_catalog_custom_model_extends_builtin_provider(tmp_path: Path) -> None:
+    body = (
+        builtin_catalog_resource_text()
+        .replace(
+            'models = ["gpt-5.6-luna", "deepseek-v4-flash"]',
+            'models = ["custom-model", "gpt-5.6-luna", "deepseek-v4-flash"]',
+        )
+        .replace(
+            'default_model = "deepseek-v4-flash"',
+            'default_model = "custom-model"',
+        )
+        .replace(
+            '[providers.context_windows]\n"gpt-5.6-luna" = 1000000',
+            '[providers.context_windows]\n"custom-model" = 500000\n"gpt-5.6-luna" = 1000000',
+        )
     )
+    paths = _catalog_paths(tmp_path, body)
     entry = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
     assert entry.models[0] == "custom-model"
     assert "gpt-5.6-luna" in entry.models
@@ -306,29 +338,28 @@ default_model = "custom-model"
     assert entry.context_windows is not None
     assert entry.context_windows["custom-model"] == 500_000
     assert entry.context_windows["gpt-5.6-luna"] == 1_000_000
-    # Untouched fields come from the builtin entry.
+    # Untouched fields keep their packaged values.
     assert entry.base_url == "https://opencode.ai/zen/go/v1"
     assert entry.thinking_parameter == "reasoning_effort"
 
 
-def test_user_catalog_thinking_metadata_replaces_per_model(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
-[[providers]]
-name = "opencode-go"
-thinking_parameter = "reasoning.effort"
-
-[providers.model_metadata."deepseek-v4-flash"]
-thinking_default = "low"
-thinking_levels = ["low", "high"]
-""",
+def test_catalog_thinking_metadata_replaces_per_model(tmp_path: Path) -> None:
+    body = (
+        builtin_catalog_resource_text()
+        .replace(
+            'thinking_default = "max"\nthinking_levels = ["high", "max"]',
+            'thinking_default = "low"\nthinking_levels = ["low", "high"]',
+        )
+        .replace(
+            'thinking_defaults = { "deepseek-v4-flash" = "max", "gpt-5.6-luna" = "xhigh" }',
+            'thinking_defaults = { "deepseek-v4-flash" = "low", "gpt-5.6-luna" = "xhigh" }',
+        )
     )
+    paths = _catalog_paths(tmp_path, body)
     entry = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
-    assert entry.thinking_parameter == "reasoning.effort"
     assert entry.model_metadata["deepseek-v4-flash"].thinking_levels == ("low", "high")
     assert entry.model_metadata["deepseek-v4-flash"].thinking_default == "low"
-    # Untouched models keep their builtin per-model thinking metadata.
+    # Untouched models keep their packaged per-model thinking metadata.
     assert entry.model_metadata["gpt-5.6-luna"].thinking_levels == (
         "low",
         "medium",
@@ -339,34 +370,30 @@ thinking_levels = ["low", "high"]
     assert entry.model_metadata["gpt-5.6-luna"].thinking_default == "xhigh"
 
 
-def test_user_catalog_rejects_provider_level_thinking_fields(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
-[[providers]]
-name = "opencode-go"
-thinking_levels = ["low", "high"]
-thinking_default = "high"
-""",
+def test_catalog_rejects_provider_level_thinking_fields(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        builtin_catalog_resource_text()
+        + VALID_PROVIDER.replace(
+            'thinking_parameter = "reasoning_effort"',
+            'thinking_levels = ["low", "high"]\nthinking_default = "high"',
+        ),
     )
     with pytest.raises(CatalogError, match="thinking_levels"):
         effective_catalog(paths)
 
 
-def test_user_catalog_overlays_and_serializes_cost_tiers(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
-[[providers]]
-name = "opencode-go"
-
-[providers.model_metadata."deepseek-v4-flash"]
-cost_tiers = [
-  { max_input_tokens = 400000, input = 0.2, output = 1.0, cacheRead = 0.04, cacheWrite = 0 },
-  { input = 0.5, output = 2.0, cacheRead = 0.1, cacheWrite = 0 },
-]
-""",
+def test_catalog_serializes_cost_tiers(tmp_path: Path) -> None:
+    body = builtin_catalog_resource_text().replace(
+        'thinking_default = "max"\nthinking_levels = ["high", "max"]',
+        'thinking_default = "max"\nthinking_levels = ["high", "max"]\n'
+        "cost_tiers = [\n"
+        "  { max_input_tokens = 400000, input = 0.2, output = 1.0, cacheRead = 0.04,"
+        " cacheWrite = 0 },\n"
+        "  { input = 0.5, output = 2.0, cacheRead = 0.1, cacheWrite = 0 },\n"
+        "]",
     )
+    paths = _catalog_paths(tmp_path, body)
     entry = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
     metadata = entry.model_metadata["deepseek-v4-flash"]
     assert model_cost_for_input_tokens(metadata, 400_000) == {
@@ -383,28 +410,18 @@ cost_tiers = [
     }
     assert model_cost_for_input_tokens(metadata, 400_001) == long_context_cost
 
-    save_user_catalog_entries([entry], paths)
-    reloaded = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
-    assert (
-        model_cost_for_input_tokens(reloaded.model_metadata["deepseek-v4-flash"], 400_001)
-        == long_context_cost
+
+def test_catalog_cost_tier_accepts_one_hour_cache_write_rate(tmp_path: Path) -> None:
+    body = builtin_catalog_resource_text().replace(
+        'thinking_default = "max"\nthinking_levels = ["high", "max"]',
+        'thinking_default = "max"\nthinking_levels = ["high", "max"]\n'
+        "cost_tiers = [\n"
+        "  { max_input_tokens = 400000, input = 0.2, output = 1.0, cacheRead = 0.04,"
+        " cacheWrite = 0.25 },\n"
+        "  { input = 0.5, output = 2.0, cacheRead = 0.1, cacheWrite = 0.6, cacheWrite1h = 1.0 },\n"
+        "]",
     )
-
-
-def test_user_catalog_cost_tier_accepts_one_hour_cache_write_rate(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
-[[providers]]
-name = "opencode-go"
-
-[providers.model_metadata."deepseek-v4-flash"]
-cost_tiers = [
-  { max_input_tokens = 400000, input = 0.2, output = 1.0, cacheRead = 0.04, cacheWrite = 0.25 },
-  { input = 0.5, output = 2.0, cacheRead = 0.1, cacheWrite = 0.6, cacheWrite1h = 1.0 },
-]
-""",
-    )
+    paths = _catalog_paths(tmp_path, body)
     entry = next(e for e in effective_catalog(paths) if e.name == "opencode-go")
     metadata = entry.model_metadata["deepseek-v4-flash"]
     assert model_cost_for_input_tokens(metadata, 400_001) == {
@@ -423,33 +440,36 @@ cost_tiers = [
     }
 
 
-def test_user_catalog_rejects_bounded_final_cost_tier(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        """
-[[providers]]
-name = "opencode-go"
-
-[providers.model_metadata."deepseek-v4-flash"]
-cost_tiers = [
-  { max_input_tokens = 512000, input = 0.3, output = 1.2, cacheRead = 0.06, cacheWrite = 0 },
-]
-""",
+def test_catalog_rejects_bounded_final_cost_tier(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        builtin_catalog_resource_text()
+        + VALID_PROVIDER.replace(
+            'thinking_levels = ["off", "low", "medium", "high"]',
+            "cost_tiers = [\n"
+            "  { max_input_tokens = 512000, input = 0.3, output = 1.2, cacheRead = 0.06,"
+            " cacheWrite = 0 },\n"
+            "]",
+        ),
     )
     with pytest.raises(CatalogError, match="final tier must omit max_input_tokens"):
         effective_catalog(paths)
 
 
-def test_user_catalog_rejects_unknown_keys(tmp_path: Path) -> None:
-    paths = _write_user_catalog(tmp_path / ".tau", VALID_PROVIDER.replace("docs_url", "docs_ur1"))
+def test_catalog_rejects_unknown_keys(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        builtin_catalog_resource_text() + VALID_PROVIDER.replace("docs_url", "docs_ur1"),
+    )
     with pytest.raises(CatalogError, match=r"providers\.nebius"):
         effective_catalog(paths)
 
 
-def test_user_catalog_rejects_default_model_not_in_models(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau",
-        VALID_PROVIDER.replace(
+def test_catalog_rejects_default_model_not_in_models(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        builtin_catalog_resource_text()
+        + VALID_PROVIDER.replace(
             'default_model = "deepseek-ai/DeepSeek-V4-Pro"', 'default_model = "missing"'
         ),
     )
@@ -505,46 +525,78 @@ def test_user_catalog_rejects_default_model_not_in_models(tmp_path: Path) -> Non
         ),
     ],
 )
-def test_user_catalog_rejects_empty_and_coerced_values(
+def test_catalog_rejects_empty_and_coerced_values(
     tmp_path: Path,
     body: str,
     match: str,
 ) -> None:
-    paths = _write_user_catalog(tmp_path / ".tau", body)
+    paths = _catalog_paths(tmp_path, builtin_catalog_resource_text() + body)
     with pytest.raises(CatalogError, match=match):
         effective_catalog(paths)
 
 
-def test_user_catalog_rejects_bad_kind(tmp_path: Path) -> None:
-    paths = _write_user_catalog(
-        tmp_path / ".tau", VALID_PROVIDER.replace("openai-compatible", "grpc")
+def test_catalog_rejects_bad_kind(tmp_path: Path) -> None:
+    paths = _catalog_paths(
+        tmp_path,
+        builtin_catalog_resource_text() + VALID_PROVIDER.replace("openai-compatible", "grpc"),
     )
     with pytest.raises(CatalogError, match="kind"):
         effective_catalog(paths)
 
 
-def test_user_catalog_rejects_malformed_toml(tmp_path: Path) -> None:
-    paths = _write_user_catalog(tmp_path / ".tau", "[[providers]\nname =")
+def test_catalog_rejects_malformed_toml(tmp_path: Path) -> None:
+    paths = _catalog_paths(tmp_path, "[[providers]\nname =")
     with pytest.raises(CatalogError, match="invalid TOML"):
         effective_catalog(paths)
 
 
-def test_user_catalog_provider_appears_in_settings(tmp_path: Path) -> None:
-    paths = _write_user_catalog(tmp_path / ".tau", VALID_PROVIDER)
+def test_catalog_new_provider_appears_in_settings(tmp_path: Path) -> None:
+    paths = _catalog_paths(tmp_path, builtin_catalog_resource_text() + VALID_PROVIDER)
     settings = load_provider_settings(paths)
     provider = settings.get_provider("nebius")
     assert provider.base_url == "https://api.studio.nebius.ai/v1"
     assert provider.default_model == "deepseek-ai/DeepSeek-V4-Pro"
 
 
-def test_user_catalog_provider_appears_with_existing_settings_file(tmp_path: Path) -> None:
-    paths = _write_user_catalog(tmp_path / ".tau", VALID_PROVIDER)
-    (tmp_path / ".tau" / "providers.json").write_text(
-        '{"default_provider": "openai", "providers": [{"type": "openai-compatible", '
-        '"name": "openai", "base_url": "https://api.openai.com/v1", '
-        '"api_key_env": "OPENAI_API_KEY", "models": ["gpt-5.5"], '
-        '"default_model": "gpt-5.5"}], "scoped_models": []}',
-        encoding="utf-8",
-    )
+def test_catalog_default_provider_controls_settings(tmp_path: Path) -> None:
+    paths = _catalog_paths(tmp_path)
     settings = load_provider_settings(paths)
-    assert settings.get_provider("nebius").models[0] == "deepseek-ai/DeepSeek-V4-Pro"
+    assert settings.default_provider == "openai-codex"
+    assert [provider.name for provider in settings.providers] == [
+        "openai-codex",
+        "opencode-go",
+    ]
+    assert settings.get_provider("openai-codex").default_model == "gpt-5.6-sol"
+    assert settings.get_provider("opencode-go").thinking_defaults == {
+        "deepseek-v4-flash": "max",
+        "gpt-5.6-luna": "xhigh",
+    }
+
+
+def test_catalog_rejects_unknown_default_provider(tmp_path: Path) -> None:
+    body = builtin_catalog_resource_text().replace(
+        'default_provider = "openai-codex"', 'default_provider = "missing"'
+    )
+    paths = _catalog_paths(tmp_path, body)
+    with pytest.raises(CatalogError, match="default_provider 'missing' is not among providers"):
+        effective_catalog(paths)
+
+
+def test_catalog_rejects_thinking_defaults_for_unknown_model(tmp_path: Path) -> None:
+    body = builtin_catalog_resource_text().replace(
+        'thinking_defaults = { "deepseek-v4-flash" = "max", "gpt-5.6-luna" = "xhigh" }',
+        'thinking_defaults = { "deepseek-v4-flash" = "max", "missing-model" = "xhigh" }',
+    )
+    paths = _catalog_paths(tmp_path, body)
+    with pytest.raises(CatalogError, match=r"providers\.opencode-go\.thinking_defaults"):
+        effective_catalog(paths)
+
+
+def test_catalog_rejects_thinking_default_outside_levels(tmp_path: Path) -> None:
+    body = builtin_catalog_resource_text().replace(
+        'thinking_defaults = { "deepseek-v4-flash" = "max", "gpt-5.6-luna" = "xhigh" }',
+        'thinking_defaults = { "deepseek-v4-flash" = "low", "gpt-5.6-luna" = "xhigh" }',
+    )
+    paths = _catalog_paths(tmp_path, body)
+    with pytest.raises(CatalogError, match=r"thinking_defaults\.deepseek-v4-flash"):
+        effective_catalog(paths)

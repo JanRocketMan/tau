@@ -1,16 +1,17 @@
-"""Durable provider configuration for Tau coding sessions."""
+"""Provider configuration loaded from the single catalog file.
+
+Tau never writes provider configuration: the catalog file is the single
+source of truth, edited by hand. Runtime model/thinking changes apply to the
+active session only, and `/login` stores credentials in
+`~/.tau/credentials.json` without touching the catalog.
+"""
 
 from __future__ import annotations
 
 import re
-from contextlib import suppress
-from dataclasses import dataclass, field, replace
-from json import dumps, loads
+from dataclasses import dataclass, field
 from os import environ
-from pathlib import Path
-from shutil import copy2
-from tempfile import NamedTemporaryFile
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from tau_ai.env import (
@@ -22,8 +23,7 @@ from tau_ai.env import (
     OpenAICompatibleConfig,
 )
 from tau_ai.openai_codex import DEFAULT_OPENAI_CODEX_BASE_URL
-from tau_coding.catalog_loader import effective_catalog, save_user_catalog_entries
-from tau_coding.credentials import FileCredentialStore, credentials_path
+from tau_coding.catalog_loader import default_provider_name, effective_catalog
 from tau_coding.oauth_registry import get_oauth_provider
 from tau_coding.paths import TauPaths
 from tau_coding.provider_catalog import (
@@ -45,7 +45,6 @@ from tau_coding.thinking import (
 
 DEFAULT_PROVIDER_NAME = "openai-codex"
 DEFAULT_MODEL = "gpt-5.6-luna"
-PROVIDER_SETTINGS_SCHEMA_VERSION = 2
 
 
 class ProviderConfigError(ValueError):
@@ -239,27 +238,44 @@ class OpenAICodexProviderConfig:
 type ProviderConfig = OpenAICompatibleProviderConfig | OpenAICodexProviderConfig
 
 
-@dataclass(frozen=True, slots=True)
-class ScopedModelConfig:
-    """A provider/model pair enabled for quick model cycling."""
+def _catalog_timeout_seconds(entry: ProviderCatalogEntry) -> float:
+    return (
+        entry.timeout_seconds
+        if entry.timeout_seconds is not None
+        else DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
+    )
 
-    provider: str
-    model: str
 
-    def to_json(self) -> dict[str, str]:
-        """Serialize this scoped model reference."""
-        return {"provider": self.provider, "model": self.model}
+def _catalog_stream_idle_timeout_seconds(entry: ProviderCatalogEntry) -> float:
+    return (
+        entry.stream_idle_timeout_seconds
+        if entry.stream_idle_timeout_seconds is not None
+        else DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS
+    )
+
+
+def _catalog_max_retries(entry: ProviderCatalogEntry) -> int:
+    if entry.max_retries is not None:
+        return entry.max_retries
+    return DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES
+
+
+def _catalog_max_retry_delay_seconds(entry: ProviderCatalogEntry) -> float:
+    return (
+        entry.max_retry_delay_seconds
+        if entry.max_retry_delay_seconds is not None
+        else DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderSettings:
-    """Tau provider settings loaded from Tau home."""
+    """Tau provider settings loaded from the single catalog file."""
 
     default_provider: str = DEFAULT_PROVIDER_NAME
     providers: tuple[ProviderConfig, ...] = field(
         default_factory=lambda: builtin_provider_configs()
     )
-    scoped_models: tuple[ScopedModelConfig, ...] = ()
 
     def get_provider(self, name: str | None = None) -> ProviderConfig:
         """Return a configured provider by name."""
@@ -268,17 +284,6 @@ class ProviderSettings:
             if provider.name == target:
                 return provider
         raise ProviderConfigError(f"Unknown provider: {target}")
-
-    def to_json(self) -> dict[str, Any]:
-        """Serialize runtime preferences to JSON-compatible data."""
-        return {
-            "schema_version": PROVIDER_SETTINGS_SCHEMA_VERSION,
-            "default_provider": self.default_provider,
-            "provider_preferences": {
-                provider.name: _provider_preference_to_json(provider) for provider in self.providers
-            },
-            "scoped_models": [model.to_json() for model in self.scoped_models],
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +313,11 @@ def provider_config_from_entry(entry: ProviderCatalogEntry) -> ProviderConfig:
     """Create a durable provider config from a catalog entry."""
     context_windows = dict(entry.context_windows or {})
     model_metadata = _provider_model_metadata_from_catalog(entry.model_metadata)
+    timeout_seconds = _catalog_timeout_seconds(entry)
+    stream_idle_timeout_seconds = _catalog_stream_idle_timeout_seconds(entry)
+    max_retries = _catalog_max_retries(entry)
+    max_retry_delay_seconds = _catalog_max_retry_delay_seconds(entry)
+    thinking_defaults = dict(entry.thinking_defaults)
     if entry.kind == "openai-codex":
         return OpenAICodexProviderConfig(
             name=entry.name,
@@ -319,8 +329,12 @@ def provider_config_from_entry(entry: ProviderCatalogEntry) -> ProviderConfig:
             context_windows=context_windows,
             headers=dict(entry.headers),
             model_metadata=model_metadata,
+            timeout_seconds=timeout_seconds,
+            stream_idle_timeout_seconds=stream_idle_timeout_seconds,
+            max_retries=max_retries,
+            max_retry_delay_seconds=max_retry_delay_seconds,
             thinking_parameter=entry.thinking_parameter,
-            thinking_defaults={},
+            thinking_defaults=thinking_defaults,
         )
     return OpenAICompatibleProviderConfig(
         name=entry.name,
@@ -334,8 +348,13 @@ def provider_config_from_entry(entry: ProviderCatalogEntry) -> ProviderConfig:
         headers=dict(entry.headers),
         compat=dict(entry.compat),
         model_metadata=model_metadata,
+        timeout_seconds=timeout_seconds,
+        stream_idle_timeout_seconds=stream_idle_timeout_seconds,
+        max_retries=max_retries,
+        max_retry_delay_seconds=max_retry_delay_seconds,
         thinking_parameter=entry.thinking_parameter,
-        thinking_defaults={},
+        thinking_defaults=thinking_defaults,
+        inference_providers=dict(entry.inference_providers),
     )
 
 
@@ -376,819 +395,21 @@ def default_openai_provider_config() -> OpenAICompatibleProviderConfig:
     return provider
 
 
-def provider_settings_path(paths: TauPaths | None = None) -> Path:
-    """Return the durable provider settings path."""
-    return (paths or TauPaths()).home / "providers.json"
-
-
 def load_provider_settings(paths: TauPaths | None = None) -> ProviderSettings:
-    """Load durable provider settings, falling back to env-compatible defaults."""
+    """Load provider settings from the single catalog file."""
     resolved_paths = paths or TauPaths()
-    path = provider_settings_path(resolved_paths)
-    if not path.exists():
-        return ProviderSettings(providers=_effective_provider_configs(resolved_paths))
-    raw = loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ProviderConfigError("Provider settings must be a JSON object")
-    settings = provider_settings_from_json(raw, paths=resolved_paths)
-    if "provider_preferences" not in raw:
-        settings = _migrate_legacy_provider_settings(settings, paths=resolved_paths)
-        _save_migrated_provider_settings(settings, paths=resolved_paths)
-        return settings
-    return _with_builtin_catalog_models(settings, paths=resolved_paths)
-
-
-def save_provider_settings(settings: ProviderSettings, paths: TauPaths | None = None) -> Path:
-    """Write durable provider preferences and return the path."""
-    resolved_paths = paths or TauPaths()
-    _save_provider_definitions_to_catalog(settings, paths=resolved_paths)
-    path = provider_settings_path(resolved_paths)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _write_provider_settings(settings, path=path, backup=True)
-    return path
-
-
-def save_default_provider_model(
-    *,
-    provider_name: str,
-    model: str,
-    paths: TauPaths | None = None,
-    fallback_settings: ProviderSettings | None = None,
-) -> ProviderSettings:
-    """Reload settings, persist one default provider/model change, and return them."""
-    settings = _load_provider_settings_for_write(paths, fallback_settings=fallback_settings)
-    updated = set_default_provider_model(settings, provider_name=provider_name, model=model)
-    save_provider_settings(updated, paths)
-    return updated
-
-
-def save_provider_thinking_level(
-    *,
-    provider_name: str,
-    model: str,
-    thinking_level: ThinkingLevel,
-    paths: TauPaths | None = None,
-    fallback_settings: ProviderSettings | None = None,
-) -> ProviderSettings:
-    """Reload settings, persist one provider/model thinking preference, and return them."""
-    settings = _load_provider_settings_for_write(paths, fallback_settings=fallback_settings)
-    updated = set_provider_thinking_level(
-        settings,
-        provider_name=provider_name,
-        model=model,
-        thinking_level=thinking_level,
-    )
-    save_provider_settings(updated, paths)
-    return updated
-
-
-def toggle_saved_scoped_model(
-    *,
-    provider_name: str,
-    model: str,
-    paths: TauPaths | None = None,
-    fallback_settings: ProviderSettings | None = None,
-) -> ProviderSettings:
-    """Reload settings, toggle one scoped model, persist them, and return them."""
-    settings = _load_provider_settings_for_write(paths, fallback_settings=fallback_settings)
-    provider = settings.get_provider(provider_name)
-    if model not in provider.models:
-        raise ProviderConfigError(f"Model is not configured: {provider_name}:{model}")
-
-    existing = list(settings.scoped_models)
-    target = ScopedModelConfig(provider=provider_name, model=model)
-    if target in existing:
-        existing = [item for item in existing if item != target]
-    else:
-        existing.append(target)
-    updated = replace(settings, scoped_models=tuple(existing))
-    save_provider_settings(updated, paths)
-    return updated
-
-
-def upsert_saved_provider(
-    provider: ProviderConfig,
-    *,
-    set_default: bool = False,
-    paths: TauPaths | None = None,
-    fallback_settings: ProviderSettings | None = None,
-) -> ProviderSettings:
-    """Reload settings, upsert one provider entry, persist them, and return them."""
-    settings = _load_provider_settings_for_write(paths, fallback_settings=fallback_settings)
-    updated = upsert_provider(settings, provider, set_default=set_default)
-    save_provider_settings(updated, paths)
-    return updated
-
-
-def _load_provider_settings_for_write(
-    paths: TauPaths | None,
-    *,
-    fallback_settings: ProviderSettings | None = None,
-) -> ProviderSettings:
-    """Load the latest on-disk settings, falling back only when no file exists."""
-    resolved_paths = paths or TauPaths()
-    if provider_settings_path(resolved_paths).exists():
-        return load_provider_settings(resolved_paths)
-    if fallback_settings is not None:
-        return fallback_settings
-    return load_provider_settings(resolved_paths)
-
-
-def set_default_provider_model(
-    settings: ProviderSettings,
-    *,
-    provider_name: str,
-    model: str,
-) -> ProviderSettings:
-    """Return settings with the default provider/model preference updated."""
-    provider = settings.get_provider(provider_name)
-    validate_provider_model(provider, model)
-    updated_provider = replace(provider, default_model=model)
-    providers = tuple(
-        updated_provider if item.name == provider_name else item for item in settings.providers
-    )
-    return ProviderSettings(
-        default_provider=provider_name,
-        providers=providers,
-        scoped_models=settings.scoped_models,
-    )
-
-
-def set_provider_thinking_level(
-    settings: ProviderSettings,
-    *,
-    provider_name: str,
-    model: str,
-    thinking_level: ThinkingLevel,
-) -> ProviderSettings:
-    """Return settings with a remembered thinking level for one provider/model."""
-    provider = settings.get_provider(provider_name)
-    validate_provider_model(provider, model)
-    normalized = normalize_thinking_level(thinking_level)
-    available = provider_thinking_levels(provider, model=model)
-    if normalized not in available:
-        modes = ", ".join(available) or "none"
-        raise ProviderConfigError(
-            f"Thinking mode {normalized} is not available for "
-            f"{provider_name}:{model}. Available modes: {modes}"
-        )
-    updated_provider = replace(
-        provider,
-        thinking_defaults={**provider.thinking_defaults, model: normalized},
-    )
-    providers = tuple(
-        updated_provider if item.name == provider_name else item for item in settings.providers
-    )
-    return ProviderSettings(
-        default_provider=settings.default_provider,
-        providers=providers,
-        scoped_models=settings.scoped_models,
-    )
-
-
-def upsert_openai_compatible_provider(
-    settings: ProviderSettings,
-    provider: OpenAICompatibleProviderConfig,
-    *,
-    set_default: bool = False,
-) -> ProviderSettings:
-    """Return settings with an OpenAI-compatible provider added or replaced."""
-    return upsert_provider(settings, provider, set_default=set_default)
-
-
-def upsert_provider(
-    settings: ProviderSettings,
-    provider: ProviderConfig,
-    *,
-    set_default: bool = False,
-) -> ProviderSettings:
-    """Return settings with a provider added or replaced."""
-    providers_by_name = {item.name: item for item in settings.providers}
-    builtin_names = {entry.name for entry in BUILTIN_PROVIDER_CATALOG}
-    if provider.name in providers_by_name and provider.name in builtin_names:
-        provider = _merge_provider_config(providers_by_name[provider.name], provider)
-    providers_by_name[provider.name] = provider
-    default_provider = provider.name if set_default else settings.default_provider
-    providers = tuple(providers_by_name[name] for name in sorted(providers_by_name))
-    updated = ProviderSettings(
-        default_provider=default_provider,
-        providers=providers,
-        scoped_models=settings.scoped_models,
-    )
-    updated.get_provider(default_provider)
-    return updated
-
-
-def _with_builtin_catalog_models(
-    settings: ProviderSettings,
-    *,
-    paths: TauPaths | None = None,
-) -> ProviderSettings:
-    """Return settings with the current provider catalog merged in."""
-    catalog_configs = {config.name: config for config in _effective_provider_configs(paths)}
-    providers = tuple(
-        _merge_provider_config(provider, catalog_configs[provider.name])
-        if provider.name in catalog_configs
-        else provider
-        for provider in settings.providers
-    )
-    providers = _append_catalog_providers(providers, catalog_configs, paths=paths)
-    default_provider = settings.default_provider
-    if default_provider not in {provider.name for provider in providers}:
+    providers = _effective_provider_configs(resolved_paths)
+    default_provider = default_provider_name(resolved_paths)
+    if default_provider is None or default_provider not in {
+        provider.name for provider in providers
+    }:
         default_provider = providers[0].name if providers else DEFAULT_PROVIDER_NAME
-    return ProviderSettings(
-        default_provider=default_provider,
-        providers=providers,
-        scoped_models=settings.scoped_models,
-    )
-
-
-def _migrate_legacy_provider_settings(
-    settings: ProviderSettings,
-    *,
-    paths: TauPaths,
-) -> ProviderSettings:
-    """Move legacy full provider records onto catalog-owned definitions.
-
-    Built-in and user-catalog provider capabilities come exclusively from the
-    current effective catalog. Legacy records contribute only runtime
-    preferences. Providers absent from the catalog remain intact so the
-    migration can persist them as custom catalog entries.
-    """
-    catalog_configs = {config.name: config for config in _effective_provider_configs(paths)}
-    providers: list[ProviderConfig] = []
-    for legacy in settings.providers:
-        catalog_provider = catalog_configs.get(legacy.name)
-        if catalog_provider is None:
-            providers.append(legacy)
-            continue
-        preferences = _provider_preference_to_json(legacy)
-        if legacy.default_model not in catalog_provider.models:
-            preferences.pop("default_model")
-        preferences["thinking_defaults"] = {
-            model: level
-            for model, level in legacy.thinking_defaults.items()
-            if model in catalog_provider.models
-            and level in provider_thinking_levels(catalog_provider, model=model)
-        }
-        providers.append(_apply_provider_preference(catalog_provider, preferences))
-
-    merged = _append_catalog_providers(tuple(providers), catalog_configs, paths=paths)
-    names = {provider.name for provider in merged}
-    default_provider = settings.default_provider
-    if default_provider not in names:
-        default_provider = merged[0].name if merged else DEFAULT_PROVIDER_NAME
-    return ProviderSettings(
-        default_provider=default_provider,
-        providers=merged,
-        scoped_models=tuple(
-            scoped
-            for scoped in settings.scoped_models
-            if scoped.provider in names
-            and scoped.model
-            in next(provider.models for provider in merged if provider.name == scoped.provider)
-        ),
-    )
-
-
-def _save_migrated_provider_settings(settings: ProviderSettings, *, paths: TauPaths) -> None:
-    """Persist one legacy migration after creating its required recovery backup."""
-    path = provider_settings_path(paths)
-    _backup_provider_settings(path, strict=True)
-    catalog_names = {entry.name for entry in effective_catalog(paths)}
-    custom_entries = [
-        _catalog_entry_from_provider(provider)
-        for provider in settings.providers
-        if provider.name not in catalog_names
-    ]
-    if custom_entries:
-        save_user_catalog_entries(custom_entries, paths=paths)
-    _write_provider_settings(settings, path=path, backup=False)
-
-
-def _backup_provider_settings(path: Path, *, strict: bool) -> None:
-    """Copy existing settings to the recovery path, optionally requiring success."""
-    if not path.exists():
-        return
-    if strict:
-        copy2(path, path.with_suffix(path.suffix + ".bak"))
-        return
-    with suppress(OSError):
-        copy2(path, path.with_suffix(path.suffix + ".bak"))
-
-
-def _write_provider_settings(
-    settings: ProviderSettings,
-    *,
-    path: Path,
-    backup: bool,
-) -> None:
-    """Atomically write preferences, optionally retaining the previous file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if backup:
-        _backup_provider_settings(path, strict=False)
-    _atomic_write_text(path, dumps(settings.to_json(), indent=2, sort_keys=True) + "\n")
+    return ProviderSettings(default_provider=default_provider, providers=providers)
 
 
 def _effective_provider_configs(paths: TauPaths | None = None) -> tuple[ProviderConfig, ...]:
-    """Return provider configs for the effective catalog (builtin + user overlay)."""
+    """Return provider configs from the single catalog file."""
     return tuple(provider_config_from_entry(entry) for entry in effective_catalog(paths))
-
-
-def _append_catalog_providers(
-    providers: tuple[ProviderConfig, ...],
-    catalog_configs: dict[str, ProviderConfig],
-    *,
-    paths: TauPaths | None,
-) -> tuple[ProviderConfig, ...]:
-    """Append catalog providers: user-catalog ones always, builtins when credentialed."""
-    credential_store = FileCredentialStore(credentials_path(paths) if paths else None)
-    builtin_names = {entry.name for entry in BUILTIN_PROVIDER_CATALOG}
-    provider_names = {provider.name for provider in providers}
-    appended = list(providers)
-    for provider in catalog_configs.values():
-        if provider.name in provider_names:
-            continue
-        if provider.name not in builtin_names or provider_has_usable_credentials(
-            provider, credential_reader=credential_store
-        ):
-            appended.append(provider)
-            provider_names.add(provider.name)
-    return tuple(appended)
-
-
-def _merge_provider_config(existing: ProviderConfig, incoming: ProviderConfig) -> ProviderConfig:
-    """Merge a replacement provider config without losing local customizations."""
-    if type(existing) is not type(incoming):
-        return incoming
-
-    if isinstance(existing, OpenAICodexProviderConfig) and isinstance(
-        incoming, OpenAICodexProviderConfig
-    ):
-        return replace(
-            incoming,
-            default_model=(
-                existing.default_model
-                if existing.default_model in incoming.models
-                else incoming.default_model
-            ),
-            headers={**incoming.headers, **existing.headers},
-            timeout_seconds=existing.timeout_seconds,
-            stream_idle_timeout_seconds=existing.stream_idle_timeout_seconds,
-            max_retries=existing.max_retries,
-            max_retry_delay_seconds=existing.max_retry_delay_seconds,
-            context_windows={**incoming.context_windows, **existing.context_windows},
-            model_metadata=_merge_provider_model_metadata(
-                incoming.model_metadata,
-                existing.model_metadata,
-            ),
-            thinking_parameter=incoming.thinking_parameter,
-            thinking_defaults=existing.thinking_defaults,
-        )
-
-    if isinstance(existing, OpenAICompatibleProviderConfig) and isinstance(
-        incoming, OpenAICompatibleProviderConfig
-    ):
-        return _merge_openai_compatible_provider(existing, incoming)
-
-    return incoming
-
-
-def _merge_openai_compatible_provider(
-    existing: OpenAICompatibleProviderConfig,
-    incoming: OpenAICompatibleProviderConfig,
-) -> OpenAICompatibleProviderConfig:
-    models = _unique_strings((*incoming.models, *existing.models))
-    return replace(
-        incoming,
-        models=models,
-        default_model=(
-            existing.default_model if existing.default_model in models else incoming.default_model
-        ),
-        headers={**incoming.headers, **existing.headers},
-        compat={**incoming.compat, **existing.compat},
-        model_metadata=_merge_provider_model_metadata(
-            incoming.model_metadata,
-            existing.model_metadata,
-        ),
-        timeout_seconds=existing.timeout_seconds,
-        stream_idle_timeout_seconds=existing.stream_idle_timeout_seconds,
-        max_retries=existing.max_retries,
-        max_retry_delay_seconds=existing.max_retry_delay_seconds,
-        context_windows={**incoming.context_windows, **existing.context_windows},
-        thinking_parameter=incoming.thinking_parameter,
-        thinking_defaults=existing.thinking_defaults,
-        inference_providers=existing.inference_providers,
-    )
-
-
-def _merge_provider_model_metadata(
-    incoming: dict[str, ProviderModelMetadata],
-    existing: dict[str, ProviderModelMetadata],
-) -> dict[str, ProviderModelMetadata]:
-    merged = dict(incoming)
-    for model, metadata in existing.items():
-        if model not in merged:
-            merged[model] = metadata
-            continue
-        base = merged[model]
-        merged[model] = replace(
-            base,
-            name=metadata.name or base.name,
-            api=metadata.api or base.api,
-            base_url=metadata.base_url or base.base_url,
-            reasoning=metadata.reasoning if metadata.reasoning is not None else base.reasoning,
-            input=metadata.input or base.input,
-            cost={**base.cost, **metadata.cost},
-            cost_tiers=metadata.cost_tiers or base.cost_tiers,
-            context_window=metadata.context_window or base.context_window,
-            max_tokens=metadata.max_tokens or base.max_tokens,
-            thinking_default=metadata.thinking_default or base.thinking_default,
-            thinking_levels=metadata.thinking_levels or base.thinking_levels,
-            headers={**base.headers, **metadata.headers},
-            compat={**base.compat, **metadata.compat},
-        )
-    return merged
-
-
-def _unique_strings(values: tuple[str, ...]) -> tuple[str, ...]:
-    """Return values with duplicates removed while preserving order."""
-    return tuple(dict.fromkeys(values))
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    """Write text through a sibling temp file and atomically replace the target."""
-    temp_path: Path | None = None
-    try:
-        with NamedTemporaryFile(
-            "w",
-            dir=path.parent,
-            encoding="utf-8",
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temp_file:
-            temp_path = Path(temp_file.name)
-            temp_file.write(text)
-            temp_file.flush()
-        temp_path.replace(path)
-    except Exception:
-        if temp_path is not None:
-            with suppress(OSError):
-                temp_path.unlink()
-        raise
-
-
-def _provider_preference_to_json(provider: ProviderConfig) -> dict[str, Any]:
-    """Serialize only runtime preferences for one provider."""
-    preference = {
-        "default_model": provider.default_model,
-        "headers": dict(provider.headers),
-        "timeout_seconds": provider.timeout_seconds,
-        "stream_idle_timeout_seconds": provider.stream_idle_timeout_seconds,
-        "max_retries": provider.max_retries,
-        "max_retry_delay_seconds": provider.max_retry_delay_seconds,
-        "thinking_defaults": dict(provider.thinking_defaults),
-    }
-    if isinstance(provider, OpenAICompatibleProviderConfig) and provider.inference_providers:
-        preference["inference_providers"] = dict(provider.inference_providers)
-    return preference
-
-
-def _save_provider_definitions_to_catalog(
-    settings: ProviderSettings,
-    *,
-    paths: TauPaths | None,
-) -> None:
-    """Persist provider definitions that are not already represented by the catalog."""
-    catalog_by_name = {entry.name: entry for entry in effective_catalog(paths)}
-    entries_to_save = []
-    for provider in settings.providers:
-        entry = catalog_by_name.get(provider.name)
-        if entry is None or _provider_definition_differs_from_catalog(provider, entry):
-            entries_to_save.append(_catalog_entry_from_provider(provider, existing=entry))
-    if entries_to_save:
-        save_user_catalog_entries(entries_to_save, paths=paths)
-
-
-def _provider_definition_differs_from_catalog(
-    provider: ProviderConfig,
-    entry: ProviderCatalogEntry,
-) -> bool:
-    """Return whether provider metadata changed enough to belong in catalog.toml."""
-    if provider_kind(provider) != entry.kind:
-        return True
-    if provider.base_url != entry.base_url:
-        return True
-    if provider.api_key_env != entry.api_key_env:
-        return True
-    if provider.credential_name != entry.credential_name:
-        return True
-    if provider.models != entry.models:
-        return True
-    if getattr(provider, "api", None) != entry.api and entry.api is not None:
-        return True
-    if provider.context_windows != dict(entry.context_windows or {}):
-        return True
-    if provider.headers != dict(entry.headers):
-        return True
-    if getattr(provider, "compat", {}) != dict(entry.compat):
-        return True
-    if _catalog_model_metadata_from_provider(provider) != entry.model_metadata:
-        return True
-    return provider.thinking_parameter != entry.thinking_parameter
-
-
-def _catalog_entry_from_provider(
-    provider: ProviderConfig,
-    *,
-    existing: ProviderCatalogEntry | None = None,
-) -> ProviderCatalogEntry:
-    """Create catalog metadata from a runtime provider config."""
-    return ProviderCatalogEntry(
-        name=provider.name,
-        display_name=existing.display_name if existing is not None else provider.name,
-        kind=provider_kind(provider),
-        base_url=provider.base_url,
-        api_key_env=provider.api_key_env,
-        api=getattr(provider, "api", None),
-        credential_name=provider.credential_name,
-        models=provider.models,
-        default_model=(
-            existing.default_model
-            if existing is not None and existing.default_model in provider.models
-            else provider.default_model
-        ),
-        docs_url=existing.docs_url if existing is not None else provider.base_url,
-        context_windows=dict(provider.context_windows) or None,
-        headers=dict(provider.headers),
-        compat=dict(getattr(provider, "compat", {})),
-        model_metadata=_catalog_model_metadata_from_provider(provider),
-        thinking_parameter=provider.thinking_parameter,
-    )
-
-
-def _catalog_model_metadata_from_provider(
-    provider: ProviderConfig,
-) -> dict[str, ModelCatalogMetadata]:
-    metadata_by_model = getattr(provider, "model_metadata", {})
-    return {
-        model: ModelCatalogMetadata(
-            name=metadata.name,
-            api=metadata.api,
-            base_url=metadata.base_url,
-            reasoning=metadata.reasoning,
-            input=tuple(item for item in metadata.input if item in {"text", "image"}),
-            cost=dict(metadata.cost) or None,
-            cost_tiers=metadata.cost_tiers,
-            context_window=metadata.context_window,
-            max_tokens=metadata.max_tokens,
-            thinking_default=metadata.thinking_default,
-            thinking_levels=tuple(metadata.thinking_levels),
-            headers=dict(metadata.headers),
-            compat=dict(metadata.compat),
-        )
-        for model, metadata in metadata_by_model.items()
-    }
-
-
-def provider_settings_from_json(
-    data: dict[str, Any],
-    *,
-    paths: TauPaths | None = None,
-) -> ProviderSettings:
-    """Parse provider preferences from JSON-compatible data.
-
-    The current providers.json shape stores runtime preferences under
-    provider_preferences. The older providers[] shape is still accepted for
-    migration and compatibility; saves rewrite it to provider_preferences and
-    move custom provider definitions to catalog.toml.
-    """
-    schema_version = data.get("schema_version")
-    if schema_version not in (None, PROVIDER_SETTINGS_SCHEMA_VERSION):
-        raise ProviderConfigError(
-            f"Unsupported provider settings schema_version: {schema_version!r}"
-        )
-    default_provider = _string(data.get("default_provider"), "default_provider")
-    scoped_models = _scoped_models_from_json(data.get("scoped_models"))
-    if "provider_preferences" in data:
-        providers = _providers_with_preferences(
-            data.get("provider_preferences"),
-            paths=paths,
-        )
-        return ProviderSettings(
-            default_provider=default_provider,
-            providers=providers,
-            scoped_models=scoped_models,
-        )
-
-    providers_data = data.get("providers")
-    if not isinstance(providers_data, list) or not providers_data:
-        raise ProviderConfigError(
-            "Provider settings must include provider_preferences or legacy providers"
-        )
-    providers = tuple(_provider_from_json(item) for item in providers_data)
-    names = [provider.name for provider in providers]
-    if len(set(names)) != len(names):
-        raise ProviderConfigError("Provider names must be unique")
-    return ProviderSettings(
-        default_provider=default_provider,
-        providers=providers,
-        scoped_models=scoped_models,
-    )
-
-
-def _providers_with_preferences(
-    value: object,
-    *,
-    paths: TauPaths | None,
-) -> tuple[ProviderConfig, ...]:
-    if not isinstance(value, dict):
-        raise ProviderConfigError("Provider settings field must be an object: provider_preferences")
-    catalog_configs = {provider.name: provider for provider in _effective_provider_configs(paths)}
-    providers = []
-    seen: set[str] = set()
-    for name, preference_data in value.items():
-        if not isinstance(name, str) or not name.strip():
-            raise ProviderConfigError("Provider preference names must be non-empty strings")
-        provider_name = name.strip()
-        if provider_name in seen:
-            raise ProviderConfigError("Provider preference names must be unique")
-        if provider_name not in catalog_configs:
-            # Preferences contain runtime overrides, not provider definitions. A
-            # catalog entry may be removed independently, leaving an orphaned
-            # preference behind. Ignore it so one stale entry cannot prevent Tau
-            # from starting or running `tau setup` to register it again.
-            continue
-        providers.append(
-            _apply_provider_preference(
-                catalog_configs[provider_name],
-                preference_data,
-            )
-        )
-        seen.add(provider_name)
-    return tuple(providers)
-
-
-def _apply_provider_preference(
-    provider: ProviderConfig,
-    value: object,
-) -> ProviderConfig:
-    if not isinstance(value, dict):
-        raise ProviderConfigError("Provider preference entries must be objects")
-    # Provider preferences are user-level state shared across Tau versions.
-    # Ignore options introduced by newer versions while continuing to validate
-    # every recognized option below.
-    default_model = (
-        _string(value.get("default_model"), f"provider_preferences.{provider.name}.default_model")
-        if "default_model" in value
-        else provider.default_model
-    )
-    if default_model not in provider.models:
-        default_model = provider.default_model
-    headers = (
-        _string_dict(value.get("headers"), f"provider_preferences.{provider.name}.headers")
-        if "headers" in value
-        else provider.headers
-    )
-    timeout_seconds = (
-        _positive_float(
-            value.get("timeout_seconds"),
-            f"provider_preferences.{provider.name}.timeout_seconds",
-        )
-        if "timeout_seconds" in value
-        else provider.timeout_seconds
-    )
-    stream_idle_timeout_seconds = (
-        _positive_float(
-            value.get("stream_idle_timeout_seconds"),
-            f"provider_preferences.{provider.name}.stream_idle_timeout_seconds",
-        )
-        if "stream_idle_timeout_seconds" in value
-        else provider.stream_idle_timeout_seconds
-    )
-    max_retries = (
-        _non_negative_int(
-            value.get("max_retries"),
-            f"provider_preferences.{provider.name}.max_retries",
-        )
-        if "max_retries" in value
-        else provider.max_retries
-    )
-    max_retry_delay_seconds = (
-        _non_negative_float(
-            value.get("max_retry_delay_seconds"),
-            f"provider_preferences.{provider.name}.max_retry_delay_seconds",
-        )
-        if "max_retry_delay_seconds" in value
-        else provider.max_retry_delay_seconds
-    )
-    thinking_defaults = (
-        _thinking_defaults_dict(
-            value.get("thinking_defaults"),
-            provider,
-            f"provider_preferences.{provider.name}.thinking_defaults",
-            ignore_unknown_models=True,
-        )
-        if "thinking_defaults" in value
-        else provider.thinking_defaults
-    )
-    if isinstance(provider, OpenAICompatibleProviderConfig):
-        inference_providers = (
-            _inference_providers_dict(
-                value.get("inference_providers"),
-                provider,
-                f"provider_preferences.{provider.name}.inference_providers",
-            )
-            if "inference_providers" in value
-            else provider.inference_providers
-        )
-        return replace(
-            provider,
-            default_model=default_model,
-            headers=headers,
-            timeout_seconds=timeout_seconds,
-            stream_idle_timeout_seconds=stream_idle_timeout_seconds,
-            max_retries=max_retries,
-            max_retry_delay_seconds=max_retry_delay_seconds,
-            thinking_defaults=thinking_defaults,
-            inference_providers=inference_providers,
-        )
-    return replace(
-        provider,
-        default_model=default_model,
-        headers=headers,
-        timeout_seconds=timeout_seconds,
-        stream_idle_timeout_seconds=stream_idle_timeout_seconds,
-        max_retries=max_retries,
-        max_retry_delay_seconds=max_retry_delay_seconds,
-        thinking_defaults=thinking_defaults,
-    )
-
-
-def _inference_providers_dict(
-    value: object,
-    provider: OpenAICompatibleProviderConfig,
-    field_name: str,
-) -> dict[str, str]:
-    routes = _string_dict(value, field_name)
-    routes = {model: route.strip() for model, route in routes.items() if model in provider.models}
-    _validate_inference_providers(provider.name, provider.models, routes)
-    return routes
-
-
-def _thinking_defaults_dict(
-    value: object,
-    provider: ProviderConfig,
-    field_name: str,
-    *,
-    ignore_unknown_models: bool = False,
-) -> dict[str, ThinkingLevel]:
-    raw = _raw_thinking_defaults_dict(value, field_name)
-    if ignore_unknown_models:
-        raw = {model: level for model, level in raw.items() if model in provider.models}
-    for model, thinking_level in raw.items():
-        validate_provider_model(provider, model)
-        available = provider_thinking_levels(provider, model=model)
-        if thinking_level not in available:
-            modes = ", ".join(available) or "none"
-            raise ProviderConfigError(
-                f"Provider thinking default {thinking_level} is not available for "
-                f"{provider.name}:{model}. Available modes: {modes}"
-            )
-    return raw
-
-
-def _raw_thinking_defaults_dict(value: object, field_name: str) -> dict[str, ThinkingLevel]:
-    if not isinstance(value, dict):
-        raise ProviderConfigError(f"Provider field must be a thinking mode object: {field_name}")
-    defaults: dict[str, ThinkingLevel] = {}
-    for key, item in value.items():
-        model = _string(key, field_name)
-        thinking_level = _optional_thinking_level(item, f"{field_name}.{model}")
-        if thinking_level is None:
-            raise ProviderConfigError(f"Provider field must be a thinking mode: {field_name}")
-        defaults[model] = thinking_level
-    return defaults
-
-
-def _scoped_models_from_json(value: object) -> tuple[ScopedModelConfig, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        raise ProviderConfigError("Provider settings field must be a list: scoped_models")
-    scoped: list[ScopedModelConfig] = []
-    seen: set[tuple[str, str]] = set()
-    for item in value:
-        if not isinstance(item, dict):
-            raise ProviderConfigError("Provider scoped_models entries must be objects")
-        provider = _string(item.get("provider"), "scoped_models.provider")
-        model = _string(item.get("model"), "scoped_models.model")
-        key = (provider, model)
-        if key not in seen:
-            scoped.append(ScopedModelConfig(provider=provider, model=model))
-            seen.add(key)
-    return tuple(scoped)
 
 
 def resolve_provider_selection(
@@ -1528,101 +749,6 @@ def _include_reasoning_effort_none(
     return "off" in provider_thinking_levels(provider, model=model)
 
 
-def _provider_from_json(data: object) -> ProviderConfig:
-    if not isinstance(data, dict):
-        raise ProviderConfigError("Provider entries must be JSON objects")
-    provider_type = _string(data.get("type"), "providers[].type")
-    if provider_type not in {"openai-compatible", "openai-codex"}:
-        raise ProviderConfigError(f"Unsupported provider type: {provider_type}")
-    name = _string(data.get("name"), "providers[].name")
-    base_url = _string(data.get("base_url"), f"providers[{name}].base_url").rstrip("/")
-    api = _optional_provider_api(data.get("api"), f"providers[{name}].api")
-    api_key_env = _string(data.get("api_key_env"), f"providers[{name}].api_key_env")
-    credential_name = _optional_string(
-        data.get("credential_name"), f"providers[{name}].credential_name"
-    )
-    models = _string_tuple(data.get("models"), f"providers[{name}].models")
-    default_model = _string(data.get("default_model"), f"providers[{name}].default_model")
-    context_windows = _context_window_dict(
-        data.get("context_windows", {}), f"providers[{name}].context_windows"
-    )
-    headers = _string_dict(data.get("headers", {}), f"providers[{name}].headers")
-    compat = _json_dict(data.get("compat", {}), f"providers[{name}].compat")
-    model_metadata = _model_metadata_dict(
-        data.get("model_metadata", {}),
-        models,
-        f"providers[{name}].model_metadata",
-    )
-    timeout_seconds = _positive_float(
-        data.get("timeout_seconds", DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS),
-        f"providers[{name}].timeout_seconds",
-    )
-    stream_idle_timeout_seconds = _positive_float(
-        data.get(
-            "stream_idle_timeout_seconds",
-            DEFAULT_OPENAI_COMPATIBLE_STREAM_IDLE_TIMEOUT_SECONDS,
-        ),
-        f"providers[{name}].stream_idle_timeout_seconds",
-    )
-    max_retries = _non_negative_int(
-        data.get("max_retries", DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES),
-        f"providers[{name}].max_retries",
-    )
-    max_retry_delay_seconds = _non_negative_float(
-        data.get(
-            "max_retry_delay_seconds",
-            DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS,
-        ),
-        f"providers[{name}].max_retry_delay_seconds",
-    )
-    thinking_parameter = _optional_thinking_parameter(
-        data.get("thinking_parameter"), f"providers[{name}].thinking_parameter"
-    )
-    thinking_defaults = _raw_thinking_defaults_dict(
-        data.get("thinking_defaults", {}), f"providers[{name}].thinking_defaults"
-    )
-    if default_model not in models:
-        models = (*models, default_model)
-    if provider_type == "openai-codex":
-        _reject_codex_legacy_compat(compat)
-        return OpenAICodexProviderConfig(
-            name=name,
-            base_url=base_url,
-            api_key_env=api_key_env,
-            credential_name=credential_name,
-            models=models,
-            default_model=default_model,
-            context_windows=context_windows,
-            headers=headers,
-            model_metadata=model_metadata,
-            timeout_seconds=timeout_seconds,
-            stream_idle_timeout_seconds=stream_idle_timeout_seconds,
-            max_retries=max_retries,
-            max_retry_delay_seconds=max_retry_delay_seconds,
-            thinking_parameter=thinking_parameter,
-            thinking_defaults=thinking_defaults,
-        )
-    return OpenAICompatibleProviderConfig(
-        name=name,
-        base_url=base_url,
-        api=api or _default_api_for_kind(provider_type),
-        api_key_env=api_key_env,
-        credential_name=credential_name,
-        models=models,
-        default_model=default_model,
-        context_windows=context_windows,
-        headers=headers,
-        compat=compat,
-        model_metadata=model_metadata,
-        timeout_seconds=timeout_seconds,
-        stream_idle_timeout_seconds=stream_idle_timeout_seconds,
-        max_retries=max_retries,
-        max_retry_delay_seconds=max_retry_delay_seconds,
-        thinking_parameter=thinking_parameter,
-        thinking_defaults=thinking_defaults,
-    )
-
-
 def _api_key_from_provider(
     provider: ProviderConfig,
     *,
@@ -1835,272 +961,3 @@ def _validate_thinking_config(
             "Provider thinking_parameter must be reasoning_effort, reasoning.effort, "
             "or anthropic.thinking"
         )
-
-
-def _optional_string(value: object, field_name: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise ProviderConfigError(f"Provider field must be a non-empty string: {field_name}")
-    return value.strip()
-
-
-def _string(value: object, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ProviderConfigError(f"Provider field must be a non-empty string: {field_name}")
-    return value.strip()
-
-
-def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
-    if not isinstance(value, list) or not value:
-        raise ProviderConfigError(f"Provider field must be a non-empty string list: {field_name}")
-    items = tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
-    if len(items) != len(value):
-        raise ProviderConfigError(f"Provider field must be a string list: {field_name}")
-    return items
-
-
-def _optional_string_tuple(value: object, field_name: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        raise ProviderConfigError(f"Provider field must be a string list: {field_name}")
-    items = tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
-    if len(items) != len(value):
-        raise ProviderConfigError(f"Provider field must be a string list: {field_name}")
-    return items
-
-
-def _optional_thinking_levels(
-    value: object,
-    field_name: str,
-) -> tuple[ThinkingLevel, ...] | None:
-    if value is None:
-        return None
-    if not isinstance(value, list):
-        raise ProviderConfigError(f"Provider field must be a thinking mode list: {field_name}")
-    try:
-        return normalize_thinking_levels(cast(list[str], value))
-    except ValueError as exc:
-        raise ProviderConfigError(str(exc)) from exc
-
-
-def _optional_thinking_level(value: object, field_name: str) -> ThinkingLevel | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ProviderConfigError(f"Provider field must be a thinking mode: {field_name}")
-    try:
-        return normalize_thinking_level(value)
-    except ValueError as exc:
-        raise ProviderConfigError(str(exc)) from exc
-
-
-def _optional_provider_api(value: object, field_name: str) -> ProviderApi | None:
-    if value is None:
-        return None
-    if value in {
-        "openai-completions",
-        "openai-responses",
-        "openai-codex-responses",
-    }:
-        return cast(ProviderApi, value)
-    raise ProviderConfigError(f"Provider field has unsupported API: {field_name}")
-
-
-def _optional_thinking_parameter(
-    value: object,
-    field_name: str,
-) -> ThinkingParameter | None:
-    if value is None:
-        return None
-    if value == "reasoning_effort":
-        return "reasoning_effort"
-    if value == "reasoning.effort":
-        return "reasoning.effort"
-    if value == "anthropic.thinking":
-        return "anthropic.thinking"
-    raise ProviderConfigError(
-        f"Provider field must be reasoning_effort, reasoning.effort, "
-        f"or anthropic.thinking: {field_name}"
-    )
-
-
-def _string_dict(value: object, field_name: str) -> dict[str, str]:
-    if not isinstance(value, dict):
-        raise ProviderConfigError(f"Provider field must be a string object: {field_name}")
-    items: dict[str, str] = {}
-    for key, item in value.items():
-        if not isinstance(key, str) or not key.strip():
-            raise ProviderConfigError(f"Provider field must be a string object: {field_name}")
-        if not isinstance(item, str) or not item.strip():
-            raise ProviderConfigError(f"Provider field must be a string object: {field_name}")
-        items[key.strip()] = item.strip()
-    return items
-
-
-def _json_dict(value: object, field_name: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ProviderConfigError(f"Provider field must be an object: {field_name}")
-    items: dict[str, Any] = {}
-    for key, item in value.items():
-        if not isinstance(key, str) or not key.strip():
-            raise ProviderConfigError(f"Provider field must have string keys: {field_name}")
-        _validate_json_value(item, f"{field_name}.{key}")
-        items[key.strip()] = item
-    return items
-
-
-def _model_metadata_dict(
-    value: object,
-    models: tuple[str, ...],
-    field_name: str,
-) -> dict[str, ProviderModelMetadata]:
-    if not isinstance(value, dict):
-        raise ProviderConfigError(f"Provider field must be an object: {field_name}")
-    model_names = set(models)
-    items: dict[str, ProviderModelMetadata] = {}
-    for key, item in value.items():
-        model = _string(key, field_name)
-        if model not in model_names:
-            raise ProviderConfigError(f"Provider model_metadata key is not in models: {model}")
-        if not isinstance(item, dict):
-            raise ProviderConfigError(
-                f"Provider model_metadata entries must be objects: {field_name}"
-            )
-        items[model] = ProviderModelMetadata(
-            name=_optional_string(item.get("name"), f"{field_name}.{model}.name"),
-            api=_optional_provider_api(item.get("api"), f"{field_name}.{model}.api"),
-            base_url=_optional_string(item.get("base_url"), f"{field_name}.{model}.base_url"),
-            reasoning=_optional_bool(item.get("reasoning"), f"{field_name}.{model}.reasoning"),
-            input=_optional_string_tuple(item.get("input"), f"{field_name}.{model}.input"),
-            cost=_float_dict(item.get("cost", {}), f"{field_name}.{model}.cost"),
-            cost_tiers=_cost_tiers(item.get("cost_tiers", []), f"{field_name}.{model}.cost_tiers"),
-            context_window=_optional_positive_int(
-                item.get("context_window"), f"{field_name}.{model}.context_window"
-            ),
-            max_tokens=_optional_positive_int(
-                item.get("max_tokens"), f"{field_name}.{model}.max_tokens"
-            ),
-            thinking_default=_optional_thinking_level(
-                item.get("thinking_default"), f"{field_name}.{model}.thinking_default"
-            ),
-            thinking_levels=(
-                _optional_thinking_levels(
-                    item.get("thinking_levels"), f"{field_name}.{model}.thinking_levels"
-                )
-                or ()
-            ),
-            headers=_string_dict(item.get("headers", {}), f"{field_name}.{model}.headers"),
-            compat=_json_dict(item.get("compat", {}), f"{field_name}.{model}.compat"),
-        )
-    return items
-
-
-def _cost_tiers(value: object, field_name: str) -> tuple[ModelCostTier, ...]:
-    if not isinstance(value, list):
-        raise ProviderConfigError(f"Provider field must be an array: {field_name}")
-    tiers: list[ModelCostTier] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, dict):
-            raise ProviderConfigError(f"Provider cost tiers must be objects: {field_name}")
-        tier_field = f"{field_name}.{index}"
-        allowed = {
-            "max_input_tokens",
-            "input",
-            "output",
-            "cacheRead",
-            "cacheWrite",
-            "cacheWrite1h",
-        }
-        if set(item) - allowed:
-            raise ProviderConfigError(f"Provider cost tier has unknown fields: {tier_field}")
-        cost = {
-            key: _non_negative_float(item.get(key), f"{tier_field}.{key}")
-            for key in ("input", "output", "cacheRead", "cacheWrite")
-        }
-        if item.get("cacheWrite1h") is not None:
-            cost["cacheWrite1h"] = _non_negative_float(
-                item.get("cacheWrite1h"), f"{tier_field}.cacheWrite1h"
-            )
-        tiers.append(
-            ModelCostTier(
-                max_input_tokens=_optional_positive_int(
-                    item.get("max_input_tokens"), f"{tier_field}.max_input_tokens"
-                ),
-                cost=cost,
-            )
-        )
-    result = tuple(tiers)
-    _validate_runtime_cost_tiers(result)
-    return result
-
-
-def _float_dict(value: object, field_name: str) -> dict[str, float]:
-    if not isinstance(value, dict):
-        raise ProviderConfigError(f"Provider field must be a number object: {field_name}")
-    items: dict[str, float] = {}
-    for key, item in value.items():
-        if not isinstance(key, str) or not key.strip():
-            raise ProviderConfigError(f"Provider field must be a number object: {field_name}")
-        if not isinstance(item, int | float) or isinstance(item, bool) or item < 0:
-            raise ProviderConfigError(f"Provider field values must be non-negative: {field_name}")
-        items[key.strip()] = float(item)
-    return items
-
-
-def _optional_bool(value: object, field_name: str) -> bool | None:
-    if value is None:
-        return None
-    if not isinstance(value, bool):
-        raise ProviderConfigError(f"Provider field must be a boolean: {field_name}")
-    return value
-
-
-def _optional_positive_int(value: object, field_name: str) -> int | None:
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ProviderConfigError(f"Provider field must be a positive integer: {field_name}")
-    return value
-
-
-def _context_window_dict(value: object, field_name: str) -> dict[str, int]:
-    if not isinstance(value, dict):
-        raise ProviderConfigError(f"Provider field must be an integer object: {field_name}")
-    items: dict[str, int] = {}
-    for key, item in value.items():
-        if not isinstance(key, str) or not key.strip():
-            raise ProviderConfigError(f"Provider field must be an integer object: {field_name}")
-        if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
-            raise ProviderConfigError(
-                f"Provider field values must be positive integers: {field_name}"
-            )
-        items[key.strip()] = item
-    return items
-
-
-def _positive_float(value: object, field_name: str) -> float:
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        raise ProviderConfigError(f"Provider field must be a positive number: {field_name}")
-    converted = float(value)
-    if converted <= 0:
-        raise ProviderConfigError(f"Provider field must be greater than 0: {field_name}")
-    return converted
-
-
-def _non_negative_int(value: object, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ProviderConfigError(f"Provider field must be a non-negative integer: {field_name}")
-    if value < 0:
-        raise ProviderConfigError(f"Provider field must be 0 or greater: {field_name}")
-    return value
-
-
-def _non_negative_float(value: object, field_name: str) -> float:
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        raise ProviderConfigError(f"Provider field must be a non-negative number: {field_name}")
-    converted = float(value)
-    if converted < 0:
-        raise ProviderConfigError(f"Provider field must be 0 or greater: {field_name}")
-    return converted

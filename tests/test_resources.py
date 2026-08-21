@@ -12,7 +12,7 @@ from tau_coding.resources import (
 
 
 def test_resource_paths_use_tau_subdirectories(tmp_path: Path) -> None:
-    paths = TauResourcePaths(root=tmp_path, agents_root=None)
+    paths = TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path)
 
     assert paths.skills_dir == tmp_path / "skills"
     assert paths.prompts_dir == tmp_path / "prompts"
@@ -29,6 +29,7 @@ def test_resource_paths_include_agents_and_project_directories(tmp_path: Path) -
         agents_root=agents_home,
         cwd=cwd,
         paths=TauPaths(home=tau_home, agents_home=agents_home),
+        claude_home=tau_home,
     )
 
     assert paths.skills_dirs == (

@@ -1,84 +1,20 @@
-from pathlib import Path
-
 import pytest
 
-from tau_coding.paths import TauPaths
 from tau_coding.tui.config import (
     CODEYELLOW_THEME,
-    HIGH_CONTRAST_THEME,
     TuiConfigError,
     TuiKeybindings,
     TuiSettings,
     get_tui_theme,
-    load_tui_settings,
-    save_tui_settings,
     tui_settings_from_json,
-    tui_settings_path,
 )
 
 
-def test_tui_settings_path_uses_tau_home(tmp_path: Path) -> None:
-    paths = TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents")
-
-    assert tui_settings_path(paths) == tmp_path / ".tau" / "tui.json"
-
-
-def test_load_tui_settings_returns_defaults_when_file_is_missing(tmp_path: Path) -> None:
-    paths = TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents")
-
-    assert load_tui_settings(paths) == TuiSettings()
-    assert load_tui_settings(paths).keybindings.open_context == "ctrl+l"
-    assert load_tui_settings(paths).keybindings.quit == "ctrl+d"
-
-
-def test_load_tui_settings_reads_keybindings(tmp_path: Path) -> None:
-    paths = TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents")
-    path = tui_settings_path(paths)
-    path.parent.mkdir(parents=True)
-    path.write_text(
-        """
-        {
-          "keybindings": {
-            "command_palette": "ctrl+j",
-            "session_picker": "ctrl+y",
-            "open_context": "f7",
-            "queue_follow_up": "f5",
-            "accept_completion": "f2",
-            "thinking_cycle": "f3",
-            "model_cycle": "f6",
-            "toggle_thinking": "f4",
-            "clear_prompt": "ctrl+b"
-          },
-          "theme": "high-contrast"
-        }
-        """,
-        encoding="utf-8",
-    )
-
-    settings = load_tui_settings(paths)
-
-    assert settings.keybindings.command_palette == "ctrl+j"
-    assert settings.keybindings.session_picker == "ctrl+y"
-    assert settings.keybindings.open_context == "f7"
-    assert settings.keybindings.queue_follow_up == "f5"
-    assert settings.keybindings.toggle_tool_results == "ctrl+o"
-    assert settings.keybindings.toggle_thinking == "f4"
-    assert settings.keybindings.accept_completion == "f2"
-    assert settings.keybindings.thinking_cycle == "f3"
-    assert settings.keybindings.model_cycle == "f6"
-    assert settings.keybindings.clear_prompt == "ctrl+b"
-    assert settings.keybindings.cancel == "escape"
-    assert settings.theme == "high-contrast"
-    assert settings.resolved_theme == HIGH_CONTRAST_THEME
-
-
-def test_save_tui_settings_writes_json(tmp_path: Path) -> None:
-    paths = TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents")
-
-    path = save_tui_settings(TuiSettings(theme="tau-light"), paths)
-
-    assert path == tmp_path / ".tau" / "tui.json"
-    assert load_tui_settings(paths).theme == "tau-light"
+def test_tui_settings_defaults_are_builtin() -> None:
+    assert TuiSettings().keybindings.open_context == "ctrl+l"
+    assert TuiSettings().keybindings.quit == "ctrl+d"
+    assert TuiSettings().keybindings.thinking_cycle == "ctrl+f"
+    assert TuiSettings().theme == "codeyellow"
 
 
 def test_tui_settings_ignores_removed_message_selection_keybindings() -> None:

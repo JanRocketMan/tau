@@ -16,7 +16,7 @@ from tau_coding.resources import ResourceError
 
 
 def test_load_skills_does_not_include_tau_self_knowledge(tmp_path: Path) -> None:
-    skills = load_skills(TauResourcePaths(root=tmp_path, agents_root=None))
+    skills = load_skills(TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path))
 
     assert skills == []
 
@@ -34,7 +34,7 @@ def test_load_skills_from_directory(tmp_path: Path) -> None:
         "# Git Review\nReview diffs.", encoding="utf-8"
     )
 
-    skills = load_skills(TauResourcePaths(root=tmp_path, agents_root=None))
+    skills = load_skills(TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path))
 
     skill_by_name = {skill.name: skill for skill in skills}
     assert set(skill_by_name) == {"git-review", "python-testing"}
@@ -56,7 +56,9 @@ def test_load_skills_includes_user_and_project_agents_directories(tmp_path: Path
         "# Project Skill\nFrom project agents.", encoding="utf-8"
     )
 
-    skills = load_skills(TauResourcePaths(root=tau_home, agents_root=agents_home, cwd=cwd))
+    skills = load_skills(
+        TauResourcePaths(root=tau_home, agents_root=agents_home, cwd=cwd, claude_home=tau_home)
+    )
 
     assert {skill.name for skill in skills} == {"project-skill", "user-skill"}
 
@@ -68,7 +70,7 @@ def test_user_skill_can_use_a_former_bundled_skill_name(tmp_path: Path) -> None:
     skill_path.write_text("# Custom catalog workflow", encoding="utf-8")
 
     skills, diagnostics = load_skills_with_diagnostics(
-        TauResourcePaths(root=tmp_path, agents_root=None)
+        TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path)
     )
 
     assert [(skill.name, skill.path) for skill in skills] == [("tau-model-catalog", skill_path)]
@@ -87,7 +89,9 @@ def test_project_agents_skill_overrides_user_agents_skill(tmp_path: Path) -> Non
         "# Project Review", encoding="utf-8"
     )
 
-    skills = load_skills(TauResourcePaths(root=tau_home, agents_root=agents_home, cwd=cwd))
+    skills = load_skills(
+        TauResourcePaths(root=tau_home, agents_root=agents_home, cwd=cwd, claude_home=tau_home)
+    )
 
     review = next(skill for skill in skills if skill.name == "review")
     assert review.path == cwd / ".agents" / "skills" / "review" / "SKILL.md"
@@ -106,7 +110,7 @@ def test_load_skills_with_diagnostics_reports_overrides(tmp_path: Path) -> None:
     )
 
     skills, diagnostics = load_skills_with_diagnostics(
-        TauResourcePaths(root=tau_home, agents_root=agents_home, cwd=cwd)
+        TauResourcePaths(root=tau_home, agents_root=agents_home, cwd=cwd, claude_home=tau_home)
     )
 
     review = next(skill for skill in skills if skill.name == "review")
@@ -134,7 +138,7 @@ def test_load_skills_with_diagnostics_reports_bare_md_migration_hint(
     (skills_dir / "good" / "SKILL.md").write_text("# Good Skill", encoding="utf-8")
 
     skills, diagnostics = load_skills_with_diagnostics(
-        TauResourcePaths(root=tmp_path, agents_root=None)
+        TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path)
     )
 
     assert "good" in {skill.name for skill in skills}
@@ -158,7 +162,11 @@ def test_agents_root_is_not_a_skills_directory(tmp_path: Path) -> None:
     (agents_home / "README.md").write_text("# Readme", encoding="utf-8")
     (agents_home / "review.md").write_text("# Review", encoding="utf-8")
 
-    skills = load_skills(TauResourcePaths(root=tmp_path / ".tau", agents_root=agents_home))
+    skills = load_skills(
+        TauResourcePaths(
+            root=tmp_path / ".tau", agents_root=agents_home, claude_home=tmp_path / ".tau"
+        )
+    )
 
     assert skills == []
 
@@ -175,7 +183,9 @@ def test_agents_skills_dir_ignores_bare_md_files(tmp_path: Path) -> None:
     (skills_dir / "my-skill" / "SKILL.md").write_text("# Valid Skill", encoding="utf-8")
     (skills_dir / "reference.md").write_text("# Reference doc", encoding="utf-8")
 
-    paths = TauResourcePaths(root=tmp_path / ".tau", agents_root=agents_home)
+    paths = TauResourcePaths(
+        root=tmp_path / ".tau", agents_root=agents_home, claude_home=tmp_path / ".tau"
+    )
     skills = load_skills(paths)
 
     assert "my-skill" in {skill.name for skill in skills}
@@ -192,7 +202,7 @@ def test_tau_skills_dir_ignores_bare_md_files(tmp_path: Path) -> None:
     (skills_dir / "my-skill" / "SKILL.md").write_text("# Subdir Skill", encoding="utf-8")
     (skills_dir / "reference.md").write_text("# Reference doc", encoding="utf-8")
 
-    paths = TauResourcePaths(root=tmp_path, agents_root=None)
+    paths = TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path)
     skills = load_skills(paths)
 
     assert "my-skill" in {skill.name for skill in skills}
@@ -202,7 +212,7 @@ def test_expand_skill_command_includes_skill_and_user_request(tmp_path: Path) ->
     skills_dir = tmp_path / "skills" / "testing"
     skills_dir.mkdir(parents=True)
     (skills_dir / "SKILL.md").write_text("# Testing\nRun pytest.", encoding="utf-8")
-    skills = load_skills(TauResourcePaths(root=tmp_path, agents_root=None))
+    skills = load_skills(TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path))
 
     expanded = expand_skill_command("/skill:testing add parser tests", skills)
 
@@ -271,7 +281,8 @@ def test_parse_skill_invocation_extracts_display_metadata(tmp_path: Path) -> Non
 def test_expand_skill_command_returns_none_for_normal_prompt(tmp_path: Path) -> None:
     assert (
         expand_skill_command(
-            "hello", load_skills(TauResourcePaths(root=tmp_path, agents_root=None))
+            "hello",
+            load_skills(TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path)),
         )
         is None
     )
@@ -290,7 +301,9 @@ def test_build_skill_index(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    index = build_skill_index(load_skills(TauResourcePaths(root=tmp_path, agents_root=None)))
+    index = build_skill_index(
+        load_skills(TauResourcePaths(root=tmp_path, agents_root=None, claude_home=tmp_path))
+    )
 
     assert "Available skills:" in index
     assert "- testing: Test things" in index

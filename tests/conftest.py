@@ -3,6 +3,26 @@ from pathlib import Path
 
 import pytest
 
+from tau_coding.catalog_loader import builtin_catalog_resource_text
+
+
+@pytest.fixture(autouse=True)
+def isolate_catalog_file(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redirect every catalog read/write to a per-test copy of the packaged catalog.
+
+    Tau's catalog is a writable single source of configuration. Without this
+    fixture, tests that exercise save flows (setup, login, model switching)
+    would rewrite the packaged ``src/tau_coding/data/catalog.toml``. The copy
+    lives outside ``tmp_path`` so it never shows up in tests that enumerate
+    working-directory contents (for example file-reference completion).
+    """
+    catalog = tmp_path_factory.mktemp("catalog") / "catalog.toml"
+    catalog.write_text(builtin_catalog_resource_text(), encoding="utf-8")
+    monkeypatch.setenv("TAU_CATALOG_PATH", str(catalog))
+
 
 @pytest.fixture(autouse=True)
 def prevent_browser_open(monkeypatch: pytest.MonkeyPatch) -> None:

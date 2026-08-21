@@ -4,8 +4,8 @@ description: Default keys for the Tau TUI, and how to remap them.
 ---
 
 These are the default keys in the interactive [TUI]({{< relref "../guides/tui.md" >}}). Run
-`/hotkeys` in-session to see them, and remap them in `~/.tau/tui.json` (see
-[Configuration]({{< relref "./configuration.md#tui-settings" >}})).
+`/hotkeys` in-session to see them. The keybindings are built-in defaults and
+cannot be remapped (see [Configuration]({{< relref "./configuration.md#tui-settings" >}})).
 
 ## Prompting
 
@@ -33,8 +33,8 @@ These are the default keys in the interactive [TUI]({{< relref "../guides/tui.md
 
 | Key | Action |
 | --- | --- |
-| `Ctrl+P` | Cycle scoped (favorite) models |
-| `Shift+Tab` | Cycle the thinking mode |
+| `Ctrl+P` | Cycle through all available models (default provider first) |
+| `Ctrl+F` | Cycle the thinking mode |
 | `Ctrl+T` | Toggle display of thinking/reasoning tokens |
 
 ## Output & session
@@ -45,8 +45,7 @@ These are the default keys in the interactive [TUI]({{< relref "../guides/tui.md
 | `Ctrl+U` | Clear the prompt input |
 | `Ctrl+D` | Quit |
 
-{{% note title="Remapping" %}}
-Keys use Textual's syntax (`ctrl+k`, `shift+tab`, `down`, `f2`, …). Tau rejects
-unknown names, empty keys, and duplicate assignments so mistakes fail early. Any
-key you don't set keeps its default.
+{{% note title="Keys" %}}
+Keys use Textual's syntax (`ctrl+k`, `ctrl+f`, `down`, `f2`, …). The defaults
+are built in; there is no TUI settings file.
 {{% /note %}}

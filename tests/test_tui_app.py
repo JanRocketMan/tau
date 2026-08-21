@@ -50,7 +50,7 @@ from tau_agent.messages import AssistantContent, assistant_content
 from tau_agent.provider_events import TextDeltaEvent, ThinkingDeltaEvent
 from tau_agent.types import JSONValue
 from tau_coding import builtin_provider_entry, load_provider_settings
-from tau_coding.catalog_loader import user_catalog_path
+from tau_coding.catalog_loader import catalog_path
 from tau_coding.commands import CommandResult
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
 from tau_coding.events import (
@@ -69,8 +69,6 @@ from tau_coding.provider_config import (
     OpenAICompatibleProviderConfig,
     ProviderSelection,
     ProviderSettings,
-    ScopedModelConfig,
-    save_provider_settings,
 )
 from tau_coding.session import (
     CodingSession,
@@ -130,7 +128,6 @@ from tau_coding.tui.config import (
     TuiKeybindings,
     TuiSettings,
     TuiTheme,
-    tui_settings_path,
 )
 from tau_coding.tui.state import ChatItem, TuiState
 from tau_coding.tui.terminal_notification import TerminalNotificationController
@@ -241,7 +238,6 @@ class FakeSession:
             ModelChoice(provider_name="opencode", model="other-model"),
             ModelChoice(provider_name="local", model="local-model"),
         )
-        self.scoped_model_choices: tuple[ModelChoice, ...] = ()
         self.available_providers = ("opencode",)
         self.tools = tuple(create_coding_tools(cwd=self.cwd))
         self.extension_tool_sources: dict[str, str] = {}
@@ -358,8 +354,6 @@ class FakeSession:
             return CommandResult(handled=True, model_picker_requested=True)
         if text == "/tools":
             return CommandResult(handled=True, tools_picker_requested=True)
-        if text in {"/scoped-models", "/scoped models"}:
-            return CommandResult(handled=True, scoped_models_picker_requested=True)
         if text == "/theme":
             return CommandResult(handled=True, theme_picker_requested=True)
         if text.startswith("/theme "):
@@ -379,24 +373,19 @@ class FakeSession:
         self.set_provider(choice.provider_name)
         self.set_model(choice.model)
 
-    def toggle_scoped_model(self, choice: ModelChoice) -> tuple[ModelChoice, ...]:
-        scoped = list(self.scoped_model_choices)
-        if choice in scoped:
-            scoped.remove(choice)
-        else:
-            scoped.append(choice)
-        self.scoped_model_choices = tuple(scoped)
-        return self.scoped_model_choices
+    def model_cycle_choices(self) -> tuple[ModelChoice, ...]:
+        return self.available_model_choices
 
-    def cycle_scoped_model(self) -> ModelChoice:
-        if not self.scoped_model_choices:
-            raise ValueError("No scoped models configured.")
+    def cycle_model(self) -> ModelChoice:
+        choices = self.model_cycle_choices()
+        if not choices:
+            raise ValueError("No providers with usable credentials are configured.")
         current = ModelChoice(provider_name=self.provider_name, model=self.model)
         try:
-            index = self.scoped_model_choices.index(current)
+            index = choices.index(current)
         except ValueError:
             index = -1
-        choice = self.scoped_model_choices[(index + 1) % len(self.scoped_model_choices)]
+        choice = choices[(index + 1) % len(choices)]
         self.set_model_choice(choice)
         return choice
 
@@ -2695,7 +2684,7 @@ async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
             "Newline": "shift+enter",
             "Sessions": "ctrl+r",
             "Context": "ctrl+l",
-            "Thinking": "shift+tab",
+            "Thinking": "ctrl+f",
             "Model": "ctrl+p",
             "Cancel": "escape",
         }
@@ -3009,9 +2998,6 @@ def test_tui_app_falls_back_to_codeyellow_when_theme_is_missing(
 
     assert app.theme == "codeyellow"
     assert any("missing-theme" in item.text for item in app.state.items if item.role == "status")
-    # The fallback must not be persisted over the user's configured theme:
-    # if the theme file reappears, their choice should be honored again.
-    assert not tui_settings_path().exists()
 
 
 def test_tui_app_uses_light_theme_css_variables() -> None:
@@ -3369,7 +3355,7 @@ async def test_tui_app_clears_activity_status_on_error() -> None:
 
 
 @pytest.mark.anyio
-async def test_textual_theme_change_persists_tau_theme(
+async def test_textual_theme_change_applies_without_persisting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
@@ -3380,7 +3366,8 @@ async def test_textual_theme_change_persists_tau_theme(
         await pilot.pause()
 
     assert app.tui_settings.theme == "tau-light"
-    assert tui_settings_path().read_text(encoding="utf-8").find('"theme": "tau-light"') != -1
+    # The TUI has no durable settings file; theme changes are session-only.
+    assert not (tmp_path / ".tau" / "tui.json").exists()
 
 
 @pytest.mark.anyio
@@ -3548,7 +3535,6 @@ async def test_tui_app_theme_command_opens_picker_and_persists_selection(
 
         assert app.tui_settings.theme == "tau-light"
         assert app.theme == "tau-light"
-        assert tui_settings_path().read_text(encoding="utf-8").find('"theme": "tau-light"') != -1
         assert app.get_theme_variable_defaults()["tau-screen-background"] == "#ffffff"
 
 
@@ -3991,7 +3977,6 @@ async def test_tui_app_theme_command_argument_updates_theme_and_persists(
 
         assert app.tui_settings.theme == "tau-light"
         assert app.theme == "tau-light"
-        assert tui_settings_path().read_text(encoding="utf-8").find('"theme": "tau-light"') != -1
         assert app.get_theme_variable_defaults()["tau-screen-background"] == "#ffffff"
 
 
@@ -6510,7 +6495,7 @@ async def test_tui_login_openai_codex_saves_oauth_credentials(
 
 
 @pytest.mark.anyio
-async def test_tui_login_custom_provider_writes_catalog_and_preferences(
+async def test_tui_login_custom_provider_only_stores_api_key(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -6532,14 +6517,11 @@ async def test_tui_login_custom_provider_writes_catalog_and_preferences(
         )
 
     paths = TauPaths(home=tmp_path / ".tau")
-    catalog = user_catalog_path(paths).read_text(encoding="utf-8")
-    settings = load_provider_settings(paths)
+    catalog = catalog_path(paths)
 
-    assert 'name = "nebius"' in catalog
-    assert 'display_name = "Nebius AI Studio"' in catalog
-    assert 'base_url = "https://api.studio.nebius.ai/v1"' in catalog
-    assert 'models = ["deepseek-ai/DeepSeek-V4-Pro", "Qwen/Qwen3-Coder"]' in catalog
-    assert settings.get_provider("nebius").default_model == "deepseek-ai/DeepSeek-V4-Pro"
+    # Login stores the API key only; the catalog file is untouched.
+    body = catalog.read_text(encoding="utf-8")
+    assert 'name = "nebius"' not in body
     assert FileCredentialStore(tmp_path / ".tau" / "credentials.json").get("nebius") == (
         "stored-nebius-key"
     )
@@ -6562,26 +6544,12 @@ async def test_tui_login_custom_provider_opens_from_slash_command() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_login_preserves_existing_scoped_models_and_providers(
+async def test_tui_login_preserves_existing_providers(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
     tau_home = tmp_path / ".tau"
-    settings = ProviderSettings(
-        default_provider="local",
-        providers=(
-            OpenAICompatibleProviderConfig(
-                name="local",
-                base_url="http://localhost:11434/v1",
-                api_key_env="LOCAL_API_KEY",
-                models=("qwen",),
-                default_model="qwen",
-            ),
-        ),
-        scoped_models=(ScopedModelConfig(provider="local", model="qwen"),),
-    )
-    save_provider_settings(settings)
     session = FakeSession()
     app = _tui_app(session)
     entry = builtin_provider_entry("opencode-go")
@@ -6590,11 +6558,10 @@ async def test_tui_login_preserves_existing_scoped_models_and_providers(
     async with app.run_test():
         app._handle_login_result(entry, "stored-opencode-key")
 
+    # Login never touches the catalog; only the credential file is written.
     saved = load_provider_settings()
-    assert saved.default_provider == "local"
-    assert saved.get_provider("local").default_model == "qwen"
+    assert saved.default_provider == "openai-codex"
     assert saved.get_provider("opencode-go").credential_name == "opencode"
-    assert saved.scoped_models == (ScopedModelConfig(provider="local", model="qwen"),)
     assert FileCredentialStore(tau_home / "credentials.json").get("opencode") == (
         "stored-opencode-key"
     )
@@ -6673,7 +6640,7 @@ async def test_tui_logout_removes_stored_api_key(
     assert session.provider_reload_count == 1
     assert notifications == [
         "Removed stored API key for OpenCode Go. "
-        "Environment variables and providers.json config are unchanged."
+        "Environment variables and catalog config are unchanged."
     ]
 
 
@@ -6973,7 +6940,7 @@ async def test_tui_model_opens_interactive_picker() -> None:
 
         assert isinstance(app.screen, ModelPickerScreen)
         tabs = app.screen.query_one("#model-picker-tabs", Static)
-        assert str(tabs.render()) == "Tabs: ● All models  ○ Scoped models"
+        assert str(tabs.render()) == "All configured models"
         model_list = app.screen.query_one("#model-picker-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in model_list.children]
         assert labels == [
@@ -6990,12 +6957,6 @@ async def test_tui_model_opens_interactive_picker() -> None:
         labels = [str(item.query_one(Label).render()) for item in model_list.children]
         assert labels == ["  local:local-model"]
 
-        await pilot.press("tab")
-        await pilot.pause()
-        assert str(tabs.render()) == "Tabs: ○ All models  ● Scoped models"
-
-        await pilot.press("tab")
-        await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
 
@@ -7006,7 +6967,7 @@ async def test_tui_model_opens_interactive_picker() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_scoped_models_picker_toggles_scoped_models_without_switching_model() -> None:
+async def test_tui_scoped_models_command_is_unknown() -> None:
     session = FakeSession()
     app = _tui_app(session)
 
@@ -7016,29 +6977,7 @@ async def test_tui_scoped_models_picker_toggles_scoped_models_without_switching_
         await pilot.press("enter")
         await pilot.pause()
 
-        assert isinstance(app.screen, ModelPickerScreen)
-        tabs = app.screen.query_one("#model-picker-tabs", Static)
-        assert str(tabs.render()) == (
-            "Scoped models setup — Enter toggles membership; active model is unchanged"
-        )
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert session.scoped_model_choices == (
-            ModelChoice(provider_name="opencode", model="fake-model"),
-        )
-        assert session.provider_name == "openai"
-        assert session.model == "fake-model"
-        model_list = app.screen.query_one("#model-picker-list", ListView)
-        labels = [str(item.query_one(Label).render()) for item in model_list.children]
-        assert labels[0] == "  opencode:fake-model [scoped]"
-
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert not session.scoped_model_choices
-        assert session.provider_name == "openai"
-        assert session.model == "fake-model"
+        assert not isinstance(app.screen, ModelPickerScreen)
 
 
 @pytest.mark.anyio
@@ -7753,7 +7692,7 @@ async def test_tui_app_cycles_thinking_from_keybinding() -> None:
     app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        await pilot.press("shift+tab")
+        await pilot.press("ctrl+f")
         await pilot.pause()
 
     assert session.thinking_level == "high"
@@ -7774,7 +7713,7 @@ async def test_tui_app_cycles_thinking_is_noop_with_single_level() -> None:
     app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        await pilot.press("shift+tab")
+        await pilot.press("ctrl+f")
         await pilot.pause()
 
     # The model exposes a single thinking level: cycling changes nothing and
@@ -7797,7 +7736,7 @@ async def test_tui_app_cycles_thinking_from_keybinding_while_running() -> None:
 
     async with app.run_test() as pilot:
         app.state.running = True
-        await pilot.press("shift+tab")
+        await pilot.press("ctrl+f")
         await pilot.pause()
 
     assert session.thinking_level == "high"
@@ -7805,13 +7744,9 @@ async def test_tui_app_cycles_thinking_from_keybinding_while_running() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_cycles_scoped_model_from_keybinding() -> None:
+async def test_tui_app_cycles_model_from_keybinding() -> None:
     session = FakeSession()
     session.provider_name = "opencode"
-    session.scoped_model_choices = (
-        ModelChoice(provider_name="opencode", model="fake-model"),
-        ModelChoice(provider_name="opencode", model="other-model"),
-    )
     app = _tui_app(session)
     notifications: list[str] = []
 
@@ -7831,15 +7766,11 @@ async def test_tui_app_cycles_scoped_model_from_keybinding() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_cycles_scoped_model_without_redrawing_transcript() -> None:
+async def test_tui_app_cycles_model_without_redrawing_transcript() -> None:
     session = FakeSession(
         messages=[UserMessage(content=f"Earlier prompt {index}") for index in range(120)]
     )
     session.provider_name = "opencode"
-    session.scoped_model_choices = (
-        ModelChoice(provider_name="opencode", model="fake-model"),
-        ModelChoice(provider_name="opencode", model="other-model"),
-    )
     app = _tui_app(session)
     transcript_refreshes = 0
 
@@ -7869,7 +7800,7 @@ async def test_tui_app_uses_configured_thinking_keybinding() -> None:
     )
 
     async with app.run_test() as pilot:
-        await pilot.press("shift+tab")
+        await pilot.press("ctrl+f")
         await pilot.pause()
         assert session.thinking_level == "medium"
 
@@ -8268,7 +8199,6 @@ async def test_run_tui_app_falls_back_to_first_credentialed_provider(
     )
     monkeypatch.setattr(tui_app, "FileCredentialStore", lambda: FakeCredentialStore())
     monkeypatch.setattr(tui_app, "load_provider_settings", lambda: settings)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
     monkeypatch.setattr(
         tui_app,
         "create_model_provider",
@@ -8435,7 +8365,6 @@ async def test_run_tui_app_surfaces_startup_provider_error_in_login_message(
         raise RuntimeError("connection to provider backend refused")
 
     monkeypatch.setattr(tui_app, "load_provider_settings", lambda: settings)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
     monkeypatch.setattr(tui_app, "create_model_provider", _boom)
     monkeypatch.setattr(tui_app, "LoginRequiredProvider", lambda message: FakeProvider())
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
@@ -8534,7 +8463,6 @@ async def test_run_tui_app_ignores_latest_directory_provider_model_for_new_sessi
     )
     monkeypatch.setenv("OPENAI_API_KEY", "stored-key")
     monkeypatch.setattr(tui_app, "load_provider_settings", lambda: settings)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
     monkeypatch.setattr(
         tui_app,
         "create_model_provider",
@@ -8544,7 +8472,6 @@ async def test_run_tui_app_ignores_latest_directory_provider_model_for_new_sessi
     )
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
 
     await tui_app.run_tui_app(
         cwd=tmp_path, model=None, session_manager=cast(SessionManager, FakeManager())
@@ -8643,12 +8570,10 @@ async def test_run_tui_app_does_not_start_new_session_from_scoped_model(
                 default_model="gpt-5.5",
             ),
         ),
-        scoped_models=(ScopedModelConfig(provider="openai-codex", model="gpt-5.5"),),
     )
     monkeypatch.setenv("OPENAI_API_KEY", "stored-key")
     monkeypatch.setattr(tui_app, "FileCredentialStore", lambda: FakeCredentialStore())
     monkeypatch.setattr(tui_app, "load_provider_settings", lambda: settings)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
     monkeypatch.setattr(
         tui_app,
         "create_model_provider",
@@ -8751,7 +8676,6 @@ async def test_run_tui_app_creates_new_session_by_default(
     )
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
 
     await tui_app.run_tui_app(
         model=None,
@@ -8846,7 +8770,6 @@ async def test_run_tui_app_returns_session_id_when_persisted(
     )
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
 
     manager = FakeManager()
     manager.persisted = False
@@ -8931,7 +8854,6 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
     )
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
 
     await tui_app.run_tui_app(
         cwd=tmp_path,
@@ -8941,7 +8863,7 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
     )
 
     assert calls == [
-        f"prepare:{tmp_path}:gpt-5.6-luna:openai-codex",
+        f"prepare:{tmp_path}:gpt-5.6-sol:openai-codex",
         "load:LoginRequiredProvider",
         "run",
     ]
@@ -9028,7 +8950,6 @@ async def test_run_tui_app_resumes_explicit_session(
     )
     monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
     monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
 
     await tui_app.run_tui_app(
         model=None,
@@ -9116,7 +9037,6 @@ async def test_run_tui_app_ignores_uncredentialed_provider_when_matching_resume_
     monkeypatch.delenv("LOCAL_API_KEY", raising=False)
     monkeypatch.setattr(tui_app, "FileCredentialStore", lambda: FakeCredentialStore())
     monkeypatch.setattr(tui_app, "load_provider_settings", lambda: settings)
-    monkeypatch.setattr(tui_app, "load_tui_settings", lambda: TuiSettings())
     monkeypatch.setattr(
         tui_app,
         "create_model_provider",

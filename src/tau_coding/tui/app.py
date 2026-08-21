@@ -64,7 +64,7 @@ from tau_agent.provider_events import (
 )
 from tau_agent.tools import AgentTool
 from tau_agent.types import JSONValue
-from tau_coding.catalog_loader import save_user_catalog_entries
+from tau_coding.catalog_loader import catalog_path
 from tau_coding.commands import (
     LOGIN_PROVIDER_ALIASES,
     CommandRegistry,
@@ -108,15 +108,12 @@ from tau_coding.provider_catalog import (
 from tau_coding.provider_config import (
     OpenAICompatibleProviderConfig,
     ProviderConfig,
+    ProviderConfigError,
     ProviderSelection,
     load_provider_settings,
-    provider_config_from_catalog_entry,
     provider_has_usable_credentials,
     resolve_provider_selection,
     resolve_startup_thinking_level,
-    save_provider_settings,
-    upsert_openai_compatible_provider,
-    upsert_saved_provider,
 )
 from tau_coding.provider_runtime import create_model_provider
 from tau_coding.resources import TauResourcePaths
@@ -148,8 +145,6 @@ from tau_coding.tui.config import (
     TuiSettings,
     TuiTheme,
     TuiThemeName,
-    load_tui_settings,
-    save_tui_settings,
 )
 from tau_coding.tui.external_editor import ExternalEditorError, open_text_in_editor
 from tau_coding.tui.file_drop import normalize_dropped_paths
@@ -189,7 +184,7 @@ COMPLETION_WIDGET_CHROME_LINES = 3
 PROMPT_PLACEHOLDER = ""
 NO_STORED_CREDENTIALS_MESSAGE = (
     "No stored credentials to remove. /logout only removes credentials saved by /login; "
-    "environment variables and providers.json config are unchanged."
+    "environment variables and catalog config are unchanged."
 )
 
 
@@ -591,7 +586,7 @@ class PromptInput(TextArea):
         self._completion_target().action_cycle_thinking()
 
     def action_cycle_model(self) -> None:
-        """Cycle the app-level scoped model."""
+        """Cycle the app-level model."""
         self._completion_target().action_cycle_model()
 
     def action_toggle_tool_results(self) -> None:
@@ -2341,7 +2336,7 @@ class ModelPickerSearchInput(Input):
         self._picker().action_cursor_down()
 
     def action_toggle_mode(self) -> None:
-        """Toggle between all and scoped picker modes."""
+        """Toggle the model picker between keyboard and search modes."""
         self._picker().action_toggle_mode()
 
     def action_cancel(self) -> None:
@@ -2354,8 +2349,6 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("tab", "toggle_mode", "Mode", show=False, priority=True),
-        Binding("ctrl+i", "toggle_mode", "Mode", show=False, priority=True),
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "accept_model", "Select", show=False),
@@ -2365,33 +2358,25 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         self,
         choices: Sequence[ModelChoice],
         *,
-        scoped_choices: Sequence[ModelChoice],
         current_model: str,
         provider_name: str,
         theme: TuiTheme,
         provider_display_names: Mapping[str, str] | None = None,
-        on_toggle_scoped: Callable[[ModelChoice], Sequence[ModelChoice]] | None = None,
-        picker_kind: Literal["model", "scoped"] = "model",
     ) -> None:
         super().__init__()
         self.choices = tuple(dict.fromkeys(choices))
-        self.scoped_choices = tuple(dict.fromkeys(scoped_choices))
         self.visible_choices = self.choices
         self.current_model = current_model
         self.provider_name = provider_name
         self.provider_display_names = dict(provider_display_names or {})
         self.theme = theme
-        self.on_toggle_scoped = on_toggle_scoped
-        self.picker_kind = picker_kind
-        self.mode: Literal["all", "scoped"] = "all"
         self.search_value = ""
 
     def compose(self) -> ComposeResult:
         """Compose the model picker."""
         with Vertical(id="model-picker"):
             provider_label = self.provider_display_names.get(self.provider_name, self.provider_name)
-            title = f"Model: {provider_label}" if self.picker_kind == "model" else "Scoped models"
-            yield Static(title, id="model-picker-title")
+            yield Static(f"Model: {provider_label}", id="model-picker-title")
             yield Static("", id="model-picker-tabs")
             yield ModelPickerSearchInput(placeholder="Search models", id="model-picker-search")
             yield ListView(
@@ -2402,7 +2387,6 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
                                 choice,
                                 current_model=self.current_model,
                                 current_provider=self.provider_name,
-                                scoped=choice in self.scoped_choices,
                                 provider_display_names=self.provider_display_names,
                             ),
                             markup=False,
@@ -2459,9 +2443,6 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         elif event.key == "enter":
             event.stop()
             self.action_accept_model()
-        elif event.key in {"tab", "ctrl+i"}:
-            event.stop()
-            self.action_toggle_mode()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle the selected row."""
@@ -2480,25 +2461,6 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         """Select the highlighted model."""
         self._select_visible_choice()
 
-    def action_toggle_mode(self) -> None:
-        """Toggle between all models and scoped models."""
-        if self.picker_kind != "model":
-            return
-        self.mode = "scoped" if self.mode == "all" else "all"
-        self._refresh_model_list()
-
-    def action_toggle_scoped(self) -> None:
-        """Add or remove the highlighted model from scoped models."""
-        if self.on_toggle_scoped is None or not self.visible_choices:
-            return
-        model_list = self.query_one("#model-picker-list", ListView)
-        index = model_list.index
-        if index is None:
-            return
-        choice = self.visible_choices[index]
-        self.scoped_choices = tuple(dict.fromkeys(self.on_toggle_scoped(choice)))
-        self._refresh_model_list()
-
     def action_cancel(self) -> None:
         """Close without selecting a model."""
         self.dismiss(None)
@@ -2510,16 +2472,11 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         index = model_list.index
         if index is None:
             return
-        choice = self.visible_choices[index]
-        if self.picker_kind == "scoped":
-            self.action_toggle_scoped()
-            return
-        self.dismiss(choice)
+        self.dismiss(self.visible_choices[index])
 
     def _refresh_model_list(self) -> None:
-        base_choices = self.scoped_choices if self.mode == "scoped" else self.choices
         self.visible_choices = _filter_model_choices(
-            base_choices,
+            self.choices,
             self.search_value,
             provider_display_names=self.provider_display_names,
         )
@@ -2533,7 +2490,6 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
                             choice,
                             current_model=self.current_model,
                             current_provider=self.provider_name,
-                            scoped=choice in self.scoped_choices,
                             provider_display_names=self.provider_display_names,
                         ),
                         markup=False,
@@ -2543,32 +2499,10 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
             ]
         )
         self._reset_model_list_index()
-        scope_count = len(self.scoped_choices)
-        tabs = self.query_one("#model-picker-tabs", Static)
-        if self.picker_kind == "scoped":
-            tabs.update("Scoped models setup — Enter toggles membership; active model is unchanged")
-            help_text = (
-                "No matching models - Enter toggles scoped model"
-                if not self.visible_choices
-                else f"Enter toggles scoped model - {scope_count} scoped"
-            )
-        elif self.mode == "all":
-            tabs.update("Tabs: ● All models  ○ Scoped models")
-            help_text = (
-                "all models: no matching models - Tab switches to scoped models"
-                if not self.visible_choices
-                else (
-                    "All models - Enter selects active model - Tab switches tabs - "
-                    f"{scope_count} scoped"
-                )
-            )
-        else:
-            tabs.update("Tabs: ○ All models  ● Scoped models")
-            help_text = (
-                "scoped models: no matching models - Tab switches to all models"
-                if not self.visible_choices
-                else "Scoped models - Enter selects active model - Tab switches tabs"
-            )
+        self.query_one("#model-picker-tabs", Static).update("All configured models")
+        help_text = (
+            "No matching models" if not self.visible_choices else "Enter selects the active model"
+        )
         self.query_one("#model-picker-help", Static).update(help_text)
 
 
@@ -3617,7 +3551,6 @@ class TauTuiApp(App[None]):
         if self.tui_settings.theme == tau_theme:
             return
         self._replace_tui_settings(theme=tau_theme)
-        save_tui_settings(self.tui_settings)
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
         """Return Tau-specific CSS variables for the selected TUI theme."""
@@ -3930,8 +3863,6 @@ class TauTuiApp(App[None]):
                 self._open_model_picker()
             if command.tools_picker_requested:
                 self._open_tools_reference()
-            if command.scoped_models_picker_requested:
-                self._open_scoped_models_picker()
             if command.skills_picker_requested:
                 self._open_skills_picker()
             if command.theme_picker_requested:
@@ -4677,7 +4608,6 @@ class TauTuiApp(App[None]):
             self._notify(f"Unknown theme: {theme}", severity="error")
             return
         self._replace_tui_settings(theme=theme)
-        save_tui_settings(self.tui_settings)
         self.theme = theme
         self._refresh()
 
@@ -5178,11 +5108,11 @@ class TauTuiApp(App[None]):
         self.run_worker(self._cycle_thinking_level(), exclusive=False)
 
     def action_cycle_model(self) -> None:
-        """Cycle through scoped models."""
+        """Cycle through all available models across providers."""
         if self.state.running:
             self._notify("Tau is already working. Press Escape to cancel.")
             return
-        self.run_worker(self._cycle_scoped_model(), exclusive=False)
+        self.run_worker(self._cycle_model(), exclusive=False)
 
     def action_toggle_tool_results(self) -> None:
         """Toggle inline tool result details without rebuilding unrelated history."""
@@ -5402,40 +5332,24 @@ class TauTuiApp(App[None]):
             return
         if result is None:
             return
-        provider = OpenAICompatibleProviderConfig(
-            name=result.provider_name,
-            base_url=result.base_url.rstrip("/"),
-            api_key_env=result.api_key_env,
-            credential_name=result.provider_name,
-            models=result.models,
-            default_model=result.default_model,
-        )
-        catalog_entry = ProviderCatalogEntry(
-            name=provider.name,
-            display_name=result.display_name,
-            kind="openai-compatible",
-            base_url=provider.base_url,
-            api_key_env=provider.api_key_env,
-            credential_name=provider.credential_name,
-            models=provider.models,
-            default_model=provider.default_model,
-            docs_url=provider.base_url,
-        )
         try:
-            save_user_catalog_entries((catalog_entry,))
-            FileCredentialStore().set(provider.credential_name or provider.name, result.api_key)
-            settings = load_provider_settings()
-            updated = upsert_openai_compatible_provider(settings, provider, set_default=False)
-            save_provider_settings(updated)
+            # Login only stores the API key under the provider's credential
+            # name. Provider definitions live in the catalog file and are
+            # edited by hand; the key is usable once a matching catalog entry
+            # with the same credential_name exists.
+            FileCredentialStore().set(result.provider_name, result.api_key)
             self.session.reload_provider_settings()
             try:
-                self.session.set_provider(provider.name, persist_default=False)
-            except TypeError:
-                self.session.set_provider(provider.name)
+                self.session.set_provider(result.provider_name)
+            except ProviderConfigError:
+                self.session.set_provider(self.session.provider_name)
         except Exception as exc:  # noqa: BLE001 - surface login failures in the TUI
             self._notify(f"Could not save custom provider: {exc}", severity="error")
             return
-        self._notify(f"Saved custom provider {result.display_name}.")
+        self._notify(
+            f"Saved API key for {result.display_name}. Add a provider entry with "
+            f"credential_name = {result.provider_name!r} to {catalog_path()} to use it."
+        )
         self._refresh()
 
     def _open_login(self, provider_name: str, *, method: str | None = None) -> None:
@@ -5495,13 +5409,8 @@ class TauTuiApp(App[None]):
             return
         try:
             FileCredentialStore().set(entry.credential_name, api_key)
-            provider = provider_config_from_catalog_entry(entry.name)
-            upsert_saved_provider(provider, set_default=False)
             self.session.reload_provider_settings()
-            try:
-                self.session.set_provider(entry.name, persist_default=False)
-            except TypeError:
-                self.session.set_provider(entry.name)
+            self.session.set_provider(entry.name)
         except Exception as exc:  # noqa: BLE001 - surface login failures in the TUI
             self._notify(f"Could not save login: {exc}", severity="error")
             return
@@ -5533,13 +5442,8 @@ class TauTuiApp(App[None]):
             return
         try:
             FileCredentialStore().set_oauth(entry.credential_name, credential)
-            provider = provider_config_from_catalog_entry(entry.name)
-            upsert_saved_provider(provider, set_default=False)
             self.session.reload_provider_settings()
-            try:
-                self.session.set_provider(entry.name, persist_default=False)
-            except TypeError:
-                self.session.set_provider(entry.name)
+            self.session.set_provider(entry.name)
         except Exception as exc:  # noqa: BLE001 - surface login failures in the TUI
             self._notify(f"Could not save login: {exc}", severity="error")
             return
@@ -5590,7 +5494,7 @@ class TauTuiApp(App[None]):
         else:
             self._notify(
                 f"Removed stored API key for {entry.display_name}. "
-                "Environment variables and providers.json config are unchanged."
+                "Environment variables and catalog config are unchanged."
             )
         self._refresh()
 
@@ -5628,53 +5532,13 @@ class TauTuiApp(App[None]):
         self.push_screen(
             ModelPickerScreen(
                 choices,
-                scoped_choices=tuple(getattr(self.session, "scoped_model_choices", ())),
                 current_model=self.session.model,
                 provider_name=self.session.provider_name,
                 theme=self.tui_settings.resolved_theme,
                 provider_display_names=getattr(self.session, "provider_display_names", {}),
-                on_toggle_scoped=None,
-                picker_kind="model",
             ),
             callback=self._handle_model_picker_result,
         )
-
-    def _open_scoped_models_picker(self) -> None:
-        choices = self._available_model_choices()
-        if not choices:
-            self._notify(
-                "No configured providers are usable. Run /login to set up a provider.",
-                severity="warning",
-            )
-            return
-        self.push_screen(
-            ModelPickerScreen(
-                choices,
-                scoped_choices=tuple(getattr(self.session, "scoped_model_choices", ())),
-                current_model=self.session.model,
-                provider_name=self.session.provider_name,
-                theme=self.tui_settings.resolved_theme,
-                provider_display_names=getattr(self.session, "provider_display_names", {}),
-                on_toggle_scoped=self._toggle_scoped_model,
-                picker_kind="scoped",
-            ),
-            callback=self._handle_scoped_models_picker_result,
-        )
-
-    def _toggle_scoped_model(self, choice: ModelChoice) -> Sequence[ModelChoice]:
-        toggle_scoped_model = getattr(self.session, "toggle_scoped_model", None)
-        if toggle_scoped_model is None:
-            self._notify("Scoped model controls are not available.", severity="warning")
-            return tuple(getattr(self.session, "scoped_model_choices", ()))
-        try:
-            return tuple(toggle_scoped_model(choice))
-        except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
-            self._notify(f"Could not update scoped models: {exc}", severity="error")
-            return tuple(getattr(self.session, "scoped_model_choices", ()))
-
-    def _handle_scoped_models_picker_result(self, choice: ModelChoice | None) -> None:
-        del choice
-        self._refresh_chrome()
 
     def _handle_model_picker_result(self, choice: ModelChoice | None) -> None:
         if choice is None:
@@ -5721,17 +5585,17 @@ class TauTuiApp(App[None]):
             return
         self._refresh_chrome()
 
-    async def _cycle_scoped_model(self) -> None:
-        cycler = getattr(self.session, "cycle_scoped_model", None)
+    async def _cycle_model(self) -> None:
+        cycler = getattr(self.session, "cycle_model", None)
         if cycler is None:
-            self._notify("Scoped model controls are not available.", severity="warning")
+            self._notify("Model controls are not available.", severity="warning")
             return
         try:
             result = cycler()
             if isawaitable(result):
                 result = await result
         except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
-            self._notify(f"Could not switch scoped model: {exc}", severity="error")
+            self._notify(f"Could not switch model: {exc}", severity="error")
             return
         self._refresh_chrome()
 
@@ -6418,7 +6282,6 @@ def _model_picker_label(
     *,
     current_model: str,
     current_provider: str,
-    scoped: bool = False,
     provider_display_names: Mapping[str, str] | None = None,
 ) -> str:
     marker = (
@@ -6426,9 +6289,8 @@ def _model_picker_label(
         if (choice.provider_name == current_provider and choice.model == current_model)
         else "  "
     )
-    suffix = " [scoped]" if scoped else ""
     provider_label = (provider_display_names or {}).get(choice.provider_name, choice.provider_name)
-    return f"{marker}{provider_label}:{choice.model}{suffix}"
+    return f"{marker}{provider_label}:{choice.model}"
 
 
 def _filter_login_providers(
@@ -6476,9 +6338,9 @@ def _command_output_title(command_text: str) -> str:
 
 
 def _is_thinking_cycle_key(key: str, configured_key: str) -> bool:
-    if key == configured_key:
-        return True
-    return configured_key == "shift+tab" and key == "backtab"
+    # Backtab (shift+tab) is sent by some terminals for the forward-thinking
+    # legacy binding; the default is ctrl+f.
+    return key == configured_key
 
 
 def _render_queued_messages(state: TuiState, *, theme: TuiTheme) -> Group:
@@ -6795,14 +6657,6 @@ def _selection_from_session_record(settings: Any, record: Any | None) -> Provide
         except Exception:
             return None
 
-    for choice in _usable_scoped_startup_choices(settings):
-        if choice.model == record_model:
-            return resolve_provider_selection(
-                settings,
-                provider_name=choice.provider_name,
-                model=choice.model,
-            )
-
     credential_store = FileCredentialStore()
     for provider in settings.providers:
         if record_model not in provider.models:
@@ -6811,22 +6665,6 @@ def _selection_from_session_record(settings: Any, record: Any | None) -> Provide
             continue
         return ProviderSelection(provider=provider, model=record_model)
     return None
-
-
-def _usable_scoped_startup_choices(settings: Any) -> tuple[ModelChoice, ...]:
-    credential_store = FileCredentialStore()
-    choices: list[ModelChoice] = []
-    for item in settings.scoped_models:
-        try:
-            provider = settings.get_provider(item.provider)
-        except Exception:
-            continue
-        if item.model not in provider.models:
-            continue
-        if not provider_has_usable_credentials(provider, credential_reader=credential_store):
-            continue
-        choices.append(ModelChoice(provider_name=item.provider, model=item.model))
-    return tuple(choices)
 
 
 def _startup_inference_provider(
@@ -6966,7 +6804,7 @@ async def run_tui_app(
         )
         app = TauTuiApp(
             session,
-            tui_settings=load_tui_settings(),
+            tui_settings=TuiSettings(),
             startup_message=startup_message,
             startup_notices=all_startup_notices,
             initial_prompt=initial_prompt,

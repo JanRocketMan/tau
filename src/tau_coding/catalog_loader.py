@@ -1,15 +1,19 @@
-"""Load Tau's provider catalog from packaged and user TOML files."""
+"""Load Tau's provider catalog from the packaged TOML file.
+
+The packaged ``src/tau_coding/data/catalog.toml`` is Tau's single source of
+provider configuration. It carries the default provider, provider display
+labels, full provider definitions, per-provider runtime preferences, and the
+web-search providers used by the optional ``search`` tool. Tau only reads the
+catalog; edit the file directly to change providers or preferences.
+"""
 
 from __future__ import annotations
 
-import json
 import tomllib
-from collections.abc import Iterable, Mapping
-from contextlib import suppress
-from functools import cache
+from collections.abc import Mapping
 from importlib.resources import files
+from os import environ
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -38,7 +42,6 @@ from tau_coding.provider_catalog import (
 from tau_coding.thinking import ThinkingLevel, ThinkingParameter
 
 CATALOG_SCHEMA_VERSION = 1
-USER_CATALOG_FILENAME = "catalog.toml"
 
 _NonEmptyString = Annotated[
     str,
@@ -46,6 +49,8 @@ _NonEmptyString = Annotated[
 ]
 _NonEmptyStringTuple = Annotated[tuple[_NonEmptyString, ...], Field(min_length=1)]
 _PositiveInt = Annotated[StrictInt, Field(gt=0)]
+_NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
+_PositiveFloat = Annotated[float, Field(gt=0)]
 _NonNegativeFloat = Annotated[float, Field(ge=0)]
 
 
@@ -105,6 +110,12 @@ class _CatalogProvider(BaseModel):
     thinking_parameter: ThinkingParameter | None = None
     removed_models: tuple[_NonEmptyString, ...] = ()
     auth_methods: tuple[AuthMethod, ...] = ("api_key",)
+    timeout_seconds: _PositiveFloat | None = None
+    stream_idle_timeout_seconds: _PositiveFloat | None = None
+    max_retries: _NonNegativeInt | None = None
+    max_retry_delay_seconds: _NonNegativeFloat | None = None
+    thinking_defaults: dict[_NonEmptyString, ThinkingLevel] = {}
+    inference_providers: dict[_NonEmptyString, _NonEmptyString] = {}
 
 
 class _CatalogSearchProvider(BaseModel):
@@ -124,6 +135,7 @@ class _CatalogFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1]
+    default_provider: _NonEmptyString | None = None
     provider_labels: dict[_NonEmptyString, _NonEmptyString] = {}
     providers: tuple[_CatalogProvider, ...] = ()
     default_search_provider: _NonEmptyString | None = None
@@ -135,81 +147,80 @@ def builtin_catalog_resource_text() -> str:
     return files("tau_coding").joinpath("data/catalog.toml").read_text(encoding="utf-8")
 
 
-@cache
+def catalog_path(paths: TauPaths | None = None) -> Path:
+    """Return the single catalog file path.
+
+    Tau keeps one catalog file: the packaged ``data/catalog.toml``. Callers
+    that need an isolated catalog (tests, sandboxes) can point
+    ``TauPaths.catalog_path`` at another file, or set the
+    ``TAU_CATALOG_PATH`` environment variable to redirect every read and
+    write (useful when the package directory is not writable).
+    """
+    resolved = paths or TauPaths()
+    if resolved.catalog_path is not None:
+        return resolved.catalog_path
+    override = environ.get("TAU_CATALOG_PATH")
+    if override:
+        return Path(override)
+    return Path(files("tau_coding").joinpath("data/catalog.toml").__fspath__())
+
+
 def builtin_catalog() -> tuple[ProviderCatalogEntry, ...]:
-    """Return Tau's built-in provider catalog from the packaged data file."""
-    raw = _builtin_raw()
+    """Return the packaged catalog entries."""
+    path = catalog_path()
+    raw = _raw_catalog(path)
     filtered = _apply_model_tombstones(raw, base=raw)
-    return _entries_from_raw(filtered, source="built-in catalog.toml")
+    return _entries_from_raw(filtered, source=str(path))
 
 
 def builtin_search_catalog() -> tuple[SearchCatalogEntry, ...]:
-    """Return Tau's built-in search provider catalog from the packaged file."""
-    return _search_entries_from_raw(_builtin_raw(), source="built-in catalog.toml")
+    """Return the packaged search-provider catalog."""
+    path = catalog_path()
+    return _search_entries_from_raw(_raw_catalog(path), source=str(path))
+
+
+def effective_catalog(paths: TauPaths | None = None) -> tuple[ProviderCatalogEntry, ...]:
+    """Return catalog entries from the single catalog file."""
+    path = catalog_path(paths)
+    raw = _raw_catalog(path)
+    filtered = _apply_model_tombstones(raw, base=raw)
+    return _entries_from_raw(filtered, source=str(path))
 
 
 def effective_search_catalog(
     paths: TauPaths | None = None,
 ) -> tuple[SearchCatalogEntry, ...]:
-    """Return the builtin search catalog with the user catalog overlaid."""
-    path = user_catalog_path(paths)
-    if not path.exists():
-        return builtin_search_catalog()
-    overlay_raw = _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
-    _validate_catalog_root(overlay_raw, source=str(path))
-    merged = _merge_raw_catalogs(_builtin_raw(), overlay_raw)
-    return _search_entries_from_raw(merged, source=str(path))
+    """Return search-provider catalog entries from the single catalog file."""
+    path = catalog_path(paths)
+    return _search_entries_from_raw(_raw_catalog(path), source=str(path))
 
 
 def default_search_provider(paths: TauPaths | None = None) -> str:
     """Return the configured default web-search provider name.
 
-    Reads the ``default_search_provider`` root key from the effective catalog
-    (builtin overlaid with the user catalog) and falls back to
-    `DEFAULT_SEARCH_PROVIDER` when it is absent.
+    Reads the ``default_search_provider`` root key from the catalog file and
+    falls back to `DEFAULT_SEARCH_PROVIDER` when it is absent.
     """
-    raw = _effective_raw(paths)
-    name = raw.get("default_search_provider")
+    path = catalog_path(paths)
+    name = _raw_catalog(path).get("default_search_provider")
     if isinstance(name, str) and name.strip():
         return name.strip()
     return DEFAULT_SEARCH_PROVIDER
 
 
-def _effective_raw(paths: TauPaths | None = None) -> dict[str, Any]:
-    """Return the merged builtin + user catalog as raw parsed TOML data."""
-    path = user_catalog_path(paths)
-    if not path.exists():
-        return _builtin_raw()
-    overlay_raw = _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
-    _validate_catalog_root(overlay_raw, source=str(path))
-    return _merge_raw_catalogs(_builtin_raw(), overlay_raw)
-
-
-def user_catalog_path(paths: TauPaths | None = None) -> Path:
-    """Return the user-level catalog overlay path."""
-    return (paths or TauPaths()).home / USER_CATALOG_FILENAME
-
-
-def effective_catalog(paths: TauPaths | None = None) -> tuple[ProviderCatalogEntry, ...]:
-    """Return the builtin catalog with the user's ~/.tau/catalog.toml overlaid."""
-    path = user_catalog_path(paths)
-    if not path.exists():
-        return builtin_catalog()
-    overlay_raw = _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
-    _validate_catalog_root(overlay_raw, source=str(path))
-    builtin_raw = _builtin_raw()
-    merged = _merge_raw_catalogs(builtin_raw, overlay_raw)
-    filtered = _apply_model_tombstones(merged, base=builtin_raw)
-    return _entries_from_raw(filtered, source=str(path))
+def default_provider_name(paths: TauPaths | None = None) -> str | None:
+    """Return the configured default provider name from the catalog file."""
+    path = catalog_path(paths)
+    name = _raw_catalog(path).get("default_provider")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None
 
 
 def effective_provider_labels(paths: TauPaths | None = None) -> dict[str, str]:
     """Return configured provider display labels keyed by canonical provider ID."""
-    path = user_catalog_path(paths)
-    if not path.exists():
-        return {}
-    raw = _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
-    _validate_catalog_root(raw, source=str(path))
+    path = catalog_path(paths)
+    raw = _raw_catalog(path)
     provider_labels = raw.get("provider_labels", {})
     if not isinstance(provider_labels, dict):
         raise CatalogError(f"{path}: provider_labels must be a table")
@@ -227,49 +238,11 @@ def effective_provider_labels(paths: TauPaths | None = None) -> dict[str, str]:
     return labels
 
 
-def save_user_catalog_entries(
-    entries: Iterable[ProviderCatalogEntry],
-    paths: TauPaths | None = None,
-) -> Path:
-    """Upsert full provider definitions into the user-level catalog file."""
-    path = user_catalog_path(paths)
-    if path.exists():
-        raw = _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
-        _validate_catalog_root(raw, source=str(path))
-    else:
-        raw = {"schema_version": CATALOG_SCHEMA_VERSION, "providers": []}
-
-    providers = list(_raw_providers(raw))
-    provider_indexes = {
-        _raw_provider_name(provider): index for index, provider in enumerate(providers)
-    }
-    for entry in entries:
-        raw_provider = _raw_provider_from_entry(entry)
-        if entry.name in provider_indexes:
-            providers[provider_indexes[entry.name]] = raw_provider
-        else:
-            provider_indexes[entry.name] = len(providers)
-            providers.append(raw_provider)
-
-    updated = {
-        "schema_version": raw.get("schema_version", CATALOG_SCHEMA_VERSION),
-        "provider_labels": raw.get("provider_labels", {}),
-        "providers": providers,
-    }
-    default_search = raw.get("default_search_provider")
-    if isinstance(default_search, str) and default_search.strip():
-        updated["default_search_provider"] = default_search
-    search_providers = _raw_search_providers(raw)
-    if search_providers:
-        updated["search_providers"] = search_providers
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_text(path, _catalog_to_toml(updated))
-    return path
-
-
-@cache
-def _builtin_raw() -> dict[str, Any]:
-    return _parse_catalog_text(builtin_catalog_resource_text(), source="built-in catalog.toml")
+def _raw_catalog(path: Path) -> dict[str, Any]:
+    """Return parsed catalog TOML data for one catalog file path."""
+    if not path.exists():
+        return {"schema_version": CATALOG_SCHEMA_VERSION, "providers": []}
+    return _parse_catalog_text(path.read_text(encoding="utf-8"), source=str(path))
 
 
 def _parse_catalog_text(text: str, *, source: str) -> dict[str, Any]:
@@ -282,6 +255,7 @@ def _parse_catalog_text(text: str, *, source: str) -> dict[str, Any]:
 def _validate_catalog_root(raw: dict[str, Any], *, source: str) -> None:
     allowed = {
         "schema_version",
+        "default_provider",
         "provider_labels",
         "providers",
         "default_search_provider",
@@ -294,80 +268,12 @@ def _validate_catalog_root(raw: dict[str, Any], *, source: str) -> None:
         raise CatalogError(f"{source}: schema_version is required")
     if raw["schema_version"] != CATALOG_SCHEMA_VERSION:
         raise CatalogError(f"{source}: unsupported schema_version: {raw['schema_version']!r}")
+    default_provider = raw.get("default_provider")
+    if default_provider is not None and (
+        not isinstance(default_provider, str) or not default_provider.strip()
+    ):
+        raise CatalogError(f"{source}: default_provider must be a non-empty string")
     _raw_providers(raw)
-
-
-def _merge_raw_catalogs(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    """Merge overlay provider tables over base ones; overlay values win."""
-    base_providers = _raw_providers(base)
-    overlay_providers = _raw_providers(overlay)
-    by_name: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
-    for provider in base_providers:
-        name = _raw_provider_name(provider)
-        by_name[name] = provider
-        order.append(name)
-    for provider in overlay_providers:
-        name = _raw_provider_name(provider)
-        if name in by_name:
-            by_name[name] = _merge_raw_provider(by_name[name], provider)
-        else:
-            by_name[name] = provider
-            order.append(name)
-
-    merged: dict[str, Any] = {
-        "schema_version": overlay.get("schema_version", base.get("schema_version")),
-        "provider_labels": {
-            **base.get("provider_labels", {}),
-            **overlay.get("provider_labels", {}),
-        },
-        "providers": [by_name[name] for name in order],
-    }
-
-    base_search = _raw_search_providers(base)
-    overlay_search = _raw_search_providers(overlay)
-    search_by_name: dict[str, dict[str, Any]] = {}
-    search_order: list[str] = []
-    for entry in base_search:
-        name = _raw_provider_name(entry)
-        search_by_name[name] = entry
-        search_order.append(name)
-    for entry in overlay_search:
-        name = _raw_provider_name(entry)
-        if name in search_by_name:
-            search_by_name[name] = entry
-        else:
-            search_by_name[name] = entry
-            search_order.append(name)
-    if search_by_name:
-        merged["search_providers"] = [search_by_name[name] for name in search_order]
-
-    default_search = overlay.get("default_search_provider") or base.get("default_search_provider")
-    if isinstance(default_search, str) and default_search.strip():
-        merged["default_search_provider"] = default_search
-    return merged
-
-
-def _merge_raw_provider(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    merged = {**base, **overlay}
-    base_models = base.get("models", [])
-    overlay_models = overlay.get("models", [])
-    if isinstance(base_models, list) and isinstance(overlay_models, list):
-        merged["models"] = list(dict.fromkeys([*overlay_models, *base_models]))
-    base_removed = base.get("removed_models", [])
-    overlay_removed = overlay.get("removed_models", [])
-    if isinstance(base_removed, list) and isinstance(overlay_removed, list):
-        merged["removed_models"] = list(dict.fromkeys([*base_removed, *overlay_removed]))
-    for key in ("context_windows", "headers", "compat"):
-        base_mapping = base.get(key)
-        overlay_mapping = overlay.get(key)
-        if isinstance(base_mapping, dict) and isinstance(overlay_mapping, dict):
-            merged[key] = {**base_mapping, **overlay_mapping}
-    base_metadata = base.get("model_metadata")
-    overlay_metadata = overlay.get("model_metadata")
-    if isinstance(base_metadata, dict) and isinstance(overlay_metadata, dict):
-        merged["model_metadata"] = _merge_model_metadata(base_metadata, overlay_metadata)
-    return merged
 
 
 def _apply_model_tombstones(
@@ -375,7 +281,7 @@ def _apply_model_tombstones(
     *,
     base: dict[str, Any],
 ) -> dict[str, Any]:
-    """Remove provider-scoped models withdrawn by bundled or user catalogs."""
+    """Remove provider-scoped models withdrawn by the catalog."""
     base_by_name = {_raw_provider_name(provider): provider for provider in _raw_providers(base)}
     providers: list[dict[str, Any]] = []
     for provider in _raw_providers(raw):
@@ -388,7 +294,12 @@ def _apply_model_tombstones(
             values = filtered.get(field)
             if isinstance(values, list):
                 filtered[field] = [model for model in values if model not in removed]
-        for field in ("context_windows", "model_metadata"):
+        for field in (
+            "context_windows",
+            "model_metadata",
+            "thinking_defaults",
+            "inference_providers",
+        ):
             values = filtered.get(field)
             if isinstance(values, dict):
                 filtered[field] = {
@@ -407,23 +318,6 @@ def _apply_model_tombstones(
             )
         providers.append(filtered)
     return {**raw, "providers": providers}
-
-
-def _merge_model_metadata(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    merged: dict[str, Any] = {**base}
-    for model, overlay_metadata in overlay.items():
-        base_metadata = merged.get(model)
-        if isinstance(base_metadata, dict) and isinstance(overlay_metadata, dict):
-            next_metadata = {**base_metadata, **overlay_metadata}
-            for key in ("headers", "compat"):
-                base_mapping = base_metadata.get(key)
-                overlay_mapping = overlay_metadata.get(key)
-                if isinstance(base_mapping, dict) and isinstance(overlay_mapping, dict):
-                    next_metadata[key] = {**base_mapping, **overlay_mapping}
-            merged[model] = next_metadata
-        else:
-            merged[model] = overlay_metadata
-    return merged
 
 
 def _raw_providers(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -466,6 +360,10 @@ def _entries_from_raw(raw: dict[str, Any], *, source: str) -> tuple[ProviderCata
         provider_names=set(names),
         source=source,
     )
+    if catalog.default_provider is not None and catalog.default_provider not in names:
+        raise CatalogError(
+            f"{source}: default_provider {catalog.default_provider!r} is not among providers"
+        )
     return entries
 
 
@@ -563,6 +461,22 @@ def _entry_from_provider(provider: _CatalogProvider, *, source: str) -> Provider
     for model in provider.model_metadata:
         if model not in provider.models:
             raise CatalogError(f"{prefix}.model_metadata: {model!r} is not in models")
+    for model in provider.thinking_defaults:
+        if model not in provider.models:
+            raise CatalogError(f"{prefix}.thinking_defaults: {model!r} is not in models")
+        metadata = provider.model_metadata.get(model)
+        if (
+            metadata is not None
+            and metadata.thinking_levels
+            and provider.thinking_defaults[model] not in metadata.thinking_levels
+        ):
+            raise CatalogError(
+                f"{prefix}.thinking_defaults.{model}: "
+                f"{provider.thinking_defaults[model]!r} is not in thinking_levels"
+            )
+    for model in provider.inference_providers:
+        if model not in provider.models:
+            raise CatalogError(f"{prefix}.inference_providers: {model!r} is not in models")
 
     for model, catalog_metadata in provider.model_metadata.items():
         _validate_cost_tiers(
@@ -617,6 +531,12 @@ def _entry_from_provider(provider: _CatalogProvider, *, source: str) -> Provider
         thinking_parameter=provider.thinking_parameter,
         removed_models=provider.removed_models,
         auth_methods=provider.auth_methods,
+        timeout_seconds=provider.timeout_seconds,
+        stream_idle_timeout_seconds=provider.stream_idle_timeout_seconds,
+        max_retries=provider.max_retries,
+        max_retry_delay_seconds=provider.max_retry_delay_seconds,
+        thinking_defaults=dict(provider.thinking_defaults),
+        inference_providers=dict(provider.inference_providers),
     )
 
 
@@ -717,195 +637,3 @@ def _dotted_location(raw: dict[str, Any], location: tuple[int | str, ...]) -> li
         else:
             parts.append(str(part))
     return parts
-
-
-def _raw_provider_from_entry(entry: ProviderCatalogEntry) -> dict[str, Any]:
-    raw: dict[str, Any] = {
-        "name": entry.name,
-        "display_name": entry.display_name,
-        "kind": entry.kind,
-        "base_url": entry.base_url,
-        "api_key_env": entry.api_key_env,
-        "models": list(entry.models),
-        "default_model": entry.default_model,
-        "docs_url": entry.docs_url,
-    }
-    if entry.api is not None:
-        raw["api"] = entry.api
-    if entry.credential_name is not None:
-        raw["credential_name"] = entry.credential_name
-    if entry.context_windows:
-        raw["context_windows"] = dict(entry.context_windows)
-    if entry.headers:
-        raw["headers"] = dict(entry.headers)
-    if entry.compat:
-        raw["compat"] = dict(entry.compat)
-    if entry.model_metadata:
-        raw["model_metadata"] = {
-            model: _raw_model_metadata_from_entry(metadata)
-            for model, metadata in entry.model_metadata.items()
-        }
-    if entry.thinking_parameter is not None:
-        raw["thinking_parameter"] = entry.thinking_parameter
-    if entry.removed_models:
-        raw["removed_models"] = list(entry.removed_models)
-    if entry.auth_methods != ("api_key",):
-        raw["auth_methods"] = list(entry.auth_methods)
-    return raw
-
-
-def _raw_model_metadata_from_entry(metadata: ModelCatalogMetadata) -> dict[str, Any]:
-    raw: dict[str, Any] = {}
-    if metadata.name is not None:
-        raw["name"] = metadata.name
-    if metadata.api is not None:
-        raw["api"] = metadata.api
-    if metadata.base_url is not None:
-        raw["base_url"] = metadata.base_url
-    if metadata.reasoning is not None:
-        raw["reasoning"] = metadata.reasoning
-    if metadata.input:
-        raw["input"] = list(metadata.input)
-    if metadata.cost:
-        raw["cost"] = dict(metadata.cost)
-    if metadata.cost_tiers:
-        raw["cost_tiers"] = [
-            {
-                **(
-                    {"max_input_tokens": tier.max_input_tokens}
-                    if tier.max_input_tokens is not None
-                    else {}
-                ),
-                **tier.cost,
-            }
-            for tier in metadata.cost_tiers
-        ]
-    if metadata.context_window is not None:
-        raw["context_window"] = metadata.context_window
-    if metadata.max_tokens is not None:
-        raw["max_tokens"] = metadata.max_tokens
-    if metadata.thinking_default is not None:
-        raw["thinking_default"] = metadata.thinking_default
-    if metadata.thinking_levels:
-        raw["thinking_levels"] = list(metadata.thinking_levels)
-    if metadata.headers:
-        raw["headers"] = dict(metadata.headers)
-    if metadata.compat:
-        raw["compat"] = dict(metadata.compat)
-    return raw
-
-
-def _catalog_to_toml(raw: dict[str, Any]) -> str:
-    lines = [f"schema_version = {raw.get('schema_version', CATALOG_SCHEMA_VERSION)}", ""]
-    default_search = raw.get("default_search_provider")
-    if isinstance(default_search, str) and default_search.strip():
-        lines.append(f"default_search_provider = {_toml_value(default_search)}")
-        lines.append("")
-    provider_labels = raw.get("provider_labels")
-    if isinstance(provider_labels, dict) and provider_labels:
-        lines.append("[provider_labels]")
-        for provider_name, label in provider_labels.items():
-            lines.append(f"{_toml_key(str(provider_name))} = {_toml_value(label)}")
-        lines.append("")
-    for provider in _raw_providers(raw):
-        lines.append("[[providers]]")
-        for key in (
-            "name",
-            "display_name",
-            "kind",
-            "base_url",
-            "api_key_env",
-            "credential_name",
-            "models",
-            "default_model",
-            "docs_url",
-            "api",
-            "headers",
-            "compat",
-            "thinking_parameter",
-            "removed_models",
-            "auth_methods",
-        ):
-            if key in provider:
-                lines.append(f"{key} = {_toml_value(provider[key])}")
-        context_windows = provider.get("context_windows")
-        if isinstance(context_windows, dict) and context_windows:
-            lines.append("")
-            lines.append("[providers.context_windows]")
-            for model, context_window in context_windows.items():
-                lines.append(f"{_toml_key(model)} = {_toml_value(context_window)}")
-        model_metadata = provider.get("model_metadata")
-        if isinstance(model_metadata, dict) and model_metadata:
-            for model, metadata in model_metadata.items():
-                if not isinstance(metadata, dict):
-                    continue
-                lines.append("")
-                lines.append(f"[providers.model_metadata.{_toml_key(model)}]")
-                for key, value in metadata.items():
-                    lines.append(f"{key} = {_toml_value(value)}")
-        lines.append("")
-
-    for provider in _raw_search_providers(raw):
-        lines.append("[[search_providers]]")
-        for key in (
-            "name",
-            "display_name",
-            "api_key_env",
-            "endpoint",
-            "docs_url",
-            "modes",
-            "default_mode",
-            "timeout_env",
-        ):
-            if key in provider and provider[key] is not None:
-                lines.append(f"{key} = {_toml_value(provider[key])}")
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _toml_key(value: str) -> str:
-    if value.replace("_", "").replace("-", "").isalnum() and not value[0].isdigit():
-        return value
-    return json.dumps(value)
-
-
-def _toml_value(value: object) -> str:
-    if isinstance(value, str):
-        return json.dumps(value)
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int | float):
-        return str(value)
-    if isinstance(value, list | tuple):
-        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
-    if isinstance(value, dict):
-        return (
-            "{ "
-            + ", ".join(
-                f"{_toml_key(str(key))} = {_toml_value(item)}" for key, item in value.items()
-            )
-            + " }"
-        )
-    raise TypeError(f"Unsupported TOML value: {value!r}")
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    temp_path: Path | None = None
-    try:
-        with NamedTemporaryFile(
-            "w",
-            dir=path.parent,
-            encoding="utf-8",
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temp_file:
-            temp_path = Path(temp_file.name)
-            temp_file.write(text)
-            temp_file.flush()
-        temp_path.replace(path)
-    except Exception:
-        if temp_path is not None:
-            with suppress(OSError):
-                temp_path.unlink()
-        raise

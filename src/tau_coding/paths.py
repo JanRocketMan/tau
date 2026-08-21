@@ -18,6 +18,9 @@ class TauPaths:
 
     home: Path = field(default_factory=lambda: Path.home() / ".tau")
     agents_home: Path = field(default_factory=lambda: Path.home() / ".agents")
+    # Optional override for the single catalog file. When unset, the packaged
+    # ``tau_coding/data/catalog.toml`` is used for reads and writes.
+    catalog_path: Path | None = None
 
     @property
     def sessions_dir(self) -> Path:
@@ -36,8 +39,8 @@ class TauPaths:
 
     @property
     def user_skills_dir(self) -> Path:
-        """Return Tau's user-level skills directory."""
-        return self.home / "skills"
+        """Return the user-level skills directory (shared Claude Code skills)."""
+        return Path.home() / ".claude" / "skills"
 
     @property
     def user_prompts_dir(self) -> Path:

@@ -1,8 +1,16 @@
 schema_version = 1
 
+# Default provider/model used when no explicit selection is given.
+default_provider = "openai-codex"
+
 # Default web-search provider used by the optional `search` tool when the
 # TAU_SEARCH_PROVIDER environment variable is unset.
 default_search_provider = "parallel"
+
+# Short display labels used in the model picker and provider badges.
+[provider_labels]
+openai-codex = "codex"
+opencode-go = "go"
 
 [[providers]]
 name = "openai-codex"
@@ -13,9 +21,14 @@ api_key_env = "OPENAI_CODEX_ACCESS_TOKEN"
 credential_name = "openai-codex"
 auth_methods = ["oauth"]
 models = ["gpt-5.6-luna", "gpt-5.6-sol"]
-default_model = "gpt-5.6-luna"
+default_model = "gpt-5.6-sol"
 docs_url = "https://chatgpt.com/codex"
 thinking_parameter = "reasoning.effort"
+timeout_seconds = 60.0
+stream_idle_timeout_seconds = 600.0
+max_retries = 2
+max_retry_delay_seconds = 1.0
+thinking_defaults = { "gpt-5.6-luna" = "xhigh", "gpt-5.6-sol" = "xhigh" }
 
 [providers.context_windows]
 "gpt-5.6-luna" = 272000
@@ -53,6 +66,11 @@ default_model = "deepseek-v4-flash"
 docs_url = "https://opencode.ai/docs/go"
 api = "openai-completions"
 thinking_parameter = "reasoning_effort"
+timeout_seconds = 60.0
+stream_idle_timeout_seconds = 600.0
+max_retries = 2
+max_retry_delay_seconds = 1.0
+thinking_defaults = { "deepseek-v4-flash" = "max", "gpt-5.6-luna" = "xhigh" }
 
 [providers.context_windows]
 "gpt-5.6-luna" = 1000000

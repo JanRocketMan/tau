@@ -7,7 +7,7 @@ def test_tau_paths_user_locations(tmp_path: Path) -> None:
     paths = TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents")
 
     assert paths.sessions_dir == tmp_path / ".tau" / "sessions"
-    assert paths.user_skills_dir == tmp_path / ".tau" / "skills"
+    assert paths.user_skills_dir == Path.home() / ".claude" / "skills"
     assert paths.user_prompts_dir == tmp_path / ".tau" / "prompts"
     assert paths.user_agents_skills_dir == tmp_path / ".agents" / "skills"
     assert paths.user_agents_prompts_dir == tmp_path / ".agents" / "prompts"

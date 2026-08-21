@@ -55,13 +55,11 @@ from tau_coding import (
     ProviderConfigError,
     ProviderSettings,
     ResourceError,
-    ScopedModelConfig,
     SessionManager,
     SessionTreeBranchResult,
     TauPaths,
     TauResourcePaths,
     load_provider_settings,
-    save_provider_settings,
 )
 from tau_coding import session as coding_session_module
 from tau_coding.context_window import ContextUsageEstimate, estimate_context_usage
@@ -306,7 +304,9 @@ async def test_prompt_logs_unexpected_agent_call_exception(tmp_path: Path) -> No
             cwd=tmp_path,
             provider_name="fake-provider",
             session_id="session-1",
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
@@ -351,7 +351,9 @@ async def test_prompt_logs_error_event_diagnostic_data(tmp_path: Path) -> None:
             cwd=tmp_path,
             provider_name="fake-provider",
             session_id="session-1",
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
@@ -401,7 +403,9 @@ async def test_prompt_logs_safe_transport_error_details(tmp_path: Path) -> None:
             cwd=tmp_path,
             provider_name="openai-codex",
             session_id="session-1",
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
@@ -454,7 +458,9 @@ async def test_prompt_logs_safe_provider_stream_error_details(tmp_path: Path) ->
             cwd=tmp_path,
             provider_name="openai-codex",
             session_id="session-1",
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
@@ -1093,7 +1099,7 @@ async def test_session_cycles_thinking_is_noop_with_single_level(tmp_path: Path)
 
 
 @pytest.mark.anyio
-async def test_cycle_scoped_model_resets_thinking_level_to_model_default(
+async def test_cycle_model_resets_thinking_level_to_model_default(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1121,10 +1127,6 @@ async def test_cycle_scoped_model_resets_thinking_level_to_model_default(
     settings = ProviderSettings(
         default_provider="local",
         providers=(provider_config,),
-        scoped_models=(
-            ScopedModelConfig(provider="local", model="low-model"),
-            ScopedModelConfig(provider="local", model="high-model"),
-        ),
     )
     session = await CodingSession.load(
         CodingSessionConfig(
@@ -1143,17 +1145,18 @@ async def test_cycle_scoped_model_resets_thinking_level_to_model_default(
     # target model's default instead of carrying the current level over.
     await session.set_thinking_level("medium")
 
-    choice = session.cycle_scoped_model()
+    choice = session.cycle_model()
 
     assert choice.model == "high-model"
     assert session.model == "high-model"
     assert session.thinking_level == "high"
 
-    choice = session.cycle_scoped_model()
+    choice = session.cycle_model()
 
     assert choice.model == "low-model"
-    # The remembered preference set above wins over the catalog default.
-    assert session.thinking_level == "medium"
+    # Cycling resets to the target model's catalog default; the in-session
+    # thinking change from above is not remembered.
+    assert session.thinking_level == "low"
 
 
 @pytest.mark.anyio
@@ -1252,9 +1255,11 @@ async def test_session_uses_active_model_thinking_capabilities(
 
 
 @pytest.mark.anyio
-async def test_session_persists_thinking_preference_for_new_sessions(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_session_thinking_change_is_session_only(tmp_path: Path) -> None:
     tau_paths = TauPaths(home=tmp_path / ".tau")
     provider_config = OpenAICodexProviderConfig(
+        name="codex-local",
         thinking_parameter="reasoning.effort",
         model_metadata={
             "gpt-5.5": ProviderModelMetadata(
@@ -1265,7 +1270,7 @@ async def test_session_persists_thinking_preference_for_new_sessions(tmp_path: P
         },
     )
     settings = ProviderSettings(
-        default_provider="openai-codex",
+        default_provider="codex-local",
         providers=(provider_config,),
     )
     storage = JsonlSessionStorage(tmp_path / "codex-session.jsonl")
@@ -1276,18 +1281,20 @@ async def test_session_persists_thinking_preference_for_new_sessions(tmp_path: P
             system="You are Tau.",
             storage=storage,
             cwd=tmp_path,
-            provider_name="openai-codex",
+            provider_name="codex-local",
             provider_settings=settings,
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home,
+                paths=tau_paths,
+                claude_home=tau_paths.home,
+            ),
         )
     )
 
     assert session.thinking_level == "medium"
     assert await session.set_thinking_level("low") == "Thinking mode: low"
 
-    saved = load_provider_settings(tau_paths)
-    assert saved.get_provider("openai-codex").thinking_defaults == {"gpt-5.5": "low"}
-
+    # Thinking changes apply to the session only; the catalog is untouched.
     new_session = await CodingSession.load(
         CodingSessionConfig(
             provider=FakeProvider([]),
@@ -1295,13 +1302,12 @@ async def test_session_persists_thinking_preference_for_new_sessions(tmp_path: P
             system="You are Tau.",
             storage=JsonlSessionStorage(tmp_path / "new-codex-session.jsonl"),
             cwd=tmp_path,
-            provider_name="openai-codex",
-            provider_settings=saved,
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            provider_name="codex-local",
+            provider_settings=ProviderSettings(providers=(provider_config,)),
         )
     )
 
-    assert new_session.thinking_level == "low"
+    assert new_session.thinking_level == "medium"
 
 
 @pytest.mark.anyio
@@ -2072,7 +2078,9 @@ async def test_session_builds_system_prompt_when_system_is_omitted(tmp_path: Pat
         storage=storage,
         cwd=tmp_path,
         trust_default="always",
-        resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+        resource_paths=TauResourcePaths(
+            root=resource_root, agents_root=None, claude_home=resource_root
+        ),
     )
     session = await CodingSession.load(config)
 
@@ -2111,7 +2119,9 @@ async def test_session_touches_session_manager_after_persisting_messages(tmp_pat
         cwd=tmp_path,
         session_id=record.id,
         session_manager=manager,
-        resource_paths=TauResourcePaths(root=tmp_path / "resources", agents_root=None),
+        resource_paths=TauResourcePaths(
+            root=tmp_path / "resources", agents_root=None, claude_home=tmp_path / "resources"
+        ),
     )
     session = await CodingSession.load(config)
 
@@ -2194,7 +2204,9 @@ async def test_session_yields_expanded_custom_prompt_before_auto_naming(tmp_path
             cwd=tmp_path,
             session_id=record.id,
             session_manager=manager,
-            resource_paths=TauResourcePaths(root=resources_root, agents_root=None),
+            resource_paths=TauResourcePaths(
+                root=resources_root, agents_root=None, claude_home=resources_root
+            ),
         )
     )
 
@@ -2389,7 +2401,11 @@ async def test_session_loads_and_expands_skills(tmp_path: Path) -> None:
         system="You are Tau.",
         storage=storage,
         cwd=tmp_path,
-        resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+        resource_paths=TauResourcePaths(
+            root=resource_root,
+            agents_root=None,
+            claude_home=resource_root,
+        ),
     )
     session = await CodingSession.load(config)
 
@@ -2429,7 +2445,9 @@ async def test_session_skills_disabled_suppresses_skill_index(tmp_path: Path) ->
         cwd=tmp_path,
         trust_default="always",
         skills_enabled=False,
-        resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+        resource_paths=TauResourcePaths(
+            root=resource_root, agents_root=None, claude_home=resource_root
+        ),
     )
     session = await CodingSession.load(config)
 
@@ -2463,7 +2481,9 @@ async def test_session_reload_preserves_disabled_skills(tmp_path: Path) -> None:
             storage=storage,
             cwd=tmp_path,
             skills_enabled=False,
-            resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+            resource_paths=TauResourcePaths(
+                root=resource_root, agents_root=None, claude_home=resource_root
+            ),
         )
     )
 
@@ -2527,7 +2547,9 @@ async def test_session_expands_prompt_templates_as_slash_commands(tmp_path: Path
         system="You are Tau.",
         storage=storage,
         cwd=tmp_path,
-        resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+        resource_paths=TauResourcePaths(
+            root=resource_root, agents_root=None, claude_home=resource_root
+        ),
     )
     session = await CodingSession.load(config)
 
@@ -2553,7 +2575,9 @@ async def test_reserved_prompts_template_cannot_shadow_picker_command(tmp_path: 
             system="You are Tau.",
             storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
             cwd=tmp_path,
-            resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+            resource_paths=TauResourcePaths(
+                root=resource_root, agents_root=None, claude_home=resource_root
+            ),
         )
     )
 
@@ -2583,7 +2607,9 @@ async def test_reserved_tools_template_cannot_shadow_picker_command(tmp_path: Pa
             system="You are Tau.",
             storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
             cwd=tmp_path,
-            resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+            resource_paths=TauResourcePaths(
+                root=resource_root, agents_root=None, claude_home=resource_root
+            ),
         )
     )
 
@@ -2634,7 +2660,9 @@ async def test_session_skill_index_lets_agent_read_relevant_skill_file(tmp_path:
             model="fake",
             storage=storage,
             cwd=tmp_path,
-            resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+            resource_paths=TauResourcePaths(
+                root=resource_root, agents_root=None, claude_home=resource_root
+            ),
         )
     )
 
@@ -2669,7 +2697,9 @@ async def test_session_loads_with_resource_diagnostics_instead_of_failing(
         system="You are Tau.",
         storage=storage,
         cwd=tmp_path,
-        resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+        resource_paths=TauResourcePaths(
+            root=resource_root, agents_root=None, claude_home=resource_root
+        ),
     )
 
     session = await CodingSession.load(config)
@@ -2700,7 +2730,7 @@ async def test_session_loads_tau_native_system_prompt_files(tmp_path: Path) -> N
             storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
             cwd=tmp_path,
             trust_default="always",
-            resource_paths=TauResourcePaths(root=tau_home, agents_root=None),
+            resource_paths=TauResourcePaths(root=tau_home, agents_root=None, claude_home=tau_home),
         )
     )
 
@@ -2728,7 +2758,7 @@ async def test_explicit_system_prompt_values_override_discovered_files(tmp_path:
             model="fake",
             storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
             cwd=tmp_path,
-            resource_paths=TauResourcePaths(root=tau_home, agents_root=None),
+            resource_paths=TauResourcePaths(root=tau_home, agents_root=None, claude_home=tau_home),
             custom_system_prompt="Explicit base",
             append_system_prompt="Explicit append",
         )
@@ -2758,7 +2788,7 @@ async def test_session_reload_tracks_system_prompt_file_precedence(tmp_path: Pat
             storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
             cwd=tmp_path,
             trust_default="always",
-            resource_paths=TauResourcePaths(root=tau_home, agents_root=None),
+            resource_paths=TauResourcePaths(root=tau_home, agents_root=None, claude_home=tau_home),
         )
     )
     assert "You are an expert coding assistant operating inside Tau" in session.system_prompt
@@ -2810,7 +2840,7 @@ async def test_failed_system_prompt_file_reload_keeps_previous_prompt(tmp_path: 
             model="fake",
             storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
             cwd=tmp_path,
-            resource_paths=TauResourcePaths(root=tau_home, agents_root=None),
+            resource_paths=TauResourcePaths(root=tau_home, agents_root=None, claude_home=tau_home),
         )
     )
     previous = session.system_prompt
@@ -2838,7 +2868,7 @@ async def test_new_session_adopts_system_prompt_resource_tracking(tmp_path: Path
             cwd=tmp_path,
             session_id=record.id,
             session_manager=manager,
-            resource_paths=TauResourcePaths(root=tau_home, agents_root=None),
+            resource_paths=TauResourcePaths(root=tau_home, agents_root=None, claude_home=tau_home),
         )
     )
 
@@ -2872,7 +2902,9 @@ async def test_session_reload_refreshes_resources_and_system_prompt(tmp_path: Pa
             storage=storage,
             cwd=tmp_path,
             trust_default="always",
-            resource_paths=TauResourcePaths(root=resource_root, agents_root=None),
+            resource_paths=TauResourcePaths(
+                root=resource_root, agents_root=None, claude_home=resource_root
+            ),
         )
     )
     assert len(session.skills) == 0
@@ -3003,7 +3035,9 @@ async def test_session_provider_settings_reload_uses_session_paths(
             provider_settings=ProviderSettings(
                 providers=(OpenAICompatibleProviderConfig(name="openai"),)
             ),
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
@@ -3190,7 +3224,9 @@ async def test_session_compact_falls_back_to_summary_when_remote_fails(
         _config(tmp_path, provider, storage),
         provider_name="openai-codex",
         session_id="session-1",
-        resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        resource_paths=TauResourcePaths(
+            root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+        ),
     )
     session = await CodingSession.load(
         config,
@@ -3345,7 +3381,9 @@ async def test_session_remote_compaction_status_loud_on_failure_and_cleared_on_s
     tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
     config = replace(
         _config(tmp_path, provider, storage),
-        resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+        resource_paths=TauResourcePaths(
+            root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+        ),
     )
     session = await CodingSession.load(
         config,
@@ -3919,6 +3957,7 @@ async def test_huggingface_session_re_resolves_pin_on_model_switch(
             resource_paths=TauResourcePaths(
                 root=tmp_path / ".tau",
                 paths=TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"),
+                claude_home=tmp_path / ".tau",
             ),
         )
     )
@@ -4048,7 +4087,9 @@ async def test_session_switch_uses_session_credential_store(
             cwd=tmp_path,
             provider_name="local",
             provider_settings=settings,
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
@@ -4087,7 +4128,9 @@ async def test_available_model_choices_hide_unusable_providers(
             cwd=tmp_path,
             provider_name="openai",
             provider_settings=settings,
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
@@ -4100,12 +4143,12 @@ async def test_available_model_choices_hide_unusable_providers(
 
 
 @pytest.mark.anyio
-@pytest.mark.anyio
-async def test_session_toggles_and_cycles_scoped_models(
+async def test_session_cycles_all_models_across_providers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LOCAL_API_KEY", "local-key")
+    monkeypatch.setenv("REMOTE_API_KEY", "remote-key")
     tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
     settings = ProviderSettings(
         default_provider="local",
@@ -4117,8 +4160,14 @@ async def test_session_toggles_and_cycles_scoped_models(
                 models=("qwen", "llama"),
                 default_model="qwen",
             ),
+            OpenAICompatibleProviderConfig(
+                name="remote",
+                api_key_env="REMOTE_API_KEY",
+                credential_name=None,
+                models=("sonnet", "opus"),
+                default_model="sonnet",
+            ),
         ),
-        scoped_models=(ScopedModelConfig(provider="local", model="qwen"),),
     )
     session = await CodingSession.load(
         CodingSessionConfig(
@@ -4129,25 +4178,40 @@ async def test_session_toggles_and_cycles_scoped_models(
             cwd=tmp_path,
             provider_name="local",
             provider_settings=settings,
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
-    llama = ModelChoice(provider_name="local", model="llama")
-    scoped = session.toggle_scoped_model(llama)
-    choice = session.cycle_scoped_model()
-    saved = json.loads((tau_paths.home / "providers.json").read_text(encoding="utf-8"))
+    # Default provider first with its default model, then the other provider.
+    assert session.model_cycle_choices() == (
+        ModelChoice(provider_name="local", model="qwen"),
+        ModelChoice(provider_name="local", model="llama"),
+        ModelChoice(provider_name="remote", model="sonnet"),
+        ModelChoice(provider_name="remote", model="opus"),
+    )
 
-    assert [(item.provider_name, item.model) for item in scoped] == [
-        ("local", "qwen"),
-        ("local", "llama"),
-    ]
-    assert choice == llama
+    choice = session.cycle_model()
+
+    assert choice == ModelChoice(provider_name="local", model="llama")
     assert session.model == "llama"
-    assert saved["scoped_models"] == [
-        {"provider": "local", "model": "qwen"},
-        {"provider": "local", "model": "llama"},
-    ]
+
+    choice = session.cycle_model()
+
+    assert choice == ModelChoice(provider_name="remote", model="sonnet")
+    assert session.provider_name == "remote"
+    assert session.model == "sonnet"
+
+    # Cycling wraps around and does not persist the switch as the default.
+    choice = session.cycle_model(reverse=True)
+    assert choice == ModelChoice(provider_name="local", model="llama")
+    choice = session.cycle_model()
+    assert choice == ModelChoice(provider_name="remote", model="sonnet")
+    choice = session.cycle_model()
+    assert choice == ModelChoice(provider_name="remote", model="opus")
+    choice = session.cycle_model()
+    assert choice == ModelChoice(provider_name="local", model="qwen")
 
 
 @requires_posix_shell
@@ -4235,66 +4299,6 @@ async def test_session_resumes_indexed_session(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_session_toggle_scoped_model_preserves_newer_provider_file_changes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LOCAL_API_KEY", "local-key")
-    monkeypatch.setenv("REMOTE_API_KEY", "remote-key")
-    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
-    loaded_settings = ProviderSettings(
-        default_provider="local",
-        providers=(
-            OpenAICompatibleProviderConfig(
-                name="local",
-                api_key_env="LOCAL_API_KEY",
-                models=("qwen", "llama"),
-                default_model="qwen",
-            ),
-        ),
-        scoped_models=(ScopedModelConfig(provider="local", model="qwen"),),
-    )
-    newer_settings = ProviderSettings(
-        default_provider="local",
-        providers=(
-            loaded_settings.get_provider("local"),
-            OpenAICompatibleProviderConfig(
-                name="remote",
-                api_key_env="REMOTE_API_KEY",
-                models=("sonnet",),
-                default_model="sonnet",
-            ),
-        ),
-        scoped_models=(
-            ScopedModelConfig(provider="local", model="qwen"),
-            ScopedModelConfig(provider="remote", model="sonnet"),
-        ),
-    )
-    save_provider_settings(newer_settings, tau_paths)
-    session = await CodingSession.load(
-        CodingSessionConfig(
-            provider=FakeProvider([]),
-            model="qwen",
-            system="You are Tau.",
-            storage=JsonlSessionStorage(tmp_path / "scoped-session.jsonl"),
-            cwd=tmp_path,
-            provider_name="local",
-            provider_settings=loaded_settings,
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
-        )
-    )
-
-    session.toggle_scoped_model(ModelChoice(provider_name="local", model="llama"))
-
-    saved = load_provider_settings(tau_paths)
-    assert saved.get_provider("remote").default_model == "sonnet"
-    assert saved.scoped_models == (
-        ScopedModelConfig(provider="local", model="qwen"),
-        ScopedModelConfig(provider="remote", model="sonnet"),
-        ScopedModelConfig(provider="local", model="llama"),
-    )
-
-
 @pytest.mark.anyio
 async def test_session_set_model_rejects_model_not_declared_for_provider(tmp_path: Path) -> None:
     provider_config = OpenAICompatibleProviderConfig(
@@ -4372,7 +4376,7 @@ async def test_session_load_falls_back_when_persisted_model_does_not_match_provi
 
 
 @pytest.mark.anyio
-async def test_session_set_model_persists_default_provider_model(
+async def test_session_set_model_does_not_change_catalog_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
@@ -4391,19 +4395,23 @@ async def test_session_set_model_persists_default_provider_model(
             cwd=tmp_path,
             provider_name="openai",
             provider_settings=ProviderSettings(providers=(provider_config,)),
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
 
     session.set_model("gpt-5-mini")
 
+    # Switches apply to the session only; the catalog defaults stay put.
+    assert session.model == "gpt-5-mini"
     saved = load_provider_settings(tau_paths)
-    assert saved.default_provider == "openai"
-    assert saved.get_provider("openai").default_model == "gpt-5-mini"
+    assert saved.default_provider == "openai-codex"
+    assert saved.get_provider("openai-codex").default_model == "gpt-5.6-sol"
 
 
 @pytest.mark.anyio
-async def test_session_set_model_choice_persists_default_provider_model(
+async def test_session_set_model_choice_does_not_change_catalog_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
@@ -4449,16 +4457,21 @@ async def test_session_set_model_choice_persists_default_provider_model(
             provider_name="openai",
             provider_settings=settings,
             runtime_provider_config=settings.get_provider("openai"),
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
     created.clear()
 
     session.set_model_choice(ModelChoice(provider_name="local", model="llama"))
 
+    # Switches apply to the session only; the catalog defaults stay put.
+    assert session.provider_name == "local"
+    assert session.model == "llama"
     saved = load_provider_settings(tau_paths)
-    assert saved.default_provider == "local"
-    assert saved.get_provider("local").default_model == "llama"
+    assert saved.default_provider == "openai-codex"
+    assert "local" not in {provider.name for provider in saved.providers}
     assert created == [("local", "llama")]
 
 
@@ -4467,6 +4480,7 @@ async def test_session_set_model_choice_switches_provider_model_directly(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     isolate_home(monkeypatch, tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("LOCAL_API_KEY", "local-key")
     tau_paths = TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents")
     settings = ProviderSettings(
@@ -4485,10 +4499,6 @@ async def test_session_set_model_choice_switches_provider_model_directly(
                 default_model="qwen",
             ),
         ),
-        scoped_models=(
-            ScopedModelConfig(provider="openai", model="gpt-5"),
-            ScopedModelConfig(provider="local", model="llama"),
-        ),
     )
     created: list[tuple[str, str | None]] = []
 
@@ -4514,69 +4524,29 @@ async def test_session_set_model_choice_switches_provider_model_directly(
             provider_name="openai",
             provider_settings=settings,
             runtime_provider_config=settings.get_provider("openai"),
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
         )
     )
     created.clear()
 
-    choice = session.cycle_scoped_model()
+    # Only providers with usable credentials are cycled: openai has no key, so
+    # local's default model leads, followed by its remaining models.
+    assert session.model_cycle_choices() == (
+        ModelChoice(provider_name="local", model="qwen"),
+        ModelChoice(provider_name="local", model="llama"),
+    )
 
-    assert choice == ModelChoice(provider_name="local", model="llama")
+    choice = session.cycle_model()
+
+    assert choice == ModelChoice(provider_name="local", model="qwen")
     assert session.provider_name == "local"
-    assert session.model == "llama"
-    assert created == [("local", "llama")]
+    assert session.model == "qwen"
+    assert created == [("local", "qwen")]
 
 
 @pytest.mark.anyio
-async def test_session_set_model_preserves_newer_provider_file_changes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    isolate_home(monkeypatch, tmp_path)
-    tau_paths = TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents")
-    loaded_provider = OpenAICompatibleProviderConfig(
-        name="openai",
-        models=("gpt-5", "gpt-5-mini"),
-        default_model="gpt-5",
-    )
-    newer_settings = ProviderSettings(
-        default_provider="openai",
-        providers=(
-            loaded_provider,
-            OpenAICompatibleProviderConfig(
-                name="openrouter",
-                api_key_env="OPENROUTER_API_KEY",
-                credential_name="openrouter",
-                models=("openai/gpt-5.5",),
-                default_model="openai/gpt-5.5",
-                headers={"X-Title": "Tau"},
-            ),
-        ),
-        scoped_models=(ScopedModelConfig(provider="openrouter", model="openai/gpt-5.5"),),
-    )
-    save_provider_settings(newer_settings, tau_paths)
-    session = await CodingSession.load(
-        CodingSessionConfig(
-            provider=FakeProvider([]),
-            model="gpt-5",
-            system="You are Tau.",
-            storage=JsonlSessionStorage(tmp_path / "session.jsonl"),
-            cwd=tmp_path,
-            provider_name="openai",
-            provider_settings=ProviderSettings(providers=(loaded_provider,)),
-            resource_paths=TauResourcePaths(root=tau_paths.home, paths=tau_paths),
-        )
-    )
-
-    session.set_model("gpt-5-mini")
-
-    saved = load_provider_settings(tau_paths)
-    assert saved.get_provider("openai").default_model == "gpt-5-mini"
-    assert saved.get_provider("openrouter").headers == {"X-Title": "Tau"}
-    assert saved.scoped_models == (
-        ScopedModelConfig(provider="openrouter", model="openai/gpt-5.5"),
-    )
-
-
 @pytest.mark.anyio
 async def test_session_new_session_uses_default_provider_model(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

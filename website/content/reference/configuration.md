@@ -9,23 +9,30 @@ those locations and file formats.
 
 ## Tau home
 
+Tau keeps durable state in your home directory (`~/.tau/`), reads
+project-local resources from your working directory, and keeps all provider
+configuration in the packaged catalog. This page is a reference for those
+locations and file formats.
+
 ```text
 ~/.tau/
-├── catalog.toml        # optional provider/model catalog overlay
-├── providers.json      # provider/model preferences
 ├── credentials.json    # saved API keys / OAuth tokens (0600, atomic writes)
 ├── settings.json       # general settings (trust default, shell prefix)
 ├── trust.json          # versioned project-input trust decisions
-├── tui.json            # TUI theme, keybindings, and notifications
 ├── sessions/           # saved sessions, per project
-├── skills/             # user-level skills
-├── prompts/            # user-level prompt templates
-├── themes/             # user-level TUI themes
-├── SYSTEM.md           # optional replacement system-prompt base
-├── APPEND_SYSTEM.md    # optional appended system-prompt instructions
-├── AGENTS.md           # global project instructions
-└── logs/               # diagnostics
+├── logs/               # diagnostics
+└── (optional user resources: prompts/, themes/, SYSTEM.md,
+    APPEND_SYSTEM.md, AGENTS.md)
 ```
+
+There is **no user-level provider configuration** in Tau home: provider
+definitions, display labels, the default provider/model, and per-provider
+runtime preferences all live in the single packaged catalog file
+`src/tau_coding/data/catalog.toml`. Tau never reads or writes `providers.json`,
+`tui.json`, or a user-level `catalog.toml`; you can delete any leftover files.
+
+User skills are shared with Claude Code from `~/.claude/skills/` instead of
+`~/.tau/skills/`.
 
 Tau also reads user-level `.agents` resources: `~/.agents/skills/`,
 `~/.agents/prompts/`, `~/.agents/AGENTS.md`.
@@ -38,7 +45,7 @@ relative paths or unknown fields. See [Project trust]({{< relref
 "../guides/project-trust.md" >}}).
 
 Tau does not check for updates or contact a package index at startup. The local
-`~/.tau/cache/release-notes-state.json` file records which bundled release notes
+`~/.tau/logs/release-notes-state.json` file records which bundled release notes
 the TUI has shown.
 
 `~/.tau/logs/agent-calls.jsonl` contains structured failure diagnostics. Each
@@ -104,21 +111,22 @@ fail before making a model API request with an error like
 
 ## Providers
 
-Tau separates provider metadata from runtime preferences:
+All provider configuration lives in the single packaged catalog file
+`src/tau_coding/data/catalog.toml`. Tau only **reads** the catalog; edit the
+file directly to change providers, the default provider, or preferences.
+Runtime model or thinking changes apply to the active session only, and
+`/login` writes credentials to `~/.tau/credentials.json` without touching the
+catalog, so the catalog cannot be overridden from inside Tau. To point Tau at a
+different catalog file (for example when the package directory is not
+writable), set the `TAU_CATALOG_PATH` environment variable.
 
-- `src/tau_coding/data/catalog.toml` ships the built-in provider/model catalog.
-- `~/.tau/catalog.toml` optionally adds personal providers or overlays built-ins.
-- `~/.tau/providers.json` stores runtime preferences such as the default provider,
-  default model, scoped models, headers, and timeout/retry settings.
-
-Tau intentionally reads catalog overlays only from the user-level
-`~/.tau/catalog.toml`. There is no project-level `.tau/catalog.toml`, so cloning a
-repository cannot silently redirect a provider's `base_url` or credentials to an
+There is intentionally **no project-level** catalog: cloning a repository
+cannot silently redirect a provider's `base_url` or credentials to an
 unexpected service.
 
-### Provider catalog overlays
+### Editing the catalog
 
-Add reusable custom provider definitions to `~/.tau/catalog.toml`:
+Add or edit a provider directly in `src/tau_coding/data/catalog.toml`:
 
 ```toml
 schema_version = 1
@@ -145,27 +153,21 @@ qwen-coder = 64000
 short label shown in the TUI status block and model picker. For example,
 `openai-codex = "codex"` displays `codex:<model>` but keeps `openai-codex` for
 routing, credentials, CLI arguments, and saved session metadata. Labels must
-refer to providers in the effective catalog, must be non-empty and unique, and
-must not equal another provider's canonical ID.
+refer to providers in the catalog, must be non-empty and unique, and must not
+equal another provider's canonical ID.
 
-Catalog entries support `kind` values of `openai-compatible`, `anthropic`, and
+The `default_provider` root key names the provider used when no explicit
+selection is given. A `[[providers]]` entry's `default_model` selects that
+provider's starting model.
+
+Catalog entries support `kind` values of `openai-compatible` and
 `openai-codex`. For most custom services, start with `openai-compatible`.
-
-User catalog overlays can be partial when they use the same `name` as a built-in
-provider. Scalar fields replace built-in values, `models` are merged with user
-models first, and `context_windows` are merged. Provider-level `compat` is merged
-key by key. Model metadata is merged by model;
-its `headers` and `compat` mappings are merged, while other
-metadata fields—including the complete `cost_tiers` array and the thinking
-fields—replace the built-in value. A model's `compat` wins over the provider's, so
-a built-in per-model value overrides a provider-level overlay — override at the
-model level to change it.
 
 `removed_models` is an additive provider-scoped tombstone list. Tau applies it
 last and removes matching model-list, metadata, context-window, thinking, and
-default references after merging. Bundled tombstones therefore prevent stale
-user overlays from restoring models that Tau previously advertised for the wrong
-provider. They do not affect the same model ID on another provider.
+default references. Bundled tombstones therefore prevent stale models from
+being advertised for the wrong provider. They do not affect the same model ID
+on another provider.
 
 ### OpenAI prompt-cache compat keys
 
@@ -215,14 +217,16 @@ exactly two thinking fields: `thinking_levels` (the Tau levels the model
 accepts, sent verbatim as the parameter value) and `thinking_default` (a member
 of that list used when no preference is remembered).
 
-`catalog.toml` does not store runtime request options such as custom HTTP
-headers, timeouts, or retry settings. Put those in `~/.tau/providers.json` on the
-matching provider entry.
+`catalog.toml` also stores runtime preferences directly on the matching
+`[[providers]]` entry: `headers`, `thinking_defaults`, `timeout_seconds`,
+`stream_idle_timeout_seconds`, `max_retries`, `max_retry_delay_seconds` (and
+`inference_providers` for the Hugging Face provider). See
+[Provider preferences](#provider-preferences) below.
 
 Invalid catalog files fail loudly. Tau rejects unknown keys, empty required
 strings, empty model names, unsupported provider kinds, default models that are
-not listed in `models` or `context_windows` entries for
-unknown models, and non-positive or non-integer context-window values.
+not listed in `models`, `context_windows` entries for unknown models, and
+non-positive or non-integer context-window values.
 
 Model metadata can retain a backward-compatible flat `cost` and optionally
 provide ordered `cost_tiers` for rates that depend on input size:
@@ -248,37 +252,42 @@ TTL cache writes, which Anthropic bills higher. When `cacheWrite1h` is absent,
 
 ### Provider preferences
 
-Provider preferences live in `~/.tau/providers.json`:
+Per-provider runtime preferences live directly in
+`src/tau_coding/data/catalog.toml` on the matching `[[providers]]` entry:
 
-```json
-{
-  "schema_version": 2,
-  "default_provider": "local-gateway",
-  "provider_preferences": {
-    "local-gateway": {
-      "default_model": "qwen-coder",
-      "headers": { "X-Provider-Header": "value" },
-      "thinking_defaults": { "qwen-coder": "low" },
-      "timeout_seconds": 120,
-      "stream_idle_timeout_seconds": 600,
-      "max_retries": 2,
-      "max_retry_delay_seconds": 0.5
-    }
-  },
-  "scoped_models": [
-    { "provider": "local-gateway", "model": "qwen-coder" }
-  ]
-}
+```toml
+default_provider = "local-gateway"
+
+[[providers]]
+name = "local-gateway"
+display_name = "Local Gateway"
+kind = "openai-compatible"
+base_url = "http://localhost:11434/v1"
+api_key_env = "LOCAL_GATEWAY_API_KEY"
+credential_name = "local-gateway"
+models = ["qwen-coder"]
+default_model = "qwen-coder"
+docs_url = "https://example.test/local-gateway"
+timeout_seconds = 120.0
+stream_idle_timeout_seconds = 600.0
+max_retries = 2
+max_retry_delay_seconds = 0.5
+headers = { "X-Provider-Header" = "value" }
+thinking_defaults = { qwen-coder = "low" }
 ```
 
-- `provider_preferences` keys must refer to providers from the effective catalog
-  (`src/tau_coding/data/catalog.toml` plus `~/.tau/catalog.toml`).
+- `default_provider` (a root key) names the provider Tau starts with when
+  nothing else is selected. `default_model` on a provider entry selects that
+  provider's starting model. Preference keys that are absent keep their
+  defaults. Tau never rewrites this file: model or thinking changes made at
+  runtime apply to the active session only, and you update defaults by editing
+  the catalog directly.
 - `headers` is optional (string→string). For example, Hugging Face organization
-  billing can be configured with `"headers": { "X-HF-Bill-To": "my-org" }` on
-  the `huggingface` provider preference. `thinking_defaults` remembers the
-  preferred thinking level per model for new sessions; resumed sessions still use
-  their session history. The built-in `huggingface` preference also accepts
-  `"inference_providers": { "zai-org/GLM-5.2": "deepinfra" }`. Each key must be
+  billing can be configured with `headers = { "X-HF-Bill-To" = "my-org" }` on
+  the `huggingface` provider entry. `thinking_defaults` remembers the preferred
+  thinking level per model for new sessions; resumed sessions still use their
+  session history. The `huggingface` provider also accepts
+  `inference_providers = { "zai-org/GLM-5.2" = "deepinfra" }`. Each key must be
   a configured model and each value an explicit provider suffix advertised by
   Hugging Face—not the `fastest`, `cheapest`, or `preferred` routing policies.
   Tau snapshots the selected suffix into new session metadata, retains it on
@@ -287,7 +296,7 @@ Provider preferences live in `~/.tau/providers.json`:
   automatic routing and pins the `x-inference-provider` reported by the first
   successful response. `/session` reports the route; `/route <provider>` selects
   one and `/route automatic` resets automatic resolution for the active session.
-  `timeout_seconds` defaults to `60` (> 0) for connection, request-write, and
+- `timeout_seconds` defaults to `60` (> 0) for connection, request-write, and
   connection-pool inactivity. `stream_idle_timeout_seconds` defaults to `600`
   (> 0) and limits the interval between chunks on an established response
   stream; it is not a total turn deadline, and heartbeat chunks reset it.
@@ -298,34 +307,27 @@ Provider preferences live in `~/.tau/providers.json`:
   `overloaded_error`, and `rate_limit_error`; OpenAI Codex retries transient
   events such as `server_is_overloaded`. In-stream errors remain terminal after
   partial content to prevent duplicate output or tool calls.
-- API keys and OAuth credentials are **not** stored here — they live in
-  `~/.tau/credentials.json` (private but not encrypted). OAuth objects may contain
-  provider metadata such as a GitHub Enterprise domain and are refreshed
+- API keys and OAuth credentials are **not** stored in the catalog — they live
+  in `~/.tau/credentials.json` (private but not encrypted). OAuth objects may
+  contain provider metadata such as a GitHub Enterprise domain and are refreshed
   automatically. Resolution order: stored credential, then the env
   var named by `api_key_env`.
 - The selected model must be present in that provider's `models` list. Add
-  custom or local model names to `models` before using them as defaults,
-  CLI/TUI selections, or scoped models.
-- `scoped_models` are favorites for the **Ctrl+P** quick-cycle.
-- `providers.json` uses `schema_version: 2` and stores preferences only. Provider
-  capabilities—model lists, context windows, transports, metadata, and thinking
-  support—always come from the current effective catalog.
-- Older `providers.json` files that contain full `providers` entries are migrated
-  automatically on first load. Tau keeps the original as `providers.json.bak`,
-  moves custom provider definitions to `~/.tau/catalog.toml`, and rewrites
-  built-in providers from the current catalog while preserving safe preferences.
-  This prevents old model or thinking metadata from hiding capabilities added by
-  a Tau upgrade.
-- Tau ignores unrecognized preference fields for cross-version compatibility,
-  but rejects an unsupported `schema_version` rather than risking a destructive
-  rewrite with the wrong format.
+  custom or local model names to `models` before using them as defaults or
+  CLI/TUI selections.
+- **Ctrl+P** quick-cycles every model across all providers with usable
+  credentials: the default provider leads with its `default_model`, then its
+  remaining models, then each other provider's `default_model` and models.
+  There are no scoped-model favorites; the cycle list is derived from the
+  catalog.
 - Custom models declare thinking support in `catalog.toml` model metadata with
   `thinking_levels` and `thinking_default`, and set the wire parameter
   (`"reasoning_effort"`, `"reasoning.effort"`, or `"anthropic.thinking"`) with
   the provider-level `thinking_parameter`.
 
-Writes after `/login`, `/model`, or scoped-model changes reload the file first,
-apply only the requested change, write atomically, and keep a `.bak` backup.
+Tau never writes the catalog. `/login` stores credentials in
+`~/.tau/credentials.json`; all provider configuration changes are made by
+editing `src/tau_coding/data/catalog.toml` by hand.
 
 See the [Providers & models guide]({{< relref "../guides/providers-and-models.md" >}}) for usage.
 
@@ -403,44 +405,22 @@ commit it to Git or put it in project files. See
 
 ## TUI settings
 
-The built-in frontend reads optional settings from `~/.tau/tui.json`:
+The built-in frontend uses built-in defaults only; there is no `tui.json` file
+and no other TUI settings file. Keybindings:
 
-```json
-{
-  "theme": "high-contrast",
-  "turn_notification": "desktop",
-  "keybindings": {
-    "cancel": "escape",
-    "command_palette": "ctrl+k",
-    "session_picker": "ctrl+r",
-    "open_context": "ctrl+l",
-    "queue_follow_up": "alt+enter",
-    "accept_completion": "tab",
-    "completion_next": "down",
-    "completion_previous": "up",
-    "thinking_cycle": "shift+tab",
-    "model_cycle": "ctrl+p",
-    "toggle_thinking": "ctrl+t",
-    "toggle_tool_results": "ctrl+o",
-    "clear_prompt": "ctrl+u",
-    "quit": "ctrl+d"
-  }
-}
+```text
+cancel: escape        command_palette: ctrl+k   session_picker: ctrl+r
+open_context: ctrl+l  queue_follow_up: alt+enter  accept_completion: tab
+completion_next: down completion_previous: up    thinking_cycle: ctrl+f
+model_cycle: ctrl+p   toggle_thinking: ctrl+t    toggle_tool_results: ctrl+o
+clear_prompt: ctrl+u  quit: ctrl+d
 ```
 
-Built-in themes: `tau-dark` (default), `tau-light`, `high-contrast`. Custom
-themes are JSON files in `~/.tau/themes/` or a project's `.tau/themes/` — see
-[Themes]({{< relref "../guides/themes.md" >}}). Set one with `/theme`.
-Textual's native theme picker is mapped to the same Tau themes and persists
-the same `theme` setting. A configured theme that cannot be found falls back
-to `tau-dark` with a startup notice, without overwriting the setting. Keys use
-Textual syntax; omitted keys keep their defaults. Tau ignores unrecognized
-settings and keybinding names so a `tui.json` written by a newer Tau version does
-not prevent an older version from starting. Recognized settings remain strict:
-Tau rejects invalid values, empty keys, and duplicate assignments. `Ctrl+C` is
-reserved as the hard stop key and is not remappable. The former `copy_message`
-name still migrates a custom clear-prompt key, while its old default `ctrl+c`
-becomes the new `Ctrl+U` clear-prompt default.
+Built-in themes: `codeyellow` (default), `tau-light`, `tau-dark`,
+`high-contrast`. Custom themes are JSON files in `~/.tau/themes/` or a
+project's `.tau/themes/` — see [Themes]({{< relref "../guides/themes.md" >}}).
+Set one with `/theme`; the choice applies to the current session (it is not
+persisted). `Ctrl+C` is reserved as the hard stop key and is not remappable.
 
 - `turn_notification`: `"desktop"` (default), `"bell"`, or `"off"`. When Tau's
   terminal surface is unfocused and the agent becomes fully idle, `"desktop"`

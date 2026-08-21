@@ -122,8 +122,7 @@ thinking level you can cycle:
 off → minimal → low → medium → high → xhigh → max
 ```
 
-- **Shift+Tab** cycles the thinking level (configurable in `~/.tau/tui.json`
-  via the `thinking_cycle` keybinding).
+- **Ctrl+F** cycles the thinking level.
 - **Ctrl+T** toggles whether reasoning tokens are shown (hidden by default).
   Reasoning blocks are saved with the assistant response, so their original
   positions and visibility toggle are restored when you resume a session.

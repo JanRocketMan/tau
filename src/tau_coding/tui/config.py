@@ -1,13 +1,15 @@
-"""Durable Textual TUI configuration for Tau."""
+"""In-memory Textual TUI configuration for Tau.
+
+Tau's TUI has no user-level configuration file: all settings use built-in
+in-memory defaults below, and runtime changes (for example the theme picker)
+apply to the current session only.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from json import dumps, loads
-from pathlib import Path
 from typing import Any, Literal, cast
 
-from tau_coding.paths import TauPaths
 from tau_coding.tui.themes import (
     BUILTIN_TUI_THEME_NAMES,
     CODEYELLOW_THEME,
@@ -37,10 +39,7 @@ __all__ = [
     "TuiThemeName",
     "TurnNotificationMode",
     "get_tui_theme",
-    "load_tui_settings",
-    "save_tui_settings",
     "tui_settings_from_json",
-    "tui_settings_path",
 ]
 
 
@@ -60,7 +59,7 @@ class TuiKeybindings:
     accept_completion: str = "tab"
     completion_next: str = "down"
     completion_previous: str = "up"
-    thinking_cycle: str = "shift+tab"
+    thinking_cycle: str = "ctrl+f"
     model_cycle: str = "ctrl+p"
     toggle_thinking: str = "ctrl+t"
     toggle_tool_results: str = "ctrl+o"
@@ -123,30 +122,6 @@ class TuiSettings:
             return get_tui_theme(self.theme)
         except KeyError:
             return CODEYELLOW_THEME
-
-
-def tui_settings_path(paths: TauPaths | None = None) -> Path:
-    """Return the durable TUI settings path."""
-    return (paths or TauPaths()).home / "tui.json"
-
-
-def load_tui_settings(paths: TauPaths | None = None) -> TuiSettings:
-    """Load durable TUI settings, falling back to built-in defaults."""
-    path = tui_settings_path(paths)
-    if not path.exists():
-        return TuiSettings()
-    raw = loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise TuiConfigError("TUI settings must be a JSON object")
-    return tui_settings_from_json(raw)
-
-
-def save_tui_settings(settings: TuiSettings, paths: TauPaths | None = None) -> Path:
-    """Persist durable TUI settings and return the written path."""
-    path = tui_settings_path(paths)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dumps(settings.to_json(), indent=2) + "\n", encoding="utf-8")
-    return path
 
 
 def tui_settings_from_json(data: dict[str, Any]) -> TuiSettings:

@@ -303,11 +303,16 @@ async def test_reload_rechecks_empty_result_but_reuses_nonempty_run_decision(
 def test_untrusted_resource_plan_keeps_user_resources_only(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    paths = TauResourcePaths(root=tmp_path / "home/.tau", cwd=project, agents_root=None)
+    paths = TauResourcePaths(
+        root=tmp_path / "home/.tau",
+        cwd=project,
+        agents_root=None,
+        claude_home=tmp_path / "home/.tau",
+    )
 
     untrusted = resource_paths_with_project_trust(paths, trusted=False)
 
-    assert untrusted.skills_dirs == (paths.root / "skills",)
+    assert untrusted.skills_dirs == (paths.skills_dir,)
     assert untrusted.prompts_dirs == (paths.root / "prompts",)
     assert untrusted.themes_dirs == (paths.root / "themes",)
 

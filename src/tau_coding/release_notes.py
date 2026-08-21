@@ -144,7 +144,7 @@ def release_notes_between(
 
 def default_release_notes_state_path(paths: TauPaths | None = None) -> Path:
     """Return the on-disk state path for one-time release notes."""
-    return (paths or TauPaths()).home / "cache" / RELEASE_NOTES_STATE_FILENAME
+    return (paths or TauPaths()).logs_dir / RELEASE_NOTES_STATE_FILENAME
 
 
 def _parse_release_notes_entry(data: Any) -> ReleaseNotesEntry:

@@ -95,9 +95,10 @@ rebuild the transcript from `session.messages`.
   `available_providers`, `thinking_level`, `available_thinking_levels`,
   `session_manager`. For model changes from another provider, call
   `set_provider(...)` then `set_model(...)`.
-- Keybindings and themes are **frontend policy**. The built-in app reads
-  `~/.tau/tui.json` via `tau_coding.tui.load_tui_settings()`, but your UI can
-  ignore it.
+- Keybindings and themes are **frontend policy**. The built-in app uses
+  hard-coded defaults (`TuiSettings()` / `TuiKeybindings` in
+  `tau_coding.tui.config`); there is no TUI settings file. Your UI can choose
+  its own.
 
 ## What not to depend on
 

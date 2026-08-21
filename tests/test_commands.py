@@ -144,7 +144,6 @@ def test_registered_commands_are_pi_aligned(tmp_path: Path) -> None:
         "reload",
         "resume",
         "route",
-        "scoped-models",
         "session",
         "skill",
         "skills",
@@ -320,7 +319,7 @@ def test_hotkeys_command_lists_common_tui_shortcuts(tmp_path: Path) -> None:
     assert "Ctrl+K: open slash-command completions" in result.message
     assert "Ctrl+R: open session picker" in result.message
     assert "Ctrl+L: open active model context" in result.message
-    assert "Shift+Tab: cycle thinking mode" in result.message
+    assert "Ctrl+F: cycle thinking mode" in result.message
 
 
 def test_model_command_requests_picker_and_switches_models(tmp_path: Path) -> None:
@@ -336,16 +335,12 @@ def test_model_command_requests_picker_and_switches_models(tmp_path: Path) -> No
     assert session.provider_reload_called is True
 
 
-def test_scoped_models_command_requests_scoped_picker(tmp_path: Path) -> None:
+def test_scoped_models_command_is_not_registered(tmp_path: Path) -> None:
     session = FakeSession(tmp_path)
     registry = create_default_command_registry()
 
-    dashed_result = registry.execute(session, "/scoped-models")
-    pi_style_result = registry.execute(session, "/scoped models")
-
-    assert dashed_result.scoped_models_picker_requested is True
-    assert pi_style_result.scoped_models_picker_requested is True
-    assert session.provider_reload_called is True
+    assert registry.execute(session, "/scoped-models").handled is False
+    assert registry.execute(session, "/scoped models").handled is False
 
 
 def test_model_command_rejects_unknown_model(tmp_path: Path) -> None:

@@ -159,9 +159,9 @@ when you want to reduce what is sent to the model.
 
 - **`/model`** opens the model picker. Selecting a model from another provider
   switches the active provider too.
-- **Ctrl+P** quickly cycles through your *scoped* (favorite) models without
-  opening the picker. Manage that list with `/scoped-models` or by pressing
-  `Space` on a model in the `/model` picker.
+- **Ctrl+P** quickly cycles through all available models without opening the
+  picker: the default provider leads with its default model, then its
+  remaining models, then each other provider's default model and models.
 - **`/theme`** switches between `tau-dark`, `tau-light`, `high-contrast`, and
   any custom themes you have installed. Each theme uses one shared selection
   palette for prompt autocomplete and modal lists such as `/resume`. In
@@ -180,8 +180,9 @@ list.
 The compact status block below the prompt uses two aligned rows on a large
 enough terminal. The first row shows the session name on the left and
 `provider:model (thinking)` on the right. A provider label from
-`~/.tau/catalog.toml` replaces only this displayed provider text and model-picker
-labels; routing continues to use the canonical provider ID. The second row shows
+the catalog (`src/tau_coding/data/catalog.toml`) replaces only this displayed
+provider text and model-picker labels; routing continues to use the canonical
+provider ID. The second row shows
 the working directory and short Jujutsu change ID, shown as `@ <change-id>`, on the
 left, with provider-anchored active context as `used/limit` on the right. The
 directory name and model are emphasized. Parent paths, Jujutsu details, and the
