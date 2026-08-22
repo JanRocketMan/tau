@@ -137,7 +137,7 @@ class HotkeyCatalog:
         their owning widgets read the keys via :meth:`keys`.
         """
         effective = self.effective_keys(overrides=overrides)
-        display_keys = {name: _display_key(key) for name, key in effective.items()}
+        display_keys = {name: display_key(key) for name, key in effective.items()}
         bindings: list[BindingType] = []
         for hotkey in self.keymap(keymap).hotkeys:
             if not hotkey.bound:
@@ -169,8 +169,8 @@ class HotkeyCatalog:
             ) from error
 
 
-def _display_key(key: str) -> str:
-    """Render a key for footer hints, for example ``"ctrl+k"`` -> ``"Ctrl+K"``."""
+def display_key(key: str) -> str:
+    """Render a key for user-facing hints, for example ``"ctrl+k"`` -> ``"Ctrl+K"``."""
     return "+".join(part.capitalize() for part in key.split("+"))
 
 

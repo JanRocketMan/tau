@@ -21,6 +21,7 @@ EXPECTED_PROMPT_KEYS = {
     "queue_follow_up": "alt+enter",
     "command_palette": "ctrl+k",
     "session_picker": "ctrl+r",
+    "tree_picker": "ctrl+g",
     "open_context": "ctrl+l",
     "accept_completion": "tab",
     "completion_next": "down",
@@ -110,6 +111,7 @@ def test_app_keymap_matches_app_scope_bindings() -> None:
         ("escape", "cancel"),
         ("ctrl+k", "open_command_palette"),
         ("ctrl+r", "open_session_picker"),
+        ("ctrl+g", "open_tree_picker"),
         ("ctrl+l", "open_context"),
         ("ctrl+f", "cycle_thinking"),
         ("ctrl+p", "cycle_model"),
@@ -125,6 +127,7 @@ def test_app_keymap_matches_app_scope_bindings() -> None:
     ]
     assert all(binding.show for binding in bindings)
     assert [binding.priority for binding in bindings] == [
+        False,
         False,
         False,
         False,
@@ -151,6 +154,7 @@ def test_prompt_mode_keymaps_carry_footer_labels() -> None:
         ("shift+enter", "Newline"),
         ("ctrl+k", "Commands"),
         ("ctrl+r", "Sessions"),
+        ("ctrl+g", "Tree"),
         ("ctrl+l", "Context"),
         ("ctrl+f", "Thinking"),
         ("ctrl+p", "Model"),

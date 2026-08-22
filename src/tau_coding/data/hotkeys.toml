@@ -71,6 +71,12 @@ action = "open_session_picker"
 description = "Open the session picker"
 
 [[keymaps.bindings]]
+name = "tree_picker"
+key = "ctrl+g"
+action = "open_tree_picker"
+description = "Open the session tree for branching"
+
+[[keymaps.bindings]]
 name = "open_context"
 key = "ctrl+l"
 action = "open_context"
@@ -151,6 +157,10 @@ hotkey = "session_picker"
 description = "Sessions"
 
 [[keymaps.bindings]]
+hotkey = "tree_picker"
+description = "Tree"
+
+[[keymaps.bindings]]
 hotkey = "open_context"
 description = "Context"
 
@@ -229,6 +239,11 @@ priority = true
 [[keymaps.bindings]]
 hotkey = "session_picker"
 description = "Sessions"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "tree_picker"
+description = "Tree"
 priority = true
 
 [[keymaps.bindings]]

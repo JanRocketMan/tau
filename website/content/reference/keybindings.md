@@ -32,6 +32,7 @@ carries the defaults.
 | --- | --- |
 | `Ctrl+K` | Open the command palette |
 | `Ctrl+R` | Open the session picker |
+| `Ctrl+G` | Open the session tree for branching |
 | `Ctrl+L` | Open the active model context in the default editor |
 | `Tab` | Accept the highlighted completion |
 | `Down` / `Up` | Move through completions |

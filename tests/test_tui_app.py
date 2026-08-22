@@ -2683,6 +2683,7 @@ async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
             "Submit": "enter",
             "Newline": "shift+enter",
             "Sessions": "ctrl+r",
+            "Tree": "ctrl+g",
             "Context": "ctrl+l",
             "Thinking": "ctrl+f",
             "Model": "ctrl+p",
@@ -5405,6 +5406,23 @@ async def test_tui_app_blocks_tree_branch_selection_while_agent_is_running() -> 
 
 
 @pytest.mark.anyio
+async def test_tui_app_opens_tree_picker_from_keybinding() -> None:
+    session = FakeSession()
+    app = _tui_app(session)
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+g")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TreePickerScreen)
+        assert session.thinking_level == "medium"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, TreePickerScreen)
+
+
+@pytest.mark.anyio
 async def test_tui_app_tree_picker_branches_with_summary() -> None:
     session = FakeSession()
     app = _tui_app(session)
@@ -5417,23 +5435,24 @@ async def test_tui_app_tree_picker_branches_with_summary() -> None:
 
         assert isinstance(app.screen, TreePickerScreen)
         tree_list = app.screen.query_one("#tree-picker-list", ListView)
-        assert tree_list.index == 3
+        # Tool calls are hidden by default, so the active "right" entry is
+        # the last of three rows.
+        assert tree_list.index == 2
         rendered_labels = [_render_content(item.query_one(Label)) for item in tree_list.children]
         labels = [str(label) for label in rendered_labels]
         assert labels == [
             "  user: Root",
-            "  tool call: read",
             "  assistant: Left",
             "* assistant: Right",
         ]
         assert str(rendered_labels[0].spans[0].style) == _style_rgb(CODEYELLOW_THEME.accent)
-        assert str(rendered_labels[3].spans[0].style) == _style_rgb(CODEYELLOW_THEME.highlight_text)
+        assert str(rendered_labels[2].spans[0].style) == _style_rgb(CODEYELLOW_THEME.highlight_text)
 
         await pilot.press("up")
         await pilot.pause()
-        assert tree_list.index == 2
-        left_label = _render_content(tree_list.children[2].query_one(Label))
-        right_label = _render_content(tree_list.children[3].query_one(Label))
+        assert tree_list.index == 1
+        left_label = _render_content(tree_list.children[1].query_one(Label))
+        right_label = _render_content(tree_list.children[2].query_one(Label))
         assert str(left_label.spans[0].style) == _style_rgb(CODEYELLOW_THEME.highlight_text)
         assert str(right_label.spans[0].style) == _style_rgb(CODEYELLOW_THEME.accent)
         await pilot.press("s")
@@ -5552,11 +5571,8 @@ async def test_tui_app_tree_picker_toggles_tool_calls() -> None:
 
         assert isinstance(app.screen, TreePickerScreen)
         tree_list = app.screen.query_one("#tree-picker-list", ListView)
-        assert tree_list.index == 3
-
-        await pilot.press("ctrl+t")
-        await pilot.pause()
-
+        # Tool calls are hidden by default: only the three non-tool entries
+        # are listed, with the active "right" entry selected.
         labels = [str(item.query_one(Label).render()) for item in tree_list.children]
         assert labels == [
             "  user: Root",
@@ -5579,6 +5595,18 @@ async def test_tui_app_tree_picker_toggles_tool_calls() -> None:
             "* assistant: Right",
         ]
         assert tree_list.index == 3
+        assert "tool calls shown" in str(app.screen.query_one("#tree-picker-help", Static).render())
+
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+
+        labels = [str(item.query_one(Label).render()) for item in tree_list.children]
+        assert labels == [
+            "  user: Root",
+            "  assistant: Left",
+            "* assistant: Right",
+        ]
+        assert tree_list.index == 2
 
 
 @pytest.mark.anyio

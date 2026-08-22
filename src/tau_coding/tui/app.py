@@ -88,7 +88,7 @@ from tau_coding.extensions.api import (
     SlotWidgetContent,
     SlotWidgetFactory,
 )
-from tau_coding.hotkeys import hotkey_catalog
+from tau_coding.hotkeys import display_key, hotkey_catalog
 from tau_coding.model_context import format_model_context
 from tau_coding.oauth import login_openai_codex
 from tau_coding.oauth_registry import get_oauth_provider, oauth_provider_ids
@@ -455,6 +455,8 @@ class CompletionActionTarget(Protocol):
 
     def action_open_session_picker(self) -> None: ...
 
+    async def action_open_tree_picker(self) -> None: ...
+
     def action_open_context(self) -> None: ...
 
     def action_cycle_thinking(self) -> None: ...
@@ -578,6 +580,10 @@ class PromptInput(TextArea):
     def action_open_session_picker(self) -> None:
         """Open the app-level session picker."""
         self._completion_target().action_open_session_picker()
+
+    async def action_open_tree_picker(self) -> None:
+        """Open the app-level session tree."""
+        await self._completion_target().action_open_tree_picker()
 
     def action_open_context(self) -> None:
         """Open the active model context through the app-level action."""
@@ -766,6 +772,9 @@ class PromptInput(TextArea):
         elif event.key == keys["session_picker"]:
             event.stop()
             self._completion_target().action_open_session_picker()
+        elif event.key == keys["tree_picker"]:
+            event.stop()
+            await self._completion_target().action_open_tree_picker()
         elif event.key == keys["open_context"]:
             event.stop()
             self._completion_target().action_open_context()
@@ -1606,7 +1615,7 @@ class TreePickerScreen(ModalScreen[TreePickerResult | None]):
         super().__init__()
         self.choices = tuple(choices)
         self.theme = theme
-        self.show_tool_calls = True
+        self.show_tool_calls = False
 
     def compose(self) -> ComposeResult:
         """Compose the tree picker."""
@@ -1732,9 +1741,13 @@ class TreePickerScreen(ModalScreen[TreePickerResult | None]):
 
     def _help_text(self) -> str:
         tool_call_state = "shown" if self.show_tool_calls else "hidden"
+        keys = hotkey_catalog().keys("tree_picker")
         return (
-            "Enter branches - S summarizes - C custom summary - "
-            f"Ctrl+T tool calls {tool_call_state} - Escape closes"
+            f"{display_key(keys['branch'])} branches - "
+            f"{display_key(keys['summarize'])} summarizes - "
+            f"{display_key(keys['custom_summary'])} custom summary - "
+            f"{display_key(keys['toggle_tool_calls'])} tool calls "
+            f"{tool_call_state} - {display_key(keys['cancel'])} closes"
         )
 
     def action_cancel(self) -> None:
@@ -4979,6 +4992,10 @@ class TauTuiApp(App[None]):
             SessionPickerScreen(records, theme=self.tui_settings.resolved_theme),
             callback=self._handle_session_picker_result,
         )
+
+    async def action_open_tree_picker(self) -> None:
+        """Open the session tree for branching, like the ``/tree`` command."""
+        await self._open_tree_picker()
 
     def action_open_context(self) -> None:
         """Open a snapshot of the active model context in an external editor."""
