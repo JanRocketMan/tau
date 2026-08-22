@@ -22,14 +22,15 @@ The OpenAI-compatible adapter now validates terminal provider values instead of 
 
 The raw value is stored in assistant diagnostics as `provider_finish` for successful responses or `provider_error` for failures. Session JSONL therefore keeps the evidence needed to diagnose the next provider incident
 
-If a retryable finish reason arrives before any model output, `tau_ai` uses the configured provider retry budget and backoff. If reasoning has already streamed, the adapter does not replay the same request because that would duplicate streamed output. It marks a reasoning-only interruption for the bounded agent recovery instead
+If a retryable finish reason arrives before any model output, `tau_ai` first uses the configured provider retry budget and backoff. The agent can then send one bounded continuation if the stream still ends without a finish reason. If thinking or visible text has already streamed, the adapter does not replay the same request because that would duplicate streamed output. It sends the partial message to the same bounded agent recovery instead
 
 ## Bounded agent recovery
 
 The portable agent loop checks the completed assistant message. It retries when either condition is true
 
 - the model returned reasoning, but no visible text or tool call
-- the provider marked a partial reasoning-only interruption as safe to continue
+- an OpenAI-compatible stream ended without a finish reason, with or without partial output
+- the provider marked a partial reasoning-only resource interruption as safe to continue
 
 The loop adds one hidden `CustomMessage` that asks the model to continue the pending task. This matches the manual `continue` workaround without showing a fake user message in the TUI. The message remains in durable history so replay is deterministic
 

@@ -143,11 +143,13 @@ The DeepSeek V4 model entry also enables DeepSeek's `thinking` request shape and
 `reasoning_content` history replay. This is required after tool calls, including
 the case where the preceding assistant response omitted its reasoning delta
 
-OpenCode Go can occasionally end a response after reasoning but before text or
-a tool call. This can affect more than one model. Tau treats that response as
-incomplete and sends one automatic continuation. If the continuation is also
-incomplete, Tau stops rather than entering an unbounded loop. Provider request
-retries remain separate and appear as status rows in the TUI
+OpenCode Go can occasionally end a response without a finish reason, or after
+reasoning but before text or a tool call. This can affect more than one model.
+Tau treats that response as incomplete and sends one automatic continuation,
+including when the missing finish reason occurs during thinking, after visible
+text, or before any output. If the continuation is also incomplete, Tau stops
+rather than entering an unbounded loop. Provider request retries remain separate
+and appear as status rows in the TUI
 
 ### Hugging Face Inference Providers
 

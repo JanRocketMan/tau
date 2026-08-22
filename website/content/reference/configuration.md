@@ -311,8 +311,10 @@ thinking_defaults = { qwen-coder = "low" }
   content to prevent duplicate output or tool calls. Tau also validates terminal
   OpenAI-compatible finish reasons and retries a request-level
   `insufficient_system_resource` or missing finish reason when no output has
-  started. If any model ends after reasoning without text or a tool call, the
-  agent sends one bounded continuation instead of requiring a manual `continue`
+  started. If the stream still ends without a finish reason, the agent sends one
+  bounded continuation, including after partial thinking or visible text. The
+  same continuation applies if any model ends after reasoning without text or a
+  tool call
 - API keys and OAuth credentials are **not** stored in the catalog — they live
   in `~/.tau/credentials.json` (private but not encrypted). OAuth objects may
   contain provider metadata such as a GitHub Enterprise domain and are refreshed

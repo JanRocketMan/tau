@@ -578,7 +578,9 @@ def _finish_error(
         data={
             "finish_reason": value,
             "retryable": retryable,
-            "retryable_incomplete_response": (retryable and retryable_incomplete_response),
+            "retryable_incomplete_response": (
+                retryable and (value is None or retryable_incomplete_response)
+            ),
         },
     )
 

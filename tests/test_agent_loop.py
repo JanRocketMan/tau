@@ -281,6 +281,60 @@ async def test_agent_loop_retries_partial_retryable_provider_interruption() -> N
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "content",
+    [
+        [],
+        [ThinkingContent(thinking="unfinished")],
+        [TextContent(text="unfinished")],
+    ],
+    ids=["without-output", "mid-thinking", "outside-thinking"],
+)
+async def test_agent_loop_retries_missing_finish_reason_once(
+    content: list[ThinkingContent | TextContent],
+) -> None:
+    interrupted = AssistantMessage(
+        content=content,
+        model="fake",
+        stop_reason="error",
+        error_message="Provider stream ended without a finish reason",
+        diagnostics=[
+            AssistantMessageDiagnostic(
+                type="provider_error",
+                details={"retryable_incomplete_response": True},
+            )
+        ],
+    )
+    final = AssistantMessage(content=[TextContent(text="Done")], model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), AssistantErrorEvent(reason="error", error=interrupted)],
+            [assistant_start(), assistant_done(final)],
+        ]
+    )
+    messages: list[AgentMessage] = [UserMessage(content="work")]
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=messages,
+            tools=[],
+        )
+    )
+
+    retries = [event for event in events if isinstance(event, RetryEvent)]
+    assert len(retries) == 1
+    assert retries[0].scope == "response"
+    assert retries[0].error_message == (
+        "Provider stream ended without a finish reason; retrying once."
+    )
+    assert len(provider.calls) == 2
+    assert messages[-1] is final
+
+
+@pytest.mark.anyio
 async def test_agent_loop_executes_tool_and_emits_tool_result_message_lifecycle() -> None:
     async def execute(
         tool_call_id: str,

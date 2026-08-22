@@ -62,9 +62,11 @@ calls as ordered content blocks. Nested update events provide responsive renderi
 while saved sessions and provider history replay use the finalized structured message
 
 If a model stops after reasoning without visible text or a tool call, the loop
-adds one hidden continuation and requests the response again. A second consecutive
-incomplete response ends the run, which prevents an unbounded retry loop. A valid
-tool call resets this bound for the next model step
+adds one hidden continuation and requests the response again. It does the same
+when an OpenAI-compatible stream ends without a finish reason, whether that
+happens during thinking, after visible text, or before output starts. A second
+consecutive incomplete response ends the run, which prevents an unbounded retry
+loop. A valid tool call resets this bound for the next model step
 Its `provider` field names Tau's configured provider. When a gateway reports a
 more specific backend, `response_provider` records the backend that served that
 request. For example, Hugging Face responses expose the selected Inference

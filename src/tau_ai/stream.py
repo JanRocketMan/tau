@@ -264,7 +264,12 @@ async def canonicalize_provider_stream(
                     *(final.diagnostics or []),
                     AssistantMessageDiagnostic(
                         type="provider_error",
-                        details={"finish_reason": event.finish_reason},
+                        details={
+                            "finish_reason": event.finish_reason,
+                            "partial_output": bool(final.content),
+                            "retryable": event.finish_reason is None,
+                            "retryable_incomplete_response": event.finish_reason is None,
+                        },
                     ),
                 ]
                 yield AssistantErrorEvent(reason="error", error=final)

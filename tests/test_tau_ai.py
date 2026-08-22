@@ -37,6 +37,8 @@ from tau_ai import (
     ThinkingDeltaEvent,
     ToolCallEndEvent,
 )
+from tau_ai._provider_events import ProviderResponseEndEvent, ProviderTextDeltaEvent
+from tau_ai.stream import canonicalize_provider_stream
 
 
 async def _collect[T](stream: AsyncIterator[T]) -> list[T]:
@@ -72,6 +74,33 @@ def _diagnostic_details(event: AssistantErrorEvent) -> dict[str, JSONValue]:
     details = diagnostics[0].details
     assert isinstance(details, dict)
     return details
+
+
+@pytest.mark.anyio
+async def test_canonical_stream_marks_missing_finish_reason_for_response_retry() -> None:
+    async def source() -> AsyncIterator[ProviderTextDeltaEvent | ProviderResponseEndEvent]:
+        yield ProviderTextDeltaEvent(delta="partial")
+        yield ProviderResponseEndEvent(message=AssistantMessage(), finish_reason=None)
+
+    events = await _collect(
+        canonicalize_provider_stream(
+            source(),
+            api="openai-completions",
+            provider="test-provider",
+            model="test-model",
+        )
+    )
+
+    error = events[-1]
+    assert isinstance(error, AssistantErrorEvent)
+    assert error.error.error_message == "Provider stream ended without a finish reason"
+    assert error.error.text == "partial"
+    assert _diagnostic_details(error) == {
+        "finish_reason": None,
+        "partial_output": True,
+        "retryable": True,
+        "retryable_incomplete_response": True,
+    }
 
 
 def _provider_tool(
@@ -828,16 +857,25 @@ async def test_openai_compatible_provider_marks_partial_resource_interruption_re
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("finish_reason", "expected_message"),
+    ("finish_reason", "expected_message", "expected_response_retry"),
     [
-        (None, "Provider stream ended without a finish reason"),
-        ("content_filter", "Provider omitted the response because a content filter was triggered"),
-        ("future_reason", "Provider returned unsupported finish reason: future_reason"),
+        (None, "Provider stream ended without a finish reason", True),
+        (
+            "content_filter",
+            "Provider omitted the response because a content filter was triggered",
+            False,
+        ),
+        (
+            "future_reason",
+            "Provider returned unsupported finish reason: future_reason",
+            False,
+        ),
     ],
 )
 async def test_openai_compatible_provider_rejects_invalid_finish_reason(
     finish_reason: str | None,
     expected_message: str,
+    expected_response_retry: bool,
 ) -> None:
     terminal = (
         f"data: {dumps({'choices': [{'delta': {}, 'finish_reason': finish_reason}]})}\n\n"
@@ -872,7 +910,53 @@ async def test_openai_compatible_provider_rejects_invalid_finish_reason(
 
     assert isinstance(events[-1], AssistantErrorEvent)
     assert events[-1].error.error_message == expected_message
-    assert _diagnostic_details(events[-1])["finish_reason"] == finish_reason
+    details = _diagnostic_details(events[-1])
+    assert details["finish_reason"] == finish_reason
+    assert details["retryable_incomplete_response"] is expected_response_retry
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("delta_field", ["content", "reasoning_content"])
+async def test_openai_compatible_provider_marks_partial_missing_finish_retryable(
+    delta_field: str,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                f"data: {dumps({'choices': [{'delta': {delta_field: 'unfinished'}}]})}\n\n"
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                max_retries=3,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="work")],
+                tools=[],
+            )
+        )
+
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].error.error_message == "Provider stream ended without a finish reason"
+    assert _diagnostic_details(events[-1]) == {
+        "finish_reason": None,
+        "retryable": True,
+        "retryable_incomplete_response": True,
+        "attempts": 1,
+        "partial_output": True,
+    }
 
 
 @pytest.mark.anyio
@@ -2393,6 +2477,37 @@ async def test_responses_api_maps_incomplete_status_to_length() -> None:
     assert isinstance(end, AssistantDoneEvent)
     assert end.message.text == "partial"
     assert end.reason == "length"
+
+
+@pytest.mark.anyio
+async def test_responses_api_marks_missing_terminal_status_retryable() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text='data: {"type":"response.output_text.delta","delta":"partial"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(api_key="test-key", base_url="https://example.test/v1"),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="gpt-5.5",
+                system="You are Tau.",
+                messages=[UserMessage(content="hi")],
+                tools=[],
+            )
+        )
+
+    error = events[-1]
+    assert isinstance(error, AssistantErrorEvent)
+    assert error.error.text == "partial"
+    assert error.error.error_message == "Provider stream ended without a finish reason"
+    assert _diagnostic_details(error)["retryable_incomplete_response"] is True
 
 
 @pytest.mark.anyio

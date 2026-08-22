@@ -37,10 +37,12 @@ layer to avoid replaying visible output or tool calls
 
 The OpenAI-compatible adapter also validates completion finish reasons. A
 request-level `insufficient_system_resource` or missing finish reason is
-retryable before output starts. A partial reasoning-only interruption is handed
-to the agent loop, which can send one bounded continuation without replaying a
-completed tool call. A normal `stop` that contains reasoning but no answer or
-tool call uses the same bounded recovery
+retryable before output starts. If the provider retry budget does not recover a
+missing finish reason, the agent loop sends one bounded continuation. It uses
+the same recovery when the missing reason follows partial thinking or visible
+text, without replaying a completed tool call. A partial reasoning-only resource
+interruption and a normal `stop` with reasoning but no answer or tool call also
+use this bounded recovery
 
 Backoff is short, exponential, and capped by `max_retry_delay_seconds`
 The cap is not a fixed delay: retries start at 0.25 seconds and double until
