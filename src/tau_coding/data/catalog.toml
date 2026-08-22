@@ -92,6 +92,7 @@ max_tokens = 384000
 cost = { input = 0.14, output = 0.28, cacheRead = 0.028, cacheWrite = 0.0 }
 thinking_default = "max"
 thinking_levels = ["high", "max"]
+compat = { supportsStore = false, maxTokensField = "max_tokens", requiresReasoningContentOnAssistantMessages = true, thinkingFormat = "deepseek" }
 
 # Web-search providers for the optional `search` tool. Select a provider by
 # setting TAU_SEARCH_PROVIDER; when unset, default_search_provider wins.

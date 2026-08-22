@@ -31,6 +31,20 @@ class TurnEndEvent(WireModel):
     tool_results: list[ToolResultMessage] = Field(default_factory=list)
 
 
+RetryScope = Literal["provider", "response"]
+
+
+class RetryEvent(WireModel):
+    """Report provider backoff or one bounded incomplete-response recovery."""
+
+    type: Literal["retry"] = "retry"
+    scope: RetryScope
+    attempt: int
+    max_attempts: int
+    delay_ms: int
+    error_message: str
+
+
 class MessageStartEvent(WireModel):
     type: Literal["message_start"] = "message_start"
     message: AgentMessage
@@ -77,6 +91,7 @@ type AgentEvent = Annotated[
     | AgentEndEvent
     | TurnStartEvent
     | TurnEndEvent
+    | RetryEvent
     | MessageStartEvent
     | MessageUpdateEvent
     | MessageEndEvent

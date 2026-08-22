@@ -43,6 +43,7 @@ class AgentHarnessConfig:
     system: str
     tools: list[AgentTool] = field(default_factory=list)
     max_turns: int | None = None
+    max_incomplete_response_retries: int = 1
     queue_mode: QueueMode = "one_at_a_time"
     session_id: str | None = None
     # Provider-native input items persisted by a previous compaction (only the
@@ -180,6 +181,7 @@ class AgentHarness:
                 prompts=prompts,
                 tools=self._config.tools,
                 max_turns=self._config.max_turns,
+                max_incomplete_response_retries=(self._config.max_incomplete_response_retries),
                 signal=signal,
                 session_id=self._config.session_id,
                 remote_input_items=self._config.remote_input_items,

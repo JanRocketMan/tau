@@ -350,6 +350,51 @@ class OpenAICompatibleProvider:
                         if parser.fatal:
                             return
                         final_events = parser.finalize()
+                        final_error = next(
+                            (
+                                event
+                                for event in final_events
+                                if isinstance(event, ProviderErrorEvent)
+                            ),
+                            None,
+                        )
+                        if final_error is not None:
+                            error_data = {
+                                **(final_error.data or {}),
+                                "attempts": attempt + 1,
+                                "partial_output": parser.emitted_content,
+                            }
+                            final_error = final_error.model_copy(update={"data": error_data})
+                            final_events = [
+                                final_error if isinstance(event, ProviderErrorEvent) else event
+                                for event in final_events
+                            ]
+                            if (
+                                error_data.get("retryable") is True
+                                and not parser.emitted_content
+                                and self._should_retry(attempt)
+                            ):
+                                delay = retry_delay_seconds(
+                                    attempt,
+                                    max_delay_seconds=self._config.max_retry_delay_seconds,
+                                )
+                                finish_reason = error_data.get("finish_reason")
+                                reason = (
+                                    f"finish reason {finish_reason}"
+                                    if isinstance(finish_reason, str)
+                                    else "missing finish reason"
+                                )
+                                yield provider_retry_event(
+                                    attempt=attempt,
+                                    max_retries=self._config.max_retries,
+                                    delay_seconds=delay,
+                                    reason=reason,
+                                    data=error_data,
+                                )
+                                attempt += 1
+                                if not await wait_for_retry(delay, signal=signal):
+                                    return
+                                continue
                         observer = self._config.response_headers_observer
                         if observer is not None:
                             try:
@@ -496,6 +541,72 @@ class _StreamParser(Protocol):
         ...
 
 
+_CHAT_SUCCESS_FINISH_REASONS = frozenset(
+    {
+        "stop",
+        "length",
+        "max_tokens",
+        "MAX_TOKENS",
+        "incomplete",
+        "tool_calls",
+        "tool_use",
+        "toolUse",
+    }
+)
+_RESPONSES_SUCCESS_STATUSES = frozenset({"completed", "incomplete"})
+
+
+def _finish_error(
+    value: str | None,
+    *,
+    success_values: frozenset[str],
+    retryable_incomplete_response: bool,
+) -> ProviderErrorEvent | None:
+    if value in success_values:
+        return None
+    retryable = value is None or value == "insufficient_system_resource"
+    if value is None:
+        message = "Provider stream ended without a finish reason"
+    elif value == "insufficient_system_resource":
+        message = "Provider interrupted generation because inference resources were unavailable"
+    elif value == "content_filter":
+        message = "Provider omitted the response because a content filter was triggered"
+    else:
+        message = f"Provider returned unsupported finish reason: {value}"
+    return ProviderErrorEvent(
+        message=message,
+        data={
+            "finish_reason": value,
+            "retryable": retryable,
+            "retryable_incomplete_response": (retryable and retryable_incomplete_response),
+        },
+    )
+
+
+def _chat_finish_error(
+    value: str | None,
+    *,
+    retryable_incomplete_response: bool,
+) -> ProviderErrorEvent | None:
+    return _finish_error(
+        value,
+        success_values=_CHAT_SUCCESS_FINISH_REASONS,
+        retryable_incomplete_response=retryable_incomplete_response,
+    )
+
+
+def _responses_finish_error(
+    value: str | None,
+    *,
+    retryable_incomplete_response: bool,
+) -> ProviderErrorEvent | None:
+    return _finish_error(
+        value,
+        success_values=_RESPONSES_SUCCESS_STATUSES,
+        retryable_incomplete_response=retryable_incomplete_response,
+    )
+
+
 class _ChatStreamParser:
     """Parser for OpenAI `/chat/completions` SSE chunks."""
 
@@ -564,6 +675,15 @@ class _ChatStreamParser:
         return events, False
 
     def finalize(self) -> list[ProviderEvent]:
+        finish_error = _chat_finish_error(
+            self._finish_reason,
+            retryable_incomplete_response=bool(
+                self._thinking_parts and not self._content_parts and not self._tool_call_builders
+            ),
+        )
+        if finish_error is not None:
+            return [finish_error]
+
         tool_calls = [
             builder.build(index) for index, builder in sorted(self._tool_call_builders.items())
         ]
@@ -687,6 +807,15 @@ class _ResponsesStreamParser:
         return [], False
 
     def finalize(self) -> list[ProviderEvent]:
+        finish_error = _responses_finish_error(
+            self._status,
+            retryable_incomplete_response=bool(
+                self._thinking_parts and not self._content_parts and not self._tool_call_builders
+            ),
+        )
+        if finish_error is not None:
+            return [finish_error]
+
         tool_calls = [
             builder.build(index)
             for index, builder in enumerate(_ordered_builders(self._tool_call_builders))
@@ -694,7 +823,7 @@ class _ResponsesStreamParser:
         events: list[ProviderEvent] = [
             ProviderToolCallEvent(tool_call=tool_call) for tool_call in tool_calls
         ]
-        finish_reason = _normalize_finish_reason(self._status, has_tool_calls=bool(tool_calls))
+        finish_reason = self._status
         content = assistant_content("".join(self._content_parts), tool_calls)
         if self._thinking_parts:
             content.insert(
@@ -832,12 +961,19 @@ def _build_chat_payload(
     max_tokens_field = _string_compat(
         resolved_compat.get("maxTokensField"), default="max_completion_tokens"
     )
+    requires_reasoning_content = bool(
+        resolved_compat.get("requiresReasoningContentOnAssistantMessages", False)
+    )
     payload: dict[str, JSONValue] = {
         "model": model,
         "stream": True,
         "messages": [
             _system_message(system),
-            *_messages_to_openai_chat(messages, supports_images=supports_images),
+            *_messages_to_openai_chat(
+                messages,
+                supports_images=supports_images,
+                requires_reasoning_content=requires_reasoning_content,
+            ),
         ],
     }
     if prompt_cache_key is not None:
@@ -1109,15 +1245,6 @@ def _responses_finish_reason(chunk: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _normalize_finish_reason(status: str | None, *, has_tool_calls: bool) -> str:
-    """Map a Responses-API status to chat-completions-style finish reasons."""
-    if has_tool_calls:
-        return "tool_calls"
-    if status == "incomplete":
-        return "length"
-    return "stop"
-
-
 def _responses_failure_event(chunk: Mapping[str, Any]) -> ProviderErrorEvent:
     message = "Provider response failed"
     response = chunk.get("response")
@@ -1151,7 +1278,10 @@ def _system_message(system: str) -> dict[str, JSONValue]:
 
 
 def _messages_to_openai_chat(
-    messages: list[AgentMessage], *, supports_images: bool
+    messages: list[AgentMessage],
+    *,
+    supports_images: bool,
+    requires_reasoning_content: bool = False,
 ) -> list[dict[str, JSONValue]]:
     converted: list[dict[str, JSONValue]] = []
     pending_tool_images: list[ImageContent] = []
@@ -1196,7 +1326,12 @@ def _messages_to_openai_chat(
             )
             pending_tool_images.extend(images)
             continue
-        converted.append(_message_to_openai(message))
+        converted.append(
+            _message_to_openai(
+                message,
+                requires_reasoning_content=requires_reasoning_content,
+            )
+        )
     if pending_tool_images:
         converted.append(_openai_tool_image_message(pending_tool_images))
     return converted
@@ -1214,14 +1349,20 @@ def _openai_tool_image_message(images: list[ImageContent]) -> dict[str, JSONValu
     return {"role": "user", "content": content}
 
 
-def _message_to_openai(message: AgentMessage) -> dict[str, JSONValue]:
+def _message_to_openai(
+    message: AgentMessage,
+    *,
+    requires_reasoning_content: bool = False,
+) -> dict[str, JSONValue]:
     if isinstance(message, UserMessage):
         return {"role": "user", "content": message.text}
 
     if isinstance(message, AssistantMessage):
         item: dict[str, JSONValue] = {"role": "assistant", "content": message.text}
         thinking = [block for block in message.content if isinstance(block, ThinkingContent)]
-        if thinking:
+        if requires_reasoning_content:
+            item["reasoning_content"] = "".join(block.thinking for block in thinking)
+        elif thinking:
             signature = thinking[0].thinking_signature or "reasoning_content"
             if signature in {"reasoning_content", "reasoning", "thinking"}:
                 item[signature] = "".join(block.thinking for block in thinking)
@@ -1238,7 +1379,10 @@ def _message_to_openai(message: AgentMessage) -> dict[str, JSONValue]:
             "name": message.tool_name,
             "content": message.text,
         }
-    return _message_to_openai(message_to_user(message))
+    return _message_to_openai(
+        message_to_user(message),
+        requires_reasoning_content=requires_reasoning_content,
+    )
 
 
 def _tool_to_openai(tool: AgentTool) -> dict[str, JSONValue]:

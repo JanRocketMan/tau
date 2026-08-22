@@ -9,7 +9,9 @@ from tau_agent import (
     MessageEndEvent,
     MessageStartEvent,
     MessageUpdateEvent,
+    RetryEvent,
     TextContent,
+    ThinkingContent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
@@ -81,6 +83,47 @@ def test_transcript_renderer_streams_text_and_tool_events(
     assert "… reading" in captured.err
     assert "✓ read" in captured.err
     assert "done" in captured.err
+
+
+def test_renderers_ignore_recovered_incomplete_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    interrupted = AssistantMessage(
+        content=[ThinkingContent(thinking="unfinished")],
+        stop_reason="error",
+        error_message="provider interrupted generation",
+    )
+    retry = RetryEvent(
+        scope="response",
+        attempt=1,
+        max_attempts=1,
+        delay_ms=0,
+        error_message="Provider interrupted generation; retrying once.",
+    )
+    final = MessageEndEvent(message=AssistantMessage(content=[TextContent(text="Done")]))
+
+    transcript = TranscriptRenderer()
+    transcript.render(retry)
+    transcript.render(MessageEndEvent(message=interrupted))
+    transcript.render(final)
+    assert transcript.finish() is True
+
+    plain = FinalTextRenderer()
+    plain.render(retry)
+    plain.render(MessageEndEvent(message=interrupted))
+    plain.render(final)
+    assert plain.finish() is True
+
+    json_renderer = JsonEventRenderer()
+    json_renderer.render(retry)
+    json_renderer.render(MessageEndEvent(message=interrupted))
+    json_renderer.render(final)
+    assert json_renderer.finish() is True
+
+    captured = capsys.readouterr()
+    assert "Provider interrupted generation; retrying once." in captured.err
+    assert "Error: provider interrupted generation" not in captured.err
+    assert "Done" in captured.out
 
 
 def test_transcript_renderer_uses_custom_message_renderer(

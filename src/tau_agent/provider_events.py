@@ -14,6 +14,16 @@ class AssistantStartEvent(WireModel):
     partial: AssistantMessage
 
 
+class AssistantRetryEvent(WireModel):
+    """Report a provider request retry before assistant output resumes."""
+
+    type: Literal["retry"] = "retry"
+    attempt: int
+    max_attempts: int
+    delay_ms: int
+    error_message: str
+
+
 class TextStartEvent(WireModel):
     type: Literal["text_start"] = "text_start"
     content_index: int
@@ -92,6 +102,7 @@ class AssistantErrorEvent(WireModel):
 
 type AssistantMessageEvent = Annotated[
     AssistantStartEvent
+    | AssistantRetryEvent
     | TextStartEvent
     | TextDeltaEvent
     | TextEndEvent

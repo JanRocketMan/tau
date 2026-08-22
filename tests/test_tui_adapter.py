@@ -6,9 +6,11 @@ from tau_agent import (
     AgentStartEvent,
     AgentToolResult,
     AssistantMessage,
+    CustomMessage,
     MessageEndEvent,
     MessageStartEvent,
     MessageUpdateEvent,
+    RetryEvent,
     TextContent,
     ThinkingContent,
     ToolCall,
@@ -285,12 +287,98 @@ def test_tui_adapter_records_retry_and_queue_status() -> None:
         )
     )
     adapter.apply(QueueUpdateEvent(steering=("adjust",), follow_up=("after",)))
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+    adapter.apply(
+        RetryEvent(
+            scope="provider",
+            attempt=2,
+            max_attempts=3,
+            delay_ms=250,
+            error_message="Retrying provider request 2/3 after HTTP 503 in 0.25s.",
+        )
+    )
+    adapter.apply(MessageEndEvent(message=AssistantMessage(content=[TextContent(text="Done")])))
 
     assert [(item.role, item.text) for item in state.items] == [
-        ("status", "… Retrying provider request 2/3 after HTTP 503.")
+        ("status", "… Retrying provider request 2/3 after HTTP 503."),
+        ("status", "… Retrying provider request 2/3 after HTTP 503 in 0.25s."),
+        ("assistant", "Done"),
     ]
     assert state.queued_steering == ("adjust",)
     assert state.queued_follow_up == ("after",)
+
+
+def test_tui_adapter_keeps_retried_incomplete_error_provisional() -> None:
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+    interrupted = AssistantMessage(
+        content=[ThinkingContent(thinking="unfinished")],
+        stop_reason="error",
+        error_message="provider interrupted generation",
+    )
+
+    adapter.apply(AgentStartEvent())
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+    adapter.apply(
+        RetryEvent(
+            scope="response",
+            attempt=1,
+            max_attempts=1,
+            delay_ms=0,
+            error_message="Provider interrupted generation; retrying once.",
+        )
+    )
+    adapter.apply(MessageEndEvent(message=interrupted))
+
+    assert state.running is True
+    assert state.error is None
+    assert [(item.role, item.text) for item in state.items] == [
+        ("thinking", "unfinished"),
+        ("status", "… Provider interrupted generation; retrying once."),
+    ]
+
+    adapter.apply(MessageStartEvent(message=AssistantMessage()))
+    adapter.apply(MessageEndEvent(message=AssistantMessage(content=[TextContent(text="Done")])))
+    adapter.apply(SessionAgentEndEvent())
+    adapter.apply(AgentSettledEvent())
+
+    assert state.running is False
+    assert state.error is None
+    assert state.last_response_was_thinking_only is False
+
+
+def test_tui_adapter_hides_internal_auto_retry_message() -> None:
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+    hidden = CustomMessage(
+        custom_type="auto-retry",
+        content="Continue the task.",
+        display=False,
+    )
+
+    adapter.apply(MessageEndEvent(message=hidden))
+    state.load_messages([hidden])
+
+    assert state.items == []
+
+    interrupted = AssistantMessage(
+        content=[ThinkingContent(thinking="unfinished")],
+        stop_reason="error",
+        error_message="provider interrupted generation",
+    )
+    state.load_messages(
+        [
+            interrupted,
+            hidden,
+            AssistantMessage(content=[TextContent(text="Done")]),
+        ]
+    )
+
+    assert state.error is None
+    assert [(item.role, item.text) for item in state.items] == [
+        ("thinking", "unfinished"),
+        ("assistant", "Done"),
+    ]
 
 
 def test_tui_adapter_tracks_thinking_only_final_assistant_response() -> None:

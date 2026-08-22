@@ -311,6 +311,7 @@ Observation events mirror the canonical agent/session stream. Handlers receive
 | `agent_settled` | —; no retry, compaction, or queued continuation remains |
 | `turn_start` | `turn_index`, Unix-millisecond `timestamp` |
 | `turn_end` | matching `turn_index`, `message`, `tool_results` |
+| `retry` | `scope`, `attempt`, `max_attempts`, `delay_ms`, `error_message` |
 | `message_start` / `message_end` | `message`; assistant usage is at `message.usage` |
 | `message_update` | `message`, nested `assistant_message_event` |
 | `tool_execution_start` | `tool_call_id`, `tool_name`, `args` |

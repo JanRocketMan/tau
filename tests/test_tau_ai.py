@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping
-from json import loads
+from json import dumps, loads
 
 import httpx
 import pytest
@@ -24,6 +24,7 @@ from tau_ai import (
     AssistantDoneEvent,
     AssistantErrorEvent,
     AssistantMessageEvent,
+    AssistantRetryEvent,
     AssistantStartEvent,
     FakeProvider,
     OpenAICodexConfig,
@@ -196,6 +197,9 @@ async def test_openai_compatible_provider_formats_request_and_streams_text() -> 
     assert isinstance(events[-1], AssistantDoneEvent)
     assert events[-1].message.text == "Hello"
     assert events[-1].reason == "stop"
+    assert events[-1].message.diagnostics is not None
+    assert events[-1].message.diagnostics[-1].type == "provider_finish"
+    assert events[-1].message.diagnostics[-1].details == {"finish_reason": "stop"}
 
     request = requests[0]
     assert request.url == "https://example.test/v1/chat/completions"
@@ -426,8 +430,8 @@ async def test_openai_compatible_provider_coalesces_interleaved_thought_text() -
                 'data: {"choices":[{"delta":{"reasoning_content":"Let me expl"}}]}\n\n'
                 'data: {"choices":[{"delta":{"content":"Let me confirm the st"}}]}\n\n'
                 'data: {"choices":[{"delta":{"reasoning_content":"ore the reference."}}]}\n\n'
-                'data: {"choices":[{"delta":{"content":"ate and then study the reference.",'
-                '"finish_reason":"stop"}}]}\n\n'
+                'data: {"choices":[{"delta":{"content":"ate and then study the reference."},'
+                '"finish_reason":"stop"}]}\n\n'
                 "data: [DONE]\n\n"
             ),
             headers={"content-type": "text/event-stream"},
@@ -515,6 +519,97 @@ async def test_openai_compatible_provider_replays_persisted_reasoning() -> None:
     replay = payload["messages"][-1]
     assert replay["content"] == "prior answer"
     assert replay["reasoning_content"] == "prior plan"
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_replays_required_empty_reasoning_content() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"choices":[{"delta":{"content":"done"},'
+                '"finish_reason":"stop"}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    tool_call = ToolCall(id="call-1", name="read", arguments={"path": "README.md"})
+    prior = AssistantMessage(content=[tool_call])
+    result = ToolResultMessage(
+        tool_call_id="call-1",
+        tool_name="read",
+        content=[TextContent(text="contents")],
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                compat={"requiresReasoningContentOnAssistantMessages": True},
+            ),
+            client=client,
+        )
+        await _collect(
+            provider.stream_response(
+                model="deepseek-v4-flash",
+                system="You are Tau.",
+                messages=[UserMessage(content="read"), prior, result],
+                tools=[_provider_tool("read", "Read a file.", {"type": "object"})],
+            )
+        )
+
+    replay = loads(requests[0].content)["messages"][2]
+    assert replay["role"] == "assistant"
+    assert replay["reasoning_content"] == ""
+    assert replay["tool_calls"][0]["function"]["name"] == "read"
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_applies_deepseek_request_compat() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                reasoning_effort="max",
+                thinking_format="deepseek",
+                max_tokens=384_000,
+                compat={
+                    "supportsStore": False,
+                    "maxTokensField": "max_tokens",
+                },
+            ),
+            client=client,
+        )
+        await _collect(
+            provider.stream_response(
+                model="deepseek-v4-flash",
+                system="You are Tau.",
+                messages=[UserMessage(content="work")],
+                tools=[],
+            )
+        )
+
+    payload = loads(requests[0].content)
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "max"
+    assert payload["max_tokens"] == 384_000
+    assert "max_completion_tokens" not in payload
+    assert "store" not in payload
 
 
 @pytest.mark.anyio
@@ -615,12 +710,169 @@ async def test_openai_compatible_provider_retries_transient_status() -> None:
 
     assert len(requests) == 2
     assert [event.type for event in events] == [
+        "retry",
         "start",
         "text_start",
         "text_delta",
         "text_end",
         "done",
     ]
+    retry = events[0]
+    assert isinstance(retry, AssistantRetryEvent)
+    assert retry.attempt == 2
+    assert retry.max_attempts == 2
+    assert retry.error_message == "Retrying provider request 2/2 after HTTP 500."
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_retries_resource_finish_reason() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        finish_reason = "insufficient_system_resource" if len(requests) == 1 else "stop"
+        content = "" if len(requests) == 1 else "done"
+        return httpx.Response(
+            200,
+            text=(
+                f'data: {{"choices":[{{"delta":{{"content":"{content}"}},'
+                f'"finish_reason":"{finish_reason}"}}]}}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                max_retries=1,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="work")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 2
+    assert [event.type for event in events] == [
+        "start",
+        "retry",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "done",
+    ]
+    retry = events[1]
+    assert isinstance(retry, AssistantRetryEvent)
+    assert "insufficient_system_resource" in retry.error_message
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_marks_partial_resource_interruption_retryable() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"choices":[{"delta":{"reasoning_content":"unfinished"}}]}\n\n'
+                'data: {"choices":[{"delta":{},'
+                '"finish_reason":"insufficient_system_resource"}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                max_retries=3,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="work")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].error.thinking_text == "unfinished"
+    assert events[-1].error.error_message == (
+        "Provider interrupted generation because inference resources were unavailable"
+    )
+    assert _diagnostic_details(events[-1]) == {
+        "finish_reason": "insufficient_system_resource",
+        "retryable": True,
+        "retryable_incomplete_response": True,
+        "attempts": 1,
+        "partial_output": True,
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("finish_reason", "expected_message"),
+    [
+        (None, "Provider stream ended without a finish reason"),
+        ("content_filter", "Provider omitted the response because a content filter was triggered"),
+        ("future_reason", "Provider returned unsupported finish reason: future_reason"),
+    ],
+)
+async def test_openai_compatible_provider_rejects_invalid_finish_reason(
+    finish_reason: str | None,
+    expected_message: str,
+) -> None:
+    terminal = (
+        f"data: {dumps({'choices': [{'delta': {}, 'finish_reason': finish_reason}]})}\n\n"
+        if finish_reason is not None
+        else "data: [DONE]\n\n"
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=terminal,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                max_retries=0,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="work")],
+                tools=[],
+            )
+        )
+
+    assert isinstance(events[-1], AssistantErrorEvent)
+    assert events[-1].error.error_message == expected_message
+    assert _diagnostic_details(events[-1])["finish_reason"] == finish_reason
 
 
 @pytest.mark.anyio
@@ -655,7 +907,7 @@ async def test_openai_compatible_provider_cancellation_stops_retry_backoff() -> 
         )
 
     assert len(requests) == 1
-    assert [event.type for event in events] == ["start", "error"]
+    assert [event.type for event in events] == ["retry", "start", "error"]
     assert isinstance(events[-1], AssistantErrorEvent)
     assert events[-1].reason == "error"
 
@@ -1117,11 +1369,13 @@ async def test_openai_codex_provider_retries_transient_stream_error() -> None:
     assert len(requests) == 2
     assert [event.type for event in events] == [
         "start",
+        "retry",
         "text_start",
         "text_delta",
         "text_end",
         "done",
     ]
+    assert isinstance(events[1], AssistantRetryEvent)
 
 
 @pytest.mark.anyio
@@ -1170,11 +1424,13 @@ async def test_openai_codex_provider_retries_transient_response_failed() -> None
     assert len(requests) == 2
     assert [event.type for event in events] == [
         "start",
+        "retry",
         "text_start",
         "text_delta",
         "text_end",
         "done",
     ]
+    assert isinstance(events[1], AssistantRetryEvent)
 
 
 @pytest.mark.anyio

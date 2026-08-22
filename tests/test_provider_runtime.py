@@ -52,6 +52,10 @@ def test_create_model_provider_uses_codex_model_image_capability(tmp_path: Path)
 
     assert isinstance(text_provider, OpenAICompatibleProvider)
     assert text_provider._config.supports_images is False
+    assert text_provider._config.thinking_format == "deepseek"
+    assert text_provider._config.compat["supportsStore"] is False
+    assert text_provider._config.compat["maxTokensField"] == "max_tokens"
+    assert text_provider._config.compat["requiresReasoningContentOnAssistantMessages"] is True
 
 
 def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path: Path) -> None:

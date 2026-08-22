@@ -6,6 +6,7 @@ from tau_agent.events import (
     MessageEndEvent,
     MessageStartEvent,
     MessageUpdateEvent,
+    RetryEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
@@ -29,6 +30,7 @@ class TuiEventAdapter:
         self.state = state
         self._assistant_start_item_index: int | None = None
         self._pending_overflow_error: AssistantMessage | None = None
+        self._pending_response_retry_status: str | None = None
 
     def apply(self, event: CodingSessionEvent) -> None:
         if isinstance(event, AgentStartEvent):
@@ -57,6 +59,13 @@ class TuiEventAdapter:
         if isinstance(event, QueueUpdateEvent):
             self.state.update_queue(steering=event.steering, follow_up=event.follow_up)
             return
+        if isinstance(event, RetryEvent):
+            status = f"… {event.error_message}"
+            if event.scope == "response":
+                self._pending_response_retry_status = status
+            else:
+                self.state.add_item("status", status)
+            return
         if isinstance(event, MessageStartEvent):
             if isinstance(event.message, AssistantMessage):
                 self.state.assistant_buffer = event.message.text
@@ -76,20 +85,29 @@ class TuiEventAdapter:
             if isinstance(message, UserMessage):
                 self.state.add_user_message(message.text)
             elif isinstance(message, CustomMessage):
-                self.state.add_user_message(
-                    message.text,
-                    custom_type=message.custom_type,
-                    details=message.details if isinstance(message.details, dict) else None,
-                )
+                if message.display:
+                    self.state.add_user_message(
+                        message.text,
+                        custom_type=message.custom_type,
+                        details=message.details if isinstance(message.details, dict) else None,
+                    )
             elif isinstance(message, AssistantMessage):
                 self.state.record_assistant_completion(message)
                 # Replace provisional delta rows with the final canonical
                 # message so persisted block boundaries and ordering win.
                 start = self._assistant_start_item_index
                 if start is not None:
+                    status_items = [
+                        item for item in self.state.items[start:] if item.role == "status"
+                    ]
                     del self.state.items[start:]
+                    self.state.items.extend(status_items)
+                retry_status = self._pending_response_retry_status
+                self._pending_response_retry_status = None
                 if message.stop_reason in {"error", "aborted"}:
-                    if is_context_overflow_error(message):
+                    if retry_status is not None:
+                        self.state.add_assistant_message(message, include_tool_calls=False)
+                    elif is_context_overflow_error(message):
                         # Keep the provider failure provisional while session-level
                         # overflow compaction and retry are still in progress.
                         self._pending_overflow_error = message
@@ -103,6 +121,8 @@ class TuiEventAdapter:
                 else:
                     self._pending_overflow_error = None
                     self.state.add_assistant_message(message, include_tool_calls=False)
+                if retry_status is not None:
+                    self.state.add_item("status", retry_status)
                 self.state.assistant_buffer = ""
                 self._assistant_start_item_index = None
             return

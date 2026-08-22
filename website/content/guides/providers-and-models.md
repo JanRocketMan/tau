@@ -137,7 +137,17 @@ Tau starts new OpenCode Go sessions with model-specific reasoning defaults:
 `deepseek-v4-flash` uses `max` and `gpt-5.6-luna` uses `xhigh`. Cycle the
 setting for the current session with the thinking keybinding; the available
 levels are model-aware and the selected value is sent as the provider's
-`reasoning_effort`.
+`reasoning_effort`
+
+The DeepSeek V4 model entry also enables DeepSeek's `thinking` request shape and
+`reasoning_content` history replay. This is required after tool calls, including
+the case where the preceding assistant response omitted its reasoning delta
+
+OpenCode Go can occasionally end a response after reasoning but before text or
+a tool call. This can affect more than one model. Tau treats that response as
+incomplete and sends one automatic continuation. If the continuation is also
+incomplete, Tau stops rather than entering an unbounded loop. Provider request
+retries remain separate and appear as status rows in the TUI
 
 ### Hugging Face Inference Providers
 

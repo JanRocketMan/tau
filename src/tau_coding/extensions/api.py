@@ -26,6 +26,7 @@ AGENT_EVENT_TYPES: frozenset[str] = frozenset(
         "agent_settled",
         "turn_start",
         "turn_end",
+        "retry",
         "queue_update",
         "message_start",
         "message_update",

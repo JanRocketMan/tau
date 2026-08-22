@@ -2,7 +2,7 @@
 
 import typer
 
-from tau_agent.events import MessageEndEvent
+from tau_agent.events import MessageEndEvent, RetryEvent
 from tau_agent.messages import AssistantMessage
 from tau_coding.events import CodingSessionEvent
 
@@ -12,11 +12,19 @@ class FinalTextRenderer:
         self._last_assistant_text = ""
         self._failed = False
         self._error_messages: list[str] = []
+        self._retried_message_pending = False
 
     def render(self, event: CodingSessionEvent) -> None:
+        if isinstance(event, RetryEvent):
+            if event.scope == "response":
+                self._retried_message_pending = True
+            return
         if not isinstance(event, MessageEndEvent) or not isinstance(
             event.message, AssistantMessage
         ):
+            return
+        if self._retried_message_pending:
+            self._retried_message_pending = False
             return
         self._last_assistant_text = event.message.text
         if event.message.stop_reason in {"error", "aborted"}:

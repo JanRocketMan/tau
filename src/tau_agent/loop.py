@@ -12,6 +12,7 @@ from tau_agent.events import (
     MessageEndEvent,
     MessageStartEvent,
     MessageUpdateEvent,
+    RetryEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
@@ -21,6 +22,7 @@ from tau_agent.events import (
 from tau_agent.messages import (
     AgentMessage,
     AssistantMessage,
+    CustomMessage,
     TextContent,
     ToolCall,
     ToolResultMessage,
@@ -30,6 +32,7 @@ from tau_agent.provider_events import (
     AssistantDoneEvent,
     AssistantErrorEvent,
     AssistantMessageEvent,
+    AssistantRetryEvent,
     AssistantStartEvent,
 )
 from tau_agent.tools import AgentTool, AgentToolResult
@@ -41,6 +44,11 @@ AfterToolCall = Callable[
     Awaitable[tuple[AgentToolResult, bool]],
 ]
 
+INCOMPLETE_RESPONSE_RETRY_PROMPT = (
+    "Continue from the interrupted response. Complete the pending task, and either "
+    "call the next required tool or provide the final answer."
+)
+
 
 async def run_agent_loop(
     *,
@@ -51,6 +59,7 @@ async def run_agent_loop(
     tools: list[AgentTool],
     prompts: Sequence[AgentMessage] = (),
     max_turns: int | None = None,
+    max_incomplete_response_retries: int = 1,
     signal: CancellationToken | None = None,
     session_id: str | None = None,
     remote_input_items: list[JSONValue] | None = None,
@@ -83,6 +92,7 @@ async def run_agent_loop(
     tool_by_name = {tool.name: tool for tool in tools}
     turn = 1
     first_turn = True
+    incomplete_response_retries = 0
     pending = tuple(get_steering_messages() if get_steering_messages else ())
 
     while True:
@@ -123,19 +133,53 @@ async def run_agent_loop(
                 session_id=session_id,
                 remote_input_items=remote_input_items,
             ):
-                yield event
                 if isinstance(event, MessageEndEvent) and isinstance(
                     event.message, AssistantMessage
                 ):
                     assistant = event.message
+                    continue
+                yield event
 
             if assistant is None:  # defensive: _assistant_events always terminates
                 assistant = _error_message(model, "Provider produced no assistant message")
                 yield MessageStartEvent(message=assistant)
-                yield MessageEndEvent(message=assistant)
 
+            retry_message = _incomplete_response_retry_message(assistant)
+            will_retry = bool(
+                retry_message
+                and incomplete_response_retries < max_incomplete_response_retries
+                and (signal is None or not signal.is_cancelled())
+            )
+            if will_retry:
+                incomplete_response_retries += 1
+                yield RetryEvent(
+                    scope="response",
+                    attempt=incomplete_response_retries,
+                    max_attempts=max_incomplete_response_retries,
+                    delay_ms=0,
+                    error_message=retry_message or "Retrying incomplete model response.",
+                )
+            else:
+                incomplete_response_retries = 0
+
+            yield MessageEndEvent(message=assistant)
             messages.append(assistant)
             new_messages.append(assistant)
+
+            if will_retry:
+                yield TurnEndEvent(message=assistant)
+                turn += 1
+                pending = (
+                    CustomMessage(
+                        custom_type="auto-retry",
+                        content=INCOMPLETE_RESPONSE_RETRY_PROMPT,
+                        display=False,
+                        details={"reason": retry_message or "incomplete response"},
+                    ),
+                )
+                has_more_tools = False
+                continue
+
             if assistant.stop_reason in {"error", "aborted"}:
                 yield TurnEndEvent(message=assistant)
                 yield AgentEndEvent(messages=new_messages)
@@ -213,7 +257,15 @@ async def _assistant_events(
     )
     started = False
     async for event in source:
-        if isinstance(event, AssistantStartEvent):
+        if isinstance(event, AssistantRetryEvent):
+            yield RetryEvent(
+                scope="provider",
+                attempt=event.attempt,
+                max_attempts=event.max_attempts,
+                delay_ms=event.delay_ms,
+                error_message=event.error_message,
+            )
+        elif isinstance(event, AssistantStartEvent):
             started = True
             yield MessageStartEvent(message=event.partial)
         elif isinstance(event, AssistantDoneEvent):
@@ -229,6 +281,29 @@ async def _assistant_events(
                 message=event.partial,
                 assistant_message_event=event,
             )
+
+
+def _incomplete_response_retry_message(message: AssistantMessage) -> str | None:
+    """Return a retry status for an incomplete response that is safe to continue once."""
+    if (
+        message.stop_reason == "stop"
+        and message.thinking_text.strip()
+        and not message.text.strip()
+        and not message.tool_calls
+    ):
+        return "Model stopped after reasoning without an answer; retrying once."
+
+    if message.stop_reason != "error":
+        return None
+    for diagnostic in message.diagnostics or []:
+        details = diagnostic.details or {}
+        if (
+            diagnostic.type == "provider_error"
+            and details.get("retryable_incomplete_response") is True
+        ):
+            error = message.error_message or "Provider interrupted the model response"
+            return f"{error}; retrying once."
+    return None
 
 
 async def _execute_tool_call(

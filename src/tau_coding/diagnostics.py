@@ -105,9 +105,15 @@ def _provider_error_details(message: AssistantMessage) -> dict[str, Any]:
         attempts = diagnostic.details.get("attempts")
         if isinstance(attempts, int) and not isinstance(attempts, bool):
             details["attempts"] = attempts
-        for key in ("error_type", "phase"):
+        for key in ("error_type", "phase", "finish_reason"):
             value = diagnostic.details.get(key)
             if isinstance(value, str) and value:
+                details[key] = value
+            elif key == "finish_reason" and key in diagnostic.details and value is None:
+                details[key] = None
+        for key in ("partial_output", "retryable", "retryable_incomplete_response"):
+            value = diagnostic.details.get(key)
+            if isinstance(value, bool):
                 details[key] = value
         stream_idle_timeout_seconds = diagnostic.details.get("stream_idle_timeout_seconds")
         if (

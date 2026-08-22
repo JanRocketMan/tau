@@ -15,7 +15,8 @@
       ],
       "Fixed": [
         "Retry transient Anthropic stream errors instead of failing the entire turn.",
-        "Fix tool history reset across provider switches so the active provider sees the correct prior tool results."
+        "Fix tool history reset across provider switches so the active provider sees the correct prior tool results.",
+        "Recover once when a model stops after reasoning without an answer, surface provider retry progress, and preserve OpenAI-compatible finish reasons for diagnostics."
       ]
     }
   },

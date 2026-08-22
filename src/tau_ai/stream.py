@@ -26,6 +26,7 @@ from tau_ai.events import (
     AssistantDoneEvent,
     AssistantErrorEvent,
     AssistantMessageEvent,
+    AssistantRetryEvent,
     AssistantStartEvent,
     DoneReason,
     TextDeltaEvent,
@@ -129,12 +130,20 @@ def _coalesce_same_kind_blocks(blocks: list[AssistantContent]) -> list[Assistant
     return merged
 
 
-def _finish_reason(value: str | None, *, has_tools: bool) -> DoneReason:
-    if has_tools or value in {"tool_calls", "tool_use", "toolUse"}:
+def _finish_reason(value: str | None, *, has_tools: bool) -> DoneReason | None:
+    if value in {"tool_calls", "tool_use", "toolUse"}:
         return "toolUse"
     if value in {"length", "max_tokens", "MAX_TOKENS", "incomplete"}:
         return "length"
-    return "stop"
+    if value in {"stop", "completed", "done"}:
+        return "toolUse" if has_tools else "stop"
+    return None
+
+
+def _finish_reason_error(value: str | None) -> str:
+    if value is None:
+        return "Provider stream ended without a finish reason"
+    return f"Provider returned unsupported finish reason: {value}"
 
 
 async def canonicalize_provider_stream(
@@ -157,7 +166,12 @@ async def canonicalize_provider_stream(
 
     async for event in source:
         if isinstance(event, ProviderRetryEvent):
-            # Retries are provider-internal at the Pi AI boundary.
+            yield AssistantRetryEvent(
+                attempt=event.attempt,
+                max_attempts=event.max_attempts,
+                delay_ms=max(0, round(event.delay_seconds * 1000)),
+                error_message=event.message,
+            )
             continue
         if isinstance(event, ProviderResponseStartEvent):
             if event.response_provider is not None:
@@ -243,10 +257,34 @@ async def canonicalize_provider_stream(
                 event.finish_reason,
                 has_tools=bool(final.tool_calls),
             )
+            if reason is None:
+                final.stop_reason = "error"
+                final.error_message = _finish_reason_error(event.finish_reason)
+                final.diagnostics = [
+                    *(final.diagnostics or []),
+                    AssistantMessageDiagnostic(
+                        type="provider_error",
+                        details={"finish_reason": event.finish_reason},
+                    ),
+                ]
+                yield AssistantErrorEvent(reason="error", error=final)
+                terminal = True
+                continue
             final.stop_reason = reason
+            final.diagnostics = [
+                *(final.diagnostics or []),
+                AssistantMessageDiagnostic(
+                    type="provider_finish",
+                    details={"finish_reason": event.finish_reason},
+                ),
+            ]
             yield AssistantDoneEvent(reason=reason, message=final)
             terminal = True
         elif isinstance(event, ProviderErrorEvent):
+            async for end_event in _end_active_block(partial, active_index):
+                yield end_event
+            active_index = None
+            active_kind = None
             error = partial.model_copy(deep=True)
             error.response_provider = event.response_provider or partial.response_provider
             error.stop_reason = "error"

@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from tau_agent.events import AgentEndEvent, MessageEndEvent, ToolExecutionEndEvent
+from tau_agent.events import AgentEndEvent, MessageEndEvent, RetryEvent, ToolExecutionEndEvent
 from tau_agent.harness import AgentHarness, AgentHarnessConfig, QueuedMessages
 from tau_agent.messages import (
     AgentMessage,
@@ -2071,6 +2071,7 @@ class CodingSession:
         persisted_count = len(self._harness.messages)
         auto_name_attempted = False
         overflow_message: AssistantMessage | None = None
+        retrying_response = False
         try:
             prompt_message: AgentMessage
             if custom_type is not None:
@@ -2086,6 +2087,8 @@ class CodingSession:
             self._invalidate_context_usage_cache()
             async for event in events:
                 auto_name_message: str | None = None
+                if isinstance(event, RetryEvent):
+                    retrying_response = event.scope == "response"
                 if isinstance(event, MessageEndEvent):
                     persisted_count = await self._persist_messages_since(persisted_count)
                     if not auto_name_attempted and isinstance(event.message, UserMessage):
@@ -2098,13 +2101,20 @@ class CodingSession:
                     and isinstance(event.message, AssistantMessage)
                     and event.message.stop_reason == "error"
                 ):
-                    self._last_diagnostic_log_path = self._diagnostic_logger.log_assistant_error(
-                        context=context,
-                        phase="agent_loop",
-                        message=event.message,
-                    )
+                    if not retrying_response:
+                        self._last_diagnostic_log_path = (
+                            self._diagnostic_logger.log_assistant_error(
+                                context=context,
+                                phase="agent_loop",
+                                message=event.message,
+                            )
+                        )
                     if is_context_overflow_error(event.message):
                         overflow_message = event.message
+                if isinstance(event, MessageEndEvent) and isinstance(
+                    event.message, AssistantMessage
+                ):
+                    retrying_response = False
                 if isinstance(event, AgentEndEvent):
                     yield SessionAgentEndEvent(messages=event.messages, will_retry=False)
                 else:
@@ -2139,8 +2149,11 @@ class CodingSession:
                     yield retry_start
                     retry_persisted_count = len(self._harness.messages)
                     retry_events = self._harness.continue_()
+                    retrying_retry_response = False
                     self._invalidate_context_usage_cache()
                     async for retry_event in retry_events:
+                        if isinstance(retry_event, RetryEvent):
+                            retrying_retry_response = retry_event.scope == "response"
                         if isinstance(retry_event, MessageEndEvent):
                             retry_persisted_count = await self._persist_messages_since(
                                 retry_persisted_count
@@ -2151,6 +2164,7 @@ class CodingSession:
                             isinstance(retry_event, MessageEndEvent)
                             and isinstance(retry_event.message, AssistantMessage)
                             and retry_event.message.stop_reason == "error"
+                            and not retrying_retry_response
                         ):
                             self._last_diagnostic_log_path = (
                                 self._diagnostic_logger.log_assistant_error(
@@ -2159,6 +2173,10 @@ class CodingSession:
                                     message=retry_event.message,
                                 )
                             )
+                        if isinstance(retry_event, MessageEndEvent) and isinstance(
+                            retry_event.message, AssistantMessage
+                        ):
+                            retrying_retry_response = False
                         if isinstance(retry_event, AgentEndEvent):
                             yield SessionAgentEndEvent(
                                 messages=retry_event.messages,
@@ -2191,10 +2209,13 @@ class CodingSession:
         context = self._diagnostic_context()
         await self._refresh_runtime_model_limits()
         persisted_count = len(self._harness.messages)
+        retrying_response = False
         try:
             events = self._harness.continue_()
             self._invalidate_context_usage_cache()
             async for event in events:
+                if isinstance(event, RetryEvent):
+                    retrying_response = event.scope == "response"
                 if isinstance(event, MessageEndEvent):
                     persisted_count = await self._persist_messages_since(persisted_count)
                 if isinstance(event, ToolExecutionEndEvent):
@@ -2203,12 +2224,17 @@ class CodingSession:
                     isinstance(event, MessageEndEvent)
                     and isinstance(event.message, AssistantMessage)
                     and event.message.stop_reason == "error"
+                    and not retrying_response
                 ):
                     self._last_diagnostic_log_path = self._diagnostic_logger.log_assistant_error(
                         context=context,
                         phase="agent_loop",
                         message=event.message,
                     )
+                if isinstance(event, MessageEndEvent) and isinstance(
+                    event.message, AssistantMessage
+                ):
+                    retrying_response = False
                 if isinstance(event, AgentEndEvent):
                     yield SessionAgentEndEvent(messages=event.messages, will_retry=False)
                 else:
@@ -2267,6 +2293,9 @@ class CodingSession:
                 system=self._harness.config.system,
                 tools=self._harness.config.tools,
                 max_turns=self._harness.config.max_turns,
+                max_incomplete_response_retries=(
+                    self._harness.config.max_incomplete_response_retries
+                ),
                 queue_mode=self._harness.config.queue_mode,
                 session_id=self._config.session_id,
             ),

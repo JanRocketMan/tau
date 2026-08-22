@@ -17,8 +17,10 @@ from tau_agent import (
     AgentMessage,
     AgentTool,
     AssistantMessage,
+    CustomMessage,
     ImageContent,
     MessageEndEvent,
+    RetryEvent,
     TextContent,
     ThinkingContent,
     ToolCall,
@@ -420,6 +422,54 @@ async def test_prompt_logs_safe_transport_error_details(tmp_path: Path) -> None:
         "stream_idle_timeout_seconds": 600,
     }
     assert "secret upstream detail" not in log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_prompt_logs_safe_finish_reason_details(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
+    error = AssistantMessage(
+        stop_reason="error",
+        error_message="Provider content filter stopped the response",
+        diagnostics=[
+            AssistantMessageDiagnostic(
+                type="provider_error",
+                details={
+                    "finish_reason": "content_filter",
+                    "attempts": 1,
+                    "partial_output": False,
+                    "retryable": False,
+                    "retryable_incomplete_response": False,
+                },
+            )
+        ],
+    )
+    provider = FakeProvider([[AssistantErrorEvent(reason="error", error=error)]])
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="opencode-go",
+            session_id="session-1",
+            resource_paths=TauResourcePaths(
+                root=tau_paths.home, paths=tau_paths, claude_home=tau_paths.home
+            ),
+        )
+    )
+
+    await _collect_session_events(session.prompt("Hello"))
+
+    entry = json.loads(tau_paths.agent_calls_log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["error"]["provider"] == {
+        "attempts": 1,
+        "finish_reason": "content_filter",
+        "partial_output": False,
+        "retryable": False,
+        "retryable_incomplete_response": False,
+    }
 
 
 @pytest.mark.anyio
@@ -1971,6 +2021,38 @@ async def test_session_branch_with_summary_falls_back_when_model_summary_is_unav
     assert len(session.messages) == 2
     assert message_text(session.messages[0]) == "Root"
     assert "Abandoned follow-up" in message_text(session.messages[1])
+
+
+@pytest.mark.anyio
+async def test_prompt_retries_and_persists_thinking_only_response_once(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    incomplete = AssistantMessage(content=[ThinkingContent(thinking="unfinished")])
+    provider = FakeProvider(
+        [
+            [assistant_start(model="fake"), assistant_done(message=incomplete)],
+            [assistant_start(model="fake"), assistant_done(message=_assistant("Done"))],
+        ]
+    )
+    session = await CodingSession.load(_config(tmp_path, provider, storage))
+
+    events = await _collect_session_events(session.prompt("Work"))
+
+    retries = [event for event in events if isinstance(event, RetryEvent)]
+    assert len(retries) == 1
+    assert retries[0].scope == "response"
+    assert len(provider.calls) == 2
+    messages = [entry.message for entry in await storage.read_all() if entry.type == "message"]
+    assert isinstance(messages[0], UserMessage)
+    assert isinstance(messages[1], AssistantMessage)
+    assert messages[1].thinking_text == "unfinished"
+    recovery = messages[2]
+    assert isinstance(recovery, CustomMessage)
+    assert recovery.custom_type == "auto-retry"
+    assert recovery.display is False
+    assert isinstance(messages[3], AssistantMessage)
+    assert messages[3].text == "Done"
 
 
 @pytest.mark.anyio

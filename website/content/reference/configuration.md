@@ -301,12 +301,18 @@ thinking_defaults = { qwen-coder = "low" }
   (> 0) and limits the interval between chunks on an established response
   stream; it is not a total turn deadline, and heartbeat chunks reset it.
   `max_retries` defaults to `2`; `max_retry_delay_seconds` defaults to `1`
-  (both ≥ 0). Retries cover transient HTTP statuses (`408`, `409`, `425`, `429`, `5xx`),
-  transport errors, and transient in-stream SSE errors that arrive on an
-  otherwise successful HTTP 200 response. Anthropic retries `api_error`,
-  `overloaded_error`, and `rate_limit_error`; OpenAI Codex retries transient
-  events such as `server_is_overloaded`. In-stream errors remain terminal after
-  partial content to prevent duplicate output or tool calls.
+  (both ≥ 0). The maximum delay is a cap, not a fixed wait: backoff starts at
+  `0.25` seconds and doubles until it reaches the cap. Retries cover transient
+  HTTP statuses (`408`, `409`, `425`, `429`, `5xx`), transport errors, and
+  transient in-stream SSE errors that arrive on an otherwise successful HTTP
+  200 response. Anthropic retries `api_error`, `overloaded_error`, and
+  `rate_limit_error`; OpenAI Codex retries transient events such as
+  `server_is_overloaded`. In-stream errors remain terminal after partial visible
+  content to prevent duplicate output or tool calls. Tau also validates terminal
+  OpenAI-compatible finish reasons and retries a request-level
+  `insufficient_system_resource` or missing finish reason when no output has
+  started. If any model ends after reasoning without text or a tool call, the
+  agent sends one bounded continuation instead of requiring a manual `continue`
 - API keys and OAuth credentials are **not** stored in the catalog — they live
   in `~/.tau/credentials.json` (private but not encrypted). OAuth objects may
   contain provider metadata such as a GitHub Enterprise domain and are refreshed

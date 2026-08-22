@@ -36,10 +36,11 @@ provider-neutral events — never from raw provider chunks. The portable `tau_ag
 
 - `AgentStartEvent` / `AgentEndEvent` — a run begins / ends
 - `TurnStartEvent` / `TurnEndEvent` — one assistant response and its tool results
-- `MessageStartEvent` / `MessageUpdateEvent` / `MessageEndEvent` — a message's
+- `MessageStartEvent` / `MessageUpdateEvent` / `MessageEndEvent` - a message's
   Pi-compatible lifecycle
+- `RetryEvent` - provider backoff or one bounded incomplete-response continuation
 - `ToolExecutionStartEvent` / `ToolExecutionUpdateEvent` / `ToolExecutionEndEvent`
-  — a tool runs
+  - a tool runs
 
 Streaming detail is nested under
 `MessageUpdateEvent.assistant_message_event`. Those provider-neutral nested
@@ -58,7 +59,12 @@ payload table.
 
 The final `AssistantMessage` is authoritative: it persists text, thinking, and tool
 calls as ordered content blocks. Nested update events provide responsive rendering,
-while saved sessions and provider history replay use the finalized structured message.
+while saved sessions and provider history replay use the finalized structured message
+
+If a model stops after reasoning without visible text or a tool call, the loop
+adds one hidden continuation and requests the response again. A second consecutive
+incomplete response ends the run, which prevents an unbounded retry loop. A valid
+tool call resets this bound for the next model step
 Its `provider` field names Tau's configured provider. When a gateway reports a
 more specific backend, `response_provider` records the backend that served that
 request. For example, Hugging Face responses expose the selected Inference

@@ -8,6 +8,7 @@ from tau_agent.events import (
     AgentEndEvent,
     MessageEndEvent,
     MessageUpdateEvent,
+    RetryEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
@@ -29,6 +30,7 @@ class TranscriptRenderer:
         self._assistant_started = False
         self._assistant_ended = False
         self._failed = False
+        self._retried_message_pending = False
         self._console = Console(stderr=True, highlight=False)
         self._custom_message_renderer = custom_message_renderer
 
@@ -50,7 +52,9 @@ class TranscriptRenderer:
             if event.partial_result.text:
                 self._console.print(Text(f"… {event.partial_result.text}", style="bright_black"))
             return
-        if isinstance(event, AutoRetryStartEvent):
+        if isinstance(event, AutoRetryStartEvent | RetryEvent):
+            if isinstance(event, RetryEvent) and event.scope == "response":
+                self._retried_message_pending = True
             self._newline()
             self._console.print(Text(f"… {event.error_message}", style="bright_black"))
             return
@@ -76,6 +80,9 @@ class TranscriptRenderer:
                 self._console.print(rendered)
             return
         if isinstance(event, MessageEndEvent) and isinstance(event.message, AssistantMessage):
+            if self._retried_message_pending:
+                self._retried_message_pending = False
+                return
             if event.message.stop_reason == "error":
                 self._failed = True
                 self._newline()

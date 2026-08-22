@@ -349,17 +349,29 @@ class TuiState:
 
     def load_messages(self, messages: Iterable[AgentMessage]) -> None:
         """Populate the transcript from restored canonical session messages."""
-        for message in messages:
+        loaded = tuple(messages)
+        for index, message in enumerate(loaded):
+            next_message = loaded[index + 1] if index + 1 < len(loaded) else None
+            recovered_incomplete_error = bool(
+                isinstance(message, AssistantMessage)
+                and message.stop_reason == "error"
+                and isinstance(next_message, CustomMessage)
+                and next_message.custom_type == "auto-retry"
+                and not next_message.display
+            )
             if isinstance(message, UserMessage):
                 self.add_user_message(message.text)
             elif isinstance(message, CustomMessage):
-                self.add_user_message(
-                    message.text,
-                    custom_type=message.custom_type,
-                    details=message.details if isinstance(message.details, dict) else None,
-                )
+                if message.display:
+                    self.add_user_message(
+                        message.text,
+                        custom_type=message.custom_type,
+                        details=message.details if isinstance(message.details, dict) else None,
+                    )
             elif isinstance(message, AssistantMessage):
-                if message.stop_reason in {"error", "aborted"}:
+                if recovered_incomplete_error:
+                    self.add_assistant_message(message, include_tool_calls=False)
+                elif message.stop_reason in {"error", "aborted"}:
                     self.add_assistant_error(message)
                 else:
                     self.add_assistant_message(message)

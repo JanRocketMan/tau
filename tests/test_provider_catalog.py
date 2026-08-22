@@ -190,10 +190,14 @@ def test_builtin_catalog_auth_and_thinking_metadata() -> None:
         "max",
     )
     assert opencode_go.model_metadata["deepseek-v4-flash"].thinking_default == "max"
-    assert opencode_go.model_metadata["deepseek-v4-flash"].thinking_levels == (
-        "high",
-        "max",
-    )
+    deepseek = opencode_go.model_metadata["deepseek-v4-flash"]
+    assert deepseek.thinking_levels == ("high", "max")
+    assert deepseek.compat == {
+        "supportsStore": False,
+        "maxTokensField": "max_tokens",
+        "requiresReasoningContentOnAssistantMessages": True,
+        "thinkingFormat": "deepseek",
+    }
 
 
 def test_builtin_catalog_declares_default_and_preferences() -> None:

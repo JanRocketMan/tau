@@ -17,10 +17,13 @@ from tau_agent import (
     AgentTool,
     AgentToolResult,
     AssistantMessage,
+    CustomMessage,
     MessageEndEvent,
     MessageUpdateEvent,
+    RetryEvent,
     SimpleCancellationToken,
     TextContent,
+    ThinkingContent,
     ToolCall,
     ToolCancellationToken,
     ToolExecutionEndEvent,
@@ -32,7 +35,13 @@ from tau_agent import (
     message_text,
 )
 from tau_agent.loop import run_agent_loop
-from tau_agent.provider_events import TextDeltaEvent, ThinkingDeltaEvent
+from tau_agent.messages import AssistantMessageDiagnostic
+from tau_agent.provider_events import (
+    AssistantErrorEvent,
+    AssistantRetryEvent,
+    TextDeltaEvent,
+    ThinkingDeltaEvent,
+)
 from tau_agent.types import JSONValue
 from tau_ai import FakeProvider
 
@@ -93,6 +102,41 @@ async def test_agent_loop_streams_canonical_nested_events() -> None:
 
 
 @pytest.mark.anyio
+async def test_agent_loop_forwards_provider_retry_progress() -> None:
+    assistant = AssistantMessage(content=[TextContent(text="Done")], model="fake")
+    provider = FakeProvider(
+        [
+            [
+                AssistantRetryEvent(
+                    attempt=2,
+                    max_attempts=4,
+                    delay_ms=250,
+                    error_message="Retrying provider request 2/4 after HTTP 503 in 0.25s.",
+                ),
+                assistant_start(),
+                assistant_done(assistant),
+            ]
+        ]
+    )
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=[UserMessage(content="work")],
+            tools=[],
+        )
+    )
+
+    retry = next(event for event in events if isinstance(event, RetryEvent))
+    assert retry.scope == "provider"
+    assert retry.attempt == 2
+    assert retry.max_attempts == 4
+    assert retry.delay_ms == 250
+
+
+@pytest.mark.anyio
 async def test_agent_loop_nests_thinking_events_without_losing_final_message() -> None:
     messages: list[AgentMessage] = [UserMessage(content="Think briefly")]
     assistant = AssistantMessage(content=[TextContent(text="Done")], model="fake")
@@ -128,6 +172,112 @@ async def test_agent_loop_nests_thinking_events_without_losing_final_message() -
     assert messages[-1] == assistant
     # The final provider message is the canonical persistence boundary.
     assert isinstance(messages[-1], AssistantMessage)
+
+
+@pytest.mark.anyio
+async def test_agent_loop_retries_thinking_only_response_once() -> None:
+    first = AssistantMessage(
+        content=[ThinkingContent(thinking="unfinished plan")],
+        model="fake",
+    )
+    final = AssistantMessage(content=[TextContent(text="Done")], model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), assistant_done(first)],
+            [assistant_start(), text_delta("Done"), assistant_done(final)],
+        ]
+    )
+    messages: list[AgentMessage] = [UserMessage(content="work")]
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=messages,
+            tools=[],
+        )
+    )
+
+    retries = [event for event in events if isinstance(event, RetryEvent)]
+    assert [(event.scope, event.attempt, event.max_attempts) for event in retries] == [
+        ("response", 1, 1)
+    ]
+    assert len(provider.calls) == 2
+    assert messages[1] is first
+    recovery = messages[2]
+    assert isinstance(recovery, CustomMessage)
+    assert recovery.custom_type == "auto-retry"
+    assert recovery.display is False
+    assert messages[3] is final
+    assert provider.calls[1][2] == messages[:3]
+
+
+@pytest.mark.anyio
+async def test_agent_loop_stops_after_second_consecutive_thinking_only_response() -> None:
+    first = AssistantMessage(content=[ThinkingContent(thinking="first")], model="fake")
+    second = AssistantMessage(content=[ThinkingContent(thinking="second")], model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), assistant_done(first)],
+            [assistant_start(), assistant_done(second)],
+        ]
+    )
+    messages: list[AgentMessage] = [UserMessage(content="work")]
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=messages,
+            tools=[],
+        )
+    )
+
+    assert len(provider.calls) == 2
+    assert [event.type for event in events].count("retry") == 1
+    assert messages[-1] is second
+
+
+@pytest.mark.anyio
+async def test_agent_loop_retries_partial_retryable_provider_interruption() -> None:
+    interrupted = AssistantMessage(
+        content=[ThinkingContent(thinking="unfinished")],
+        model="fake",
+        stop_reason="error",
+        error_message="Provider inference was interrupted",
+        diagnostics=[
+            AssistantMessageDiagnostic(
+                type="provider_error",
+                details={"retryable_incomplete_response": True},
+            )
+        ],
+    )
+    final = AssistantMessage(content=[TextContent(text="Done")], model="fake")
+    provider = FakeProvider(
+        [
+            [assistant_start(), AssistantErrorEvent(reason="error", error=interrupted)],
+            [assistant_start(), assistant_done(final)],
+        ]
+    )
+    messages: list[AgentMessage] = [UserMessage(content="work")]
+
+    events = await _collect(
+        run_agent_loop(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            messages=messages,
+            tools=[],
+        )
+    )
+
+    retry = next(event for event in events if isinstance(event, RetryEvent))
+    assert retry.scope == "response"
+    assert retry.error_message == "Provider inference was interrupted; retrying once."
+    assert len(provider.calls) == 2
+    assert messages[-1] is final
 
 
 @pytest.mark.anyio

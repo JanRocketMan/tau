@@ -32,12 +32,21 @@ internal/server errors, and timeouts.
 When an in-stream error arrives before content or thinking deltas, the adapter
 emits `ProviderRetryEvent` and reissues the request under the same `max_retries`
 budget. Errors after partial content, and non-transient errors such as
-`authentication_error` or `invalid_api_key`, stay terminal to avoid replaying
-visible output or tool calls.
+`authentication_error` or `invalid_api_key`, stay terminal at the provider
+layer to avoid replaying visible output or tool calls
 
-Backoff is short, exponential, and capped by `max_retry_delay_seconds`.
-Cancellation is checked during the backoff delay so Escape/TUI cancellation does
-not wait for the entire retry sleep to finish.
+The OpenAI-compatible adapter also validates completion finish reasons. A
+request-level `insufficient_system_resource` or missing finish reason is
+retryable before output starts. A partial reasoning-only interruption is handed
+to the agent loop, which can send one bounded continuation without replaying a
+completed tool call. A normal `stop` that contains reasoning but no answer or
+tool call uses the same bounded recovery
+
+Backoff is short, exponential, and capped by `max_retry_delay_seconds`
+The cap is not a fixed delay: retries start at 0.25 seconds and double until
+they reach the configured maximum. Cancellation is checked during the backoff
+delay so Escape/TUI cancellation does not wait for the entire retry sleep to
+finish
 
 ## Rendering
 
