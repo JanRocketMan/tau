@@ -19,7 +19,7 @@ from rich.style import Style
 from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult, SuspendNotSupported
-from textual.binding import Binding, BindingsMap
+from textual.binding import Binding, BindingsMap, BindingType
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.events import Key, Resize
@@ -88,6 +88,7 @@ from tau_coding.extensions.api import (
     SlotWidgetContent,
     SlotWidgetFactory,
 )
+from tau_coding.hotkeys import hotkey_catalog
 from tau_coding.model_context import format_model_context
 from tau_coding.oauth import login_openai_codex
 from tau_coding.oauth_registry import get_oauth_provider, oauth_provider_ids
@@ -171,7 +172,6 @@ from tau_coding.tui.widgets import (
 _textual_theme_for_tau_theme = textual_theme_for_tui_theme
 _theme_css_variables = theme_css_variables
 
-type BindingEntry = Binding | tuple[str, str] | tuple[str, str, str]
 SESSION_TITLE_MIN_WIDTH = 80
 SESSION_TITLE_MIN_HEIGHT = 20
 ACTIVITY_TICK_SECONDS = 0.15
@@ -484,6 +484,8 @@ class SessionCompletionRecord(Protocol):
 
 PASTE_DISPLAY_THRESHOLD = 2_000
 
+type BindingEntry = Binding | tuple[str, str] | tuple[str, str, str]
+
 
 class PromptInput(TextArea):
     """Multiline prompt input with completion key bindings."""
@@ -739,66 +741,66 @@ class PromptInput(TextArea):
         :meth:`TauTuiApp.on_event` (pre-dispatch, before app-level priority
         bindings), so there is no interceptor splice here.
         """
-        keybindings = self.tui_keybindings
-        if event.key == keybindings.queue_follow_up:
+        keys = _prompt_keys(self.tui_keybindings)
+        if event.key == keys["queue_follow_up"]:
             event.stop()
             event.prevent_default()
             await self._completion_target().action_submit_follow_up()
-        elif event.key == "enter":
+        elif event.key == keys["submit"]:
             event.stop()
             event.prevent_default()
             await self._completion_target().action_submit_prompt()
-        elif event.key == "shift+enter":
+        elif event.key == keys["insert_newline"]:
             event.stop()
             event.prevent_default()
             self.insert("\n")
-        elif event.key == keybindings.accept_completion:
+        elif event.key == keys["accept_completion"]:
             event.stop()
             self._completion_target().action_accept_completion()
-        elif event.key == keybindings.cancel:
+        elif event.key == keys["cancel"]:
             event.stop()
             self._completion_target().action_cancel()
-        elif event.key == keybindings.command_palette:
+        elif event.key == keys["command_palette"]:
             event.stop()
             self._completion_target().action_open_command_palette()
-        elif event.key == keybindings.session_picker:
+        elif event.key == keys["session_picker"]:
             event.stop()
             self._completion_target().action_open_session_picker()
-        elif event.key == keybindings.open_context:
+        elif event.key == keys["open_context"]:
             event.stop()
             self._completion_target().action_open_context()
-        elif _is_thinking_cycle_key(event.key, keybindings.thinking_cycle):
+        elif _is_thinking_cycle_key(event.key, keys["thinking_cycle"]):
             event.stop()
             self._completion_target().action_cycle_thinking()
-        elif event.key == keybindings.model_cycle:
+        elif event.key == keys["model_cycle"]:
             event.stop()
             self._completion_target().action_cycle_model()
-        elif event.key == keybindings.toggle_tool_results:
+        elif event.key == keys["toggle_tool_results"]:
             event.stop()
             self._completion_target().action_toggle_tool_results()
-        elif event.key == keybindings.toggle_thinking:
+        elif event.key == keys["toggle_thinking"]:
             event.stop()
             self._completion_target().action_toggle_thinking()
-        elif event.key == "ctrl+c":
+        elif event.key == keys["interrupt"]:
             event.stop()
             event.prevent_default()
             self._completion_target().action_interrupt()
-        elif event.key == keybindings.clear_prompt:
+        elif event.key == keys["clear_prompt"]:
             if self.selected_text:
                 return
             event.stop()
             event.prevent_default()
             self.action_clear_prompt()
-        elif event.key == keybindings.completion_next:
+        elif event.key == keys["completion_next"]:
             event.stop()
             if self._has_completion_options():
                 self._completion_target().action_completion_next()
             else:
                 self.action_cursor_down()
-        elif event.key == keybindings.completion_previous:
+        elif event.key == keys["completion_previous"]:
             event.stop()
             self.action_completion_previous()
-        elif event.key == keybindings.quit:
+        elif event.key == keys["quit"]:
             event.stop()
             await self.action_quit()
 
@@ -820,12 +822,7 @@ class ExtensionSelectScreen(ModalScreen[str | None]):
     the option list.
     """
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "select_cursor", "Select", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("extension_select")
 
     def __init__(
         self,
@@ -857,13 +854,14 @@ class ExtensionSelectScreen(ModalScreen[str | None]):
 
     def on_key(self, event: Key) -> None:
         """Route arrow and enter keys to the option list."""
-        if event.key == "up":
+        keys = _widget_keys("extension_select")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["select"]:
             event.stop()
             self.action_select_cursor()
 
@@ -895,12 +893,7 @@ class ExtensionConfirmScreen(ModalScreen[bool]):
     `ExtensionSelectScreen` for the app-level Up/Down allowlist requirement.
     """
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "select_cursor", "Select", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("extension_confirm")
 
     def __init__(self, title: str, message: str, *, theme: TuiTheme) -> None:
         super().__init__()
@@ -928,13 +921,14 @@ class ExtensionConfirmScreen(ModalScreen[bool]):
 
     def on_key(self, event: Key) -> None:
         """Route arrow and enter keys to the choice list."""
-        if event.key == "up":
+        keys = _widget_keys("extension_confirm")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["select"]:
             event.stop()
             self.action_select_cursor()
 
@@ -962,7 +956,7 @@ class ExtensionConfirmScreen(ModalScreen[bool]):
 class ExtensionInputScreen(ModalScreen[str | None]):
     """Modal single-line text prompt backing `context.ui.input`."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("extension_input")
 
     def __init__(self, title: str, placeholder: str = "", *, theme: TuiTheme) -> None:
         super().__init__()
@@ -996,31 +990,29 @@ class ExtensionInputScreen(ModalScreen[str | None]):
 class ToolsReferenceSearchInput(Input):
     """Search input that keeps tool-reference navigation local."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", show=False, priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-        Binding("enter", "open_selected", "Open", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings(
+        "tools_reference_search_input"
+    )
 
     def _reference(self) -> ToolsReferenceScreen:
         return cast(ToolsReferenceScreen, self.screen)
 
     def on_key(self, event: Key) -> None:
         """Route navigation without changing the search text."""
-        if event.key == "up":
+        keys = _widget_keys("tools_reference_search_input")
+        if event.key == keys["cursor_up"]:
             event.stop()
             event.prevent_default()
             self._reference().action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             event.prevent_default()
             self._reference().action_cursor_down()
-        elif event.key == "escape":
+        elif event.key == keys["cancel"]:
             event.stop()
             event.prevent_default()
             self._reference().action_cancel()
-        elif event.key == "enter":
+        elif event.key == keys["open"]:
             event.stop()
             event.prevent_default()
             self._reference().action_open_selected()
@@ -1032,12 +1024,7 @@ class ToolsReferenceSearchInput(Input):
 class ToolsReferenceScreen(ModalScreen[None]):
     """Searchable tool table with navigable description details."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Close"),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "open_selected", "Open", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("tools_reference")
 
     def __init__(
         self,
@@ -1177,26 +1164,25 @@ class ToolsReferenceScreen(ModalScreen[None]):
 class SessionPickerSearchInput(Input):
     """Search input that keeps session-picker navigation local to the picker."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", show=False, priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings(
+        "session_picker_search_input"
+    )
 
     def _picker(self) -> SessionPickerScreen:
         return cast(SessionPickerScreen, self.screen)
 
     def on_key(self, event: Key) -> None:
         """Route picker control keys before the input edits its text."""
-        if event.key == "up":
+        keys = _widget_keys("session_picker_search_input")
+        if event.key == keys["cursor_up"]:
             event.stop()
             event.prevent_default()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             event.prevent_default()
             self.action_cursor_down()
-        elif event.key == "escape":
+        elif event.key == keys["cancel"]:
             event.stop()
             event.prevent_default()
             self.action_cancel()
@@ -1217,12 +1203,7 @@ class SessionPickerSearchInput(Input):
 class PromptTemplatePickerScreen(ModalScreen[str | None]):
     """Searchable picker for loaded prompt templates."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "select_cursor", "Select", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("prompt_template_picker")
 
     def __init__(self, templates: Sequence[PromptTemplate]) -> None:
         super().__init__()
@@ -1302,12 +1283,7 @@ class PromptTemplatePickerScreen(ModalScreen[str | None]):
 class SessionPickerScreen(ModalScreen[str | None]):
     """Minimal modal picker for indexed sessions, with a search field."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "select_cursor", "Select", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("session_picker")
 
     def __init__(
         self,
@@ -1361,13 +1337,14 @@ class SessionPickerScreen(ModalScreen[str | None]):
 
     def on_key(self, event: Key) -> None:
         """Route session picker keys to the list."""
-        if event.key == "up":
+        keys = _widget_keys("session_picker")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["select"]:
             event.stop()
             self.action_select_cursor()
 
@@ -1423,34 +1400,31 @@ class SessionPickerScreen(ModalScreen[str | None]):
 class SkillPickerSearchInput(Input):
     """Search input that keeps skill-picker navigation local."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", show=False, priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("skill_picker_search_input")
 
     def _picker(self) -> SkillPickerScreen:
         return cast(SkillPickerScreen, self.screen)
 
     def on_key(self, event: Key) -> None:
         """Route picker control keys before the input edits its text."""
-        if event.key == "up":
+        keys = _widget_keys("skill_picker_search_input")
+        if event.key == keys["cursor_up"]:
             event.stop()
             event.prevent_default()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             event.prevent_default()
             self.action_cursor_down()
-        elif event.key == "escape":
+        elif event.key == keys["cancel"]:
             event.stop()
             event.prevent_default()
             self.action_cancel()
-        elif event.key == "f1":
+        elif event.key == keys["show_description"]:
             event.stop()
             event.prevent_default()
             self.action_show_description()
-        elif event.key == "ctrl+enter":
+        elif event.key == keys["show_in_transcript"]:
             event.stop()
             event.prevent_default()
             self.action_show_in_transcript()
@@ -1482,14 +1456,7 @@ class SkillPickerResult:
 class SkillPickerScreen(ModalScreen[SkillPickerResult | None]):
     """Searchable modal containing every loaded skill."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-        Binding("enter", "select_cursor", "Insert", show=False, priority=True),
-        Binding("f1", "show_description", "Description", show=False, priority=True),
-        Binding("ctrl+enter", "show_in_transcript", "Transcript", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("skill_picker")
 
     def __init__(self, skills: Sequence[Skill], *, theme: TuiTheme) -> None:
         super().__init__()
@@ -1628,15 +1595,7 @@ class _TreePickerListItem(ListItem):
 class TreePickerScreen(ModalScreen[TreePickerResult | None]):
     """Modal picker for branching from a previous session entry."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "select_cursor", "Branch", show=False),
-        Binding("s", "select_with_summary", "Summarize", show=False),
-        Binding("c", "select_with_custom_summary", "Custom summary", show=False),
-        Binding("ctrl+t", "toggle_tool_calls", "Tool calls", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("tree_picker")
 
     def __init__(
         self,
@@ -1670,22 +1629,23 @@ class TreePickerScreen(ModalScreen[TreePickerResult | None]):
 
     def on_key(self, event: Key) -> None:
         """Route tree picker keys to the list."""
-        if event.key == "up":
+        keys = _widget_keys("tree_picker")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["branch"]:
             event.stop()
             self.action_select_cursor()
-        elif event.key == "s":
+        elif event.key == keys["summarize"]:
             event.stop()
             self.action_select_with_summary()
-        elif event.key == "c":
+        elif event.key == keys["custom_summary"]:
             event.stop()
             self.action_select_with_custom_summary()
-        elif event.key == "ctrl+t":
+        elif event.key == keys["toggle_tool_calls"]:
             event.stop()
             self.action_toggle_tool_calls()
 
@@ -1785,7 +1745,9 @@ class TreePickerScreen(ModalScreen[TreePickerResult | None]):
 class BranchSummaryInstructionsScreen(ModalScreen[str | None]):
     """Prompt for custom branch-summary instructions."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings(
+        "branch_summary_instructions"
+    )
 
     def __init__(self, *, theme: TuiTheme) -> None:
         super().__init__()
@@ -1810,10 +1772,11 @@ class BranchSummaryInstructionsScreen(ModalScreen[str | None]):
 
     def on_key(self, event: Key) -> None:
         """Submit on Ctrl+Enter and cancel on Escape."""
-        if event.key == "ctrl+enter":
+        keys = _widget_keys("branch_summary_instructions")
+        if event.key == keys["submit"]:
             event.stop()
             self.action_submit()
-        elif event.key == "escape":
+        elif event.key == keys["cancel"]:
             event.stop()
             self.action_cancel()
 
@@ -1830,10 +1793,7 @@ class BranchSummaryInstructionsScreen(ModalScreen[str | None]):
 class CommandOutputScroll(VerticalScroll):
     """Scrollable command output area with deterministic arrow-key scrolling."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("up", "scroll_up", "Scroll up", show=False, priority=True),
-        Binding("down", "scroll_down", "Scroll down", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("command_output_scroll")
 
     def action_scroll_up(self) -> None:
         """Scroll command output up."""
@@ -1849,12 +1809,7 @@ class CommandOutputScreen(ModalScreen[None]):
 
     auto_copy_selection: bool = False
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "close", "Close"),
-        Binding("enter", "close", "Close"),
-        Binding("up", "scroll_up", "Scroll up", show=False, priority=True),
-        Binding("down", "scroll_down", "Scroll down", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("command_output")
 
     def __init__(
         self,
@@ -1884,10 +1839,11 @@ class CommandOutputScreen(ModalScreen[None]):
 
     def on_key(self, event: Key) -> None:
         """Route arrow keys to the command output scroll area."""
-        if event.key == "up":
+        keys = _widget_keys("command_output")
+        if event.key == keys["scroll_up"]:
             event.stop()
             self.action_scroll_up()
-        elif event.key == "down":
+        elif event.key == keys["scroll_down"]:
             event.stop()
             self.action_scroll_down()
 
@@ -1912,26 +1868,25 @@ class CommandOutputScreen(ModalScreen[None]):
 class LoginProviderSearchInput(Input):
     """Search input that keeps provider-picker navigation local."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", show=False, priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings(
+        "login_provider_search_input"
+    )
 
     def _picker(self) -> LoginProviderPickerScreen:
         return cast(LoginProviderPickerScreen, self.screen)
 
     def on_key(self, event: Key) -> None:
         """Route picker control keys before the input edits its text."""
-        if event.key == "up":
+        keys = _widget_keys("login_provider_search_input")
+        if event.key == keys["cursor_up"]:
             event.stop()
             event.prevent_default()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             event.prevent_default()
             self.action_cursor_down()
-        elif event.key == "escape":
+        elif event.key == keys["cancel"]:
             event.stop()
             event.prevent_default()
             self.action_cancel()
@@ -1958,13 +1913,7 @@ class _LoginFlowAction(Enum):
 class LoginProviderPickerScreen(ModalScreen[str | _LoginFlowAction | None]):
     """Searchable provider picker for the TUI login flow."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("ctrl+d", "close", "Close", priority=True),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "select_cursor", "Select", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("login_provider_picker")
 
     def __init__(
         self,
@@ -2020,13 +1969,14 @@ class LoginProviderPickerScreen(ModalScreen[str | _LoginFlowAction | None]):
 
     def on_key(self, event: Key) -> None:
         """Route provider picker keys to the list."""
-        if event.key == "up":
+        keys = _widget_keys("login_provider_picker")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["select"]:
             event.stop()
             self.action_select_cursor()
 
@@ -2096,13 +2046,7 @@ class CustomProviderLoginResult:
 class LoginMethodPickerScreen(ModalScreen[str | None]):
     """Login method picker for the TUI login flow."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", priority=True),
-        Binding("ctrl+d", "cancel", "Close", priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-        Binding("enter", "select_cursor", "Select", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("login_method_picker")
 
     def __init__(self, *, theme: TuiTheme) -> None:
         super().__init__()
@@ -2138,13 +2082,14 @@ class LoginMethodPickerScreen(ModalScreen[str | None]):
 
     def on_key(self, event: Key) -> None:
         """Route arrow keys between login method buttons."""
-        if event.key == "up":
+        keys = _widget_keys("login_method_picker")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["select"]:
             event.stop()
             self.action_select_cursor()
 
@@ -2215,12 +2160,7 @@ class LoginMethodListView(ListView):
 class ThemePickerScreen(ModalScreen[TuiThemeName | None]):
     """Theme picker for the available TUI themes."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-        Binding("enter", "select_cursor", "Select", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("theme_picker")
 
     def __init__(
         self,
@@ -2263,13 +2203,14 @@ class ThemePickerScreen(ModalScreen[TuiThemeName | None]):
 
     def on_key(self, event: Key) -> None:
         """Route theme picker keys to the list."""
-        if event.key == "up":
+        keys = _widget_keys("theme_picker")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["select"]:
             event.stop()
             self.action_select_cursor()
 
@@ -2297,32 +2238,27 @@ class ThemePickerScreen(ModalScreen[TuiThemeName | None]):
 class ModelPickerSearchInput(Input):
     """Search input that keeps model-picker control keys local to the picker."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", show=False, priority=True),
-        Binding("tab", "toggle_mode", "Mode", show=False, priority=True),
-        Binding("ctrl+i", "toggle_mode", "Mode", show=False, priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("model_picker_search_input")
 
     def _picker(self) -> ModelPickerScreen:
         return cast(ModelPickerScreen, self.screen)
 
     def on_key(self, event: Key) -> None:
         """Route picker control keys before the input edits its text."""
-        if event.key == "up":
+        keys = _widget_keys("model_picker_search_input")
+        if event.key == keys["cursor_up"]:
             event.stop()
             event.prevent_default()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             event.prevent_default()
             self.action_cursor_down()
-        elif event.key in {"tab", "ctrl+i"}:
+        elif event.key in {keys["toggle_mode_tab"], keys["toggle_mode_ctrl_i"]}:
             event.stop()
             event.prevent_default()
             self.action_toggle_mode()
-        elif event.key == "escape":
+        elif event.key == keys["cancel"]:
             event.stop()
             event.prevent_default()
             self.action_cancel()
@@ -2347,12 +2283,7 @@ class ModelPickerSearchInput(Input):
 class ModelPickerScreen(ModalScreen[ModelChoice | None]):
     """Model picker for the active TUI provider."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "accept_model", "Select", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("model_picker")
 
     def __init__(
         self,
@@ -2434,13 +2365,14 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
 
     def on_key(self, event: Key) -> None:
         """Route model picker keys to the list."""
-        if event.key == "up":
+        keys = _widget_keys("model_picker")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["accept"]:
             event.stop()
             self.action_accept_model()
 
@@ -2509,10 +2441,7 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
 class CustomProviderLoginScreen(ModalScreen[CustomProviderLoginResult | _LoginFlowAction | None]):
     """Prompt for adding an OpenAI-compatible custom provider."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "back", "Back"),
-        Binding("ctrl+d", "close", "Close", priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("custom_provider_login")
 
     _INPUT_ORDER: ClassVar[tuple[str, ...]] = (
         "custom-provider-name",
@@ -2653,10 +2582,7 @@ class CustomProviderLoginScreen(ModalScreen[CustomProviderLoginResult | _LoginFl
 class LoginScreen(ModalScreen[str | _LoginFlowAction | None]):
     """Password prompt for saving a provider API key."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "back", "Back"),
-        Binding("ctrl+d", "close", "Close", priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("login_screen")
 
     def __init__(self, provider: ProviderCatalogEntry, *, theme: TuiTheme) -> None:
         super().__init__()
@@ -2694,10 +2620,7 @@ class LoginScreen(ModalScreen[str | _LoginFlowAction | None]):
 class OAuthLoginScreen(ModalScreen[OAuthCredential | _LoginFlowAction | None]):
     """OAuth login flow for providers backed by subscription auth."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "back", "Back"),
-        Binding("ctrl+d", "close", "Close", priority=True),
-    ]
+    BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("oauth_login")
 
     def __init__(
         self,
@@ -2837,14 +2760,18 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | _LoginFlowAction | None]):
 #: Keys an extension key interceptor is never consulted for. These flow
 #: straight to normal dispatch so a buggy interceptor (one that returns True
 #: too broadly) cannot swallow the session's hard interrupt/exit reflexes and
-#: brick the TUI. Deliberately minimal — only the always-available escape
+#: brick the TUI. Deliberately minimal - only the always-available escape
 #: hatches: ``ctrl+d`` (the ``quit`` action, exits the app) and ``ctrl+c``
 #: (Tau's hard interrupt action). NOT reserved: escape/enter/
-#: arrows/tab/left/right — those are load-bearing for the tau-subagents
+#: arrows/tab/left/right - those are load-bearing for the tau-subagents
 #: extension and must stay interceptable. This is Tau's counterpart to Pi's
 #: ``RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS`` (runner.ts:69), applied
 #: here to the pre-dispatch interceptor rather than a registerShortcut API.
-RESERVED_EXTENSION_INTERCEPTOR_KEYS: frozenset[str] = frozenset({"ctrl+c", "ctrl+d"})
+#: The keys come from the packaged hotkey catalog (the ``interrupt`` and
+#: ``quit`` prompt hotkeys).
+RESERVED_EXTENSION_INTERCEPTOR_KEYS: frozenset[str] = frozenset(
+    hotkey_catalog().key("prompt", name) for name in ("interrupt", "quit")
+)
 
 
 class TauTuiApp(App[None]):
@@ -3623,7 +3550,11 @@ class TauTuiApp(App[None]):
         :data:`RESERVED_EXTENSION_INTERCEPTOR_KEYS` are skipped entirely, so
         they always reach normal dispatch even behind a misbehaving interceptor.
         """
-        if isinstance(event, events.Key) and not event.is_forwarded and event.key == "ctrl+c":
+        if (
+            isinstance(event, events.Key)
+            and not event.is_forwarded
+            and event.key == hotkey_catalog().key("prompt", "interrupt")
+        ):
             event.stop()
             event.prevent_default()
             self.action_interrupt()
@@ -6375,144 +6306,70 @@ def _prompt_footer_mode(
     return "normal"
 
 
-def _key_hint(key: str) -> str:
-    return "+".join(part.capitalize() for part in key.split("+"))
+def _prompt_keys(keybindings: TuiKeybindings) -> dict[str, str]:
+    """Return prompt hotkey name-to-key with user remaps applied."""
+    return hotkey_catalog().effective_keys(overrides=keybindings.to_json())
 
 
-def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
-    return [
-        Binding(keybindings.cancel, "cancel", "Cancel"),
-        Binding(keybindings.command_palette, "open_command_palette", "Commands"),
-        Binding(keybindings.session_picker, "open_session_picker", "Sessions"),
-        Binding(keybindings.open_context, "open_context", "Context"),
-        Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking"),
-        Binding(keybindings.model_cycle, "cycle_model", "Model"),
-        Binding(
-            keybindings.accept_completion,
-            "accept_completion",
-            "Complete",
-            priority=True,
-        ),
-        Binding(
-            keybindings.queue_follow_up,
-            "submit_follow_up",
-            "Follow-up",
-            priority=True,
-        ),
-        Binding(
-            keybindings.completion_next,
-            "completion_next",
-            "Next completion",
-            priority=True,
-        ),
-        Binding(
-            keybindings.completion_previous,
-            "completion_previous",
-            "Previous completion",
-            priority=True,
-        ),
-        Binding(keybindings.toggle_tool_results, "toggle_tool_results", "Tool results"),
-        Binding(keybindings.toggle_thinking, "toggle_thinking", "Thinking tokens"),
-        Binding("ctrl+c", "interrupt", "Stop"),
-        Binding(keybindings.clear_prompt, "clear_prompt", "Clear input"),
-        Binding(keybindings.quit, "quit", "Quit"),
-    ]
+def _widget_keys(keymap: str) -> dict[str, str]:
+    """Return hotkey name-to-key for one widget or screen keymap."""
+    return hotkey_catalog().keys(keymap)
+
+
+def _app_bindings(keybindings: TuiKeybindings) -> list[BindingType]:
+    """Build the app-scope binding list from the packaged hotkey catalog."""
+    return hotkey_catalog().bindings("app", overrides=keybindings.to_json())
+
+
+#: Prompt keymap name for each prompt footer mode.
+_PROMPT_MODE_KEYMAPS: dict[str, str] = {
+    "normal": "prompt_normal",
+    "completion": "prompt_completion",
+    "running": "prompt_running",
+}
 
 
 def _prompt_bindings(
     keybindings: TuiKeybindings,
     *,
     mode: Literal["normal", "completion", "running"],
-) -> list[Binding]:
-    if mode == "completion":
-        bindings = [
-            Binding(
-                keybindings.accept_completion,
-                "accept_completion",
-                "Complete",
-                key_display=f"{_key_hint(keybindings.accept_completion)}/Enter",
-                priority=True,
-            ),
-            Binding(
-                keybindings.completion_next,
-                "completion_next",
-                "Choose",
-                key_display=(
-                    f"{_key_hint(keybindings.completion_previous)}/"
-                    f"{_key_hint(keybindings.completion_next)}"
-                ),
-                priority=True,
-            ),
-            Binding(keybindings.cancel, "cancel", "Close", priority=True),
-        ]
-        return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
-    if mode == "running":
-        bindings = [
-            Binding("enter", "submit_prompt", "Steer", priority=True),
-            Binding(keybindings.queue_follow_up, "submit_follow_up", "Follow-up", priority=True),
-            Binding("ctrl+c", "interrupt", "Stop", priority=True),
-            Binding(keybindings.cancel, "cancel", "Cancel", priority=True),
-            Binding(
-                keybindings.toggle_thinking,
-                "toggle_thinking",
-                "Thinking",
-                priority=True,
-            ),
-            Binding(
-                keybindings.toggle_tool_results,
-                "toggle_tool_results",
-                "Tools",
-                priority=True,
-            ),
-        ]
-        return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
-    bindings = [
-        Binding("enter", "submit_prompt", "Submit", priority=True),
-        Binding("shift+enter", "insert_newline", "Newline", priority=True),
-        Binding(keybindings.command_palette, "open_command_palette", "Commands", priority=True),
-        Binding(keybindings.session_picker, "open_session_picker", "Sessions", priority=True),
-        Binding(keybindings.open_context, "open_context", "Context", priority=True),
-        Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking", priority=True),
-        Binding(keybindings.model_cycle, "cycle_model", "Model", priority=True),
-        Binding("ctrl+c", "interrupt", "Stop", priority=True),
-        Binding(
-            keybindings.clear_prompt,
-            "clear_prompt",
-            "Clear",
-            priority=True,
-        ),
-        Binding(keybindings.quit, "quit", "Quit", priority=True),
-    ]
+) -> list[BindingType]:
+    """Build the prompt widget bindings for one footer mode.
+
+    Visible bindings come from the packaged hotkey catalog (the mode keymap);
+    hidden variants keep every other prompt hotkey active in the widget's
+    binding chain without showing it in footer hints.
+    """
+    bindings = hotkey_catalog().bindings(
+        _PROMPT_MODE_KEYMAPS[mode],
+        overrides=keybindings.to_json(),
+    )
     return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
+
+
+#: Prompt hotkeys never added to the hidden binding set: submit and
+#: insert_newline are always reachable through PromptInput's own key handling,
+#: and cancel stays visible only through the app-scope binding (its footer
+#: action check lives on the app namespace, so it renders only where the mode
+#: keymap puts it).
+_HIDDEN_PROMPT_EXCLUSIONS: frozenset[str] = frozenset({"submit", "insert_newline", "cancel"})
 
 
 def _hidden_prompt_bindings(
     keybindings: TuiKeybindings,
     *,
-    visible_bindings: Sequence[Binding],
-) -> list[Binding]:
-    visible_keys = {key for binding in visible_bindings for key in binding.key.split(",")}
-    candidates = (
-        (keybindings.command_palette, "open_command_palette"),
-        (keybindings.session_picker, "open_session_picker"),
-        (keybindings.open_context, "open_context"),
-        (keybindings.queue_follow_up, "submit_follow_up"),
-        (keybindings.thinking_cycle, "cycle_thinking"),
-        (keybindings.model_cycle, "cycle_model"),
-        (keybindings.toggle_tool_results, "toggle_tool_results"),
-        (keybindings.toggle_thinking, "toggle_thinking"),
-        ("ctrl+c", "interrupt"),
-        (keybindings.clear_prompt, "clear_prompt"),
-        (keybindings.accept_completion, "accept_completion"),
-        (keybindings.completion_next, "completion_next"),
-        (keybindings.completion_previous, "completion_previous"),
-        (keybindings.quit, "quit"),
-    )
-    return [
-        Binding(key, action, show=False, priority=True)
-        for key, action in candidates
-        if key not in visible_keys
-    ]
+    visible_bindings: Sequence[BindingType],
+) -> list[BindingType]:
+    visible_keys: set[str] = set()
+    for binding in visible_bindings:
+        key = binding.key if isinstance(binding, Binding) else binding[0]
+        visible_keys.update(key.split(","))
+    keys = _prompt_keys(keybindings)
+    hidden: list[BindingType] = []
+    for hotkey in hotkey_catalog().keymap("prompt").hotkeys:
+        if hotkey.name not in _HIDDEN_PROMPT_EXCLUSIONS and keys[hotkey.name] not in visible_keys:
+            hidden.append(Binding(keys[hotkey.name], hotkey.action, show=False, priority=True))
+    return hidden
 
 
 def _text_end_location(text: str) -> tuple[int, int]:

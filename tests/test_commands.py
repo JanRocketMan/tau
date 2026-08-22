@@ -133,7 +133,6 @@ def test_registered_commands_are_pi_aligned(tmp_path: Path) -> None:
         "compact",
         "context",
         "export",
-        "hotkeys",
         "login",
         "logout",
         "model",
@@ -309,17 +308,6 @@ def test_session_command_explains_unavailable_thinking_controls(tmp_path: Path) 
     assert "Thinking mode: unavailable" in result.message
     assert "Thinking unavailable: Provider local does not declare thinking_levels" in result.message
     assert "Thinking mode: medium" not in result.message
-
-
-def test_hotkeys_command_lists_common_tui_shortcuts(tmp_path: Path) -> None:
-    result = create_default_command_registry().execute(FakeSession(tmp_path), "/hotkeys")
-
-    assert result.message is not None
-    assert "Common keyboard shortcuts:" in result.message
-    assert "Ctrl+K: open slash-command completions" in result.message
-    assert "Ctrl+R: open session picker" in result.message
-    assert "Ctrl+L: open active model context" in result.message
-    assert "Ctrl+F: cycle thinking mode" in result.message
 
 
 def test_model_command_requests_picker_and_switches_models(tmp_path: Path) -> None:

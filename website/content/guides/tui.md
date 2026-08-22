@@ -71,9 +71,13 @@ to search and run them. Common ones:
 - `/compact` — summarize and shrink the context
 - `/resume`, `/tree` — open previous sessions or branch from history
 - `/prompts` — search prompt templates and insert one for editing
-- `/hotkeys` — show the keyboard shortcuts
+- `/skills` — browse and insert loaded skills
 
 The full list is in the [Slash commands reference]({{< relref "../reference/slash-commands.md" >}}).
+
+Every keyboard shortcut is defined, with a short description, in one place: the
+packaged `src/tau_coding/data/hotkeys.toml` catalog. Edit that file directly to
+change or document hotkeys; there is no in-session shortcut list.
 
 ## Running shell commands directly
 
@@ -174,8 +178,10 @@ when you want to reduce what is sent to the model.
 
 Tau uses the full terminal width for the transcript and does not show a sidebar,
 top header, or shortcut footer. Run `/session` when you need detailed model,
-resource, and context information. Run `/hotkeys` when you need the shortcut
-list.
+resource, and context information. The keyboard shortcut list lives in
+`src/tau_coding/data/hotkeys.toml`; every hotkey there carries a short
+description, and that catalog is the single source of truth for the TUI's
+key handling.
 
 The compact status block below the prompt uses two aligned rows on a large
 enough terminal. The first row shows the session name on the left and

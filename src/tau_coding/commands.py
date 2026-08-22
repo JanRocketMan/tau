@@ -293,15 +293,6 @@ def create_default_command_registry() -> CommandRegistry:
     )
     registry.register(
         SlashCommand(
-            name="hotkeys",
-            usage="/hotkeys",
-            description="Show common keyboard shortcuts.",
-            handler=_hotkeys_command,
-            search_terms=("keys", "shortcuts", "bindings"),
-        )
-    )
-    registry.register(
-        SlashCommand(
             name="prompts",
             usage="/prompts",
             description="Choose a loaded prompt template.",
@@ -488,26 +479,6 @@ def _system_command(context: CommandContext) -> CommandResult:
     if context.args:
         return CommandResult(handled=True, message="Usage: /system")
     return CommandResult(handled=True, message=context.session.system_prompt)
-
-
-def _hotkeys_command(context: CommandContext) -> CommandResult:
-    lines = [
-        "Common keyboard shortcuts:",
-        "- Enter: submit prompt",
-        "- Shift+Enter: insert newline",
-        "- Alt+Enter: queue follow-up while running",
-        "- Ctrl+C: stop the active run",
-        "- Esc: cancel active run",
-        "- Ctrl+K: open slash-command completions",
-        "- Ctrl+R: open session picker",
-        "- Ctrl+L: open active model context",
-        "- Ctrl+F: cycle thinking mode",
-        "- Ctrl+T: toggle thinking tokens",
-        "- Ctrl+O: collapse or expand tool output",
-        "- Ctrl+U: clear prompt input",
-        "- Ctrl+D: quit",
-    ]
-    return CommandResult(handled=True, message="\n".join(lines))
 
 
 def _skills_command(context: CommandContext) -> CommandResult:

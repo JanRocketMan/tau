@@ -25,7 +25,6 @@ command palette with **Ctrl+K**.
 | `/logout [provider]` | Remove saved credentials for a provider |
 | `/reload` | Reload local skills, prompts, extensions, and project context |
 | `/prompts` | Search loaded prompt templates and insert an invocation for editing |
-| `/hotkeys` | Show the keyboard shortcuts |
 | `/skills` | Open a searchable picker of loaded skills and insert a selection into the prompt |
 | `/skill:<name> [request]` | Expand a loaded skill into your prompt |
 

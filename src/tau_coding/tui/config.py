@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from tau_coding.hotkeys import hotkey_catalog
 from tau_coding.tui.themes import (
     BUILTIN_TUI_THEME_NAMES,
     CODEYELLOW_THEME,
@@ -49,52 +50,51 @@ class TuiConfigError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class TuiKeybindings:
-    """Configurable keys for Tau's built-in Textual frontend."""
+    """Configurable keys for Tau's built-in Textual frontend.
 
-    cancel: str = "escape"
-    command_palette: str = "ctrl+k"
-    session_picker: str = "ctrl+r"
-    open_context: str = "ctrl+l"
-    queue_follow_up: str = "alt+enter"
-    accept_completion: str = "tab"
-    completion_next: str = "down"
-    completion_previous: str = "up"
-    thinking_cycle: str = "ctrl+f"
-    model_cycle: str = "ctrl+p"
-    toggle_thinking: str = "ctrl+t"
-    toggle_tool_results: str = "ctrl+o"
-    clear_prompt: str = "ctrl+u"
-    quit: str = "ctrl+d"
+    Unset fields resolve to their packaged ``data/hotkeys.toml`` defaults;
+    the catalog is the single source of truth for every hotkey. The user
+    settings file may override individual keys at runtime.
+    """
+
+    cancel: str | None = None
+    command_palette: str | None = None
+    session_picker: str | None = None
+    open_context: str | None = None
+    queue_follow_up: str | None = None
+    accept_completion: str | None = None
+    completion_next: str | None = None
+    completion_previous: str | None = None
+    thinking_cycle: str | None = None
+    model_cycle: str | None = None
+    toggle_thinking: str | None = None
+    toggle_tool_results: str | None = None
+    clear_prompt: str | None = None
+    quit: str | None = None
     copy_message: str | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Accept the former ``copy_message`` constructor name as a compatibility alias."""
-        clear_prompt = self.copy_message or self.clear_prompt
+        """Resolve unset keys from the catalog and apply legacy aliases."""
+        defaults = _default_keybindings()
+        clear_prompt_override = self.clear_prompt
+        if self.copy_message is not None and clear_prompt_override is None:
+            # ``copy_message`` was the old name for clearing the prompt.
+            clear_prompt_override = self.copy_message
         if self.copy_message == "ctrl+c":
-            clear_prompt = "ctrl+u"
-        if clear_prompt == "ctrl+c":
+            # An untouched legacy Ctrl+C value yields to the hard interrupt
+            # binding; custom values continue to work as the clear key.
+            clear_prompt_override = "ctrl+u"
+        if clear_prompt_override == "ctrl+c":
             raise TuiConfigError("TUI keybinding 'ctrl+c' is reserved for interrupt")
-        object.__setattr__(self, "clear_prompt", clear_prompt)
-        object.__setattr__(self, "copy_message", clear_prompt)
+        for action in _CONFIGURABLE_ACTIONS:
+            if getattr(self, action) is None:
+                object.__setattr__(self, action, defaults[action])
+        object.__setattr__(self, "clear_prompt", clear_prompt_override or self.clear_prompt)
+        object.__setattr__(self, "copy_message", self.clear_prompt)
 
     def to_json(self) -> dict[str, str]:
         """Serialize these keybindings to JSON-compatible data."""
-        return {
-            "cancel": self.cancel,
-            "command_palette": self.command_palette,
-            "session_picker": self.session_picker,
-            "open_context": self.open_context,
-            "queue_follow_up": self.queue_follow_up,
-            "accept_completion": self.accept_completion,
-            "completion_next": self.completion_next,
-            "completion_previous": self.completion_previous,
-            "thinking_cycle": self.thinking_cycle,
-            "model_cycle": self.model_cycle,
-            "toggle_thinking": self.toggle_thinking,
-            "toggle_tool_results": self.toggle_tool_results,
-            "clear_prompt": self.clear_prompt,
-            "quit": self.quit,
-        }
+        return {action: cast(str, getattr(self, action)) for action in _CONFIGURABLE_ACTIONS}
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +154,32 @@ def _bool_setting(value: object, field_name: str) -> bool:
     if isinstance(value, bool):
         return value
     raise TuiConfigError(f"TUI setting must be a boolean: {field_name}")
+
+
+#: The actions a user may remap through TUI settings; names match the prompt
+#: keymap entries in ``data/hotkeys.toml``.
+_CONFIGURABLE_ACTIONS: tuple[str, ...] = (
+    "cancel",
+    "command_palette",
+    "session_picker",
+    "open_context",
+    "queue_follow_up",
+    "accept_completion",
+    "completion_next",
+    "completion_previous",
+    "thinking_cycle",
+    "model_cycle",
+    "toggle_thinking",
+    "toggle_tool_results",
+    "clear_prompt",
+    "quit",
+)
+
+
+def _default_keybindings() -> dict[str, str]:
+    """Return the packaged default key for every configurable action."""
+    catalog = hotkey_catalog()
+    return {action: catalog.key("prompt", action) for action in _CONFIGURABLE_ACTIONS}
 
 
 def _keybindings_from_json(data: dict[str, Any]) -> TuiKeybindings:

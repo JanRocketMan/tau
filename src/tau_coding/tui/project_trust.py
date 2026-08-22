@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
-from textual.binding import Binding, BindingType
+from textual.binding import BindingType
 from textual.containers import Vertical
 from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import Label, ListItem, ListView, Static
 
+from tau_coding.hotkeys import hotkey_catalog
 from tau_coding.project_trust import ProjectTrustRequest, TrustChoice
 from tau_coding.tui.themes import TAU_DARK_THEME, textual_theme_for_tui_theme
 
@@ -26,12 +27,7 @@ _LABELS: tuple[tuple[TrustChoice, str], ...] = (
 class ProjectTrustScreen(ModalScreen[TrustChoice | None]):
     """Tau-style modal picker rendering one policy-owned request."""
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("enter", "select_cursor", "Select", show=False),
-    ]
+    BINDINGS: ClassVar[list[BindingType]] = hotkey_catalog().bindings("project_trust")
     DEFAULT_CSS = """
     ProjectTrustScreen {
         align: center middle;
@@ -136,13 +132,14 @@ class ProjectTrustScreen(ModalScreen[TrustChoice | None]):
 
     def on_key(self, event: Key) -> None:
         """Keep navigation local when hosted by Tau's globally bound app."""
-        if event.key == "up":
+        keys = hotkey_catalog().keys("project_trust")
+        if event.key == keys["cursor_up"]:
             event.stop()
             self.action_cursor_up()
-        elif event.key == "down":
+        elif event.key == keys["cursor_down"]:
             event.stop()
             self.action_cursor_down()
-        elif event.key == "enter":
+        elif event.key == keys["select"]:
             event.stop()
             self.action_select_cursor()
 

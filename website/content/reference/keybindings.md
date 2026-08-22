@@ -1,11 +1,18 @@
 ---
 title: Keyboard shortcuts
-description: Default keys for the Tau TUI, and how to remap them.
+description: Every TUI hotkey, defined in the packaged hotkeys.toml catalog.
 ---
 
-These are the default keys in the interactive [TUI]({{< relref "../guides/tui.md" >}}). Run
-`/hotkeys` in-session to see them. The keybindings are built-in defaults and
-cannot be remapped (see [Configuration]({{< relref "./configuration.md#tui-settings" >}})).
+All keyboard shortcuts in the interactive [TUI]({{< relref "../guides/tui.md" >}})
+are defined in one file: `src/tau_coding/data/hotkeys.toml`. That catalog is
+the single source of truth for key handling; every entry names the key, the
+action it triggers, and a short description, grouped by the screen or widget
+that uses it. There is no in-session shortcut list, so open the file directly
+when you need a reminder.
+
+The user-visible bindings can be remapped through
+[Configuration]({{< relref "./configuration.md#tui-settings" >}}); the catalog
+carries the defaults.
 
 ## Prompting
 
@@ -46,6 +53,7 @@ cannot be remapped (see [Configuration]({{< relref "./configuration.md#tui-setti
 | `Ctrl+D` | Quit |
 
 {{% note title="Keys" %}}
-Keys use Textual's syntax (`ctrl+k`, `ctrl+f`, `down`, `f2`, …). The defaults
-are built in; there is no TUI settings file.
+Keys use Textual's syntax (`ctrl+k`, `ctrl+f`, `down`, `f2`, ...). The table
+above summarizes the prompt-scope defaults; `src/tau_coding/data/hotkeys.toml`
+also covers pickers, modals, and footer modes, each with a short description.
 {{% /note %}}

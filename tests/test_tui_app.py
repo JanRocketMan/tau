@@ -6187,7 +6187,7 @@ async def test_tui_app_non_session_modal_uses_global_auto_copy_setting(
     monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
 
     async with app.run_test() as pilot:
-        app._show_command_message("/hotkeys", "Shortcut info")
+        app._show_command_message("/status", "Status info")
         await pilot.pause()
 
         assert isinstance(app.screen, CommandOutputScreen)

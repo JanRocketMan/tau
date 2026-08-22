@@ -1,0 +1,1087 @@
+# Tau hotkey catalog: the single source of truth for every keyboard shortcut
+# in the TUI. No hotkey is defined outside this file; the TUI builds its
+# Textual bindings from it, and `TuiKeybindings` derives its defaults from it.
+#
+# Each [[keymaps]] block names a scope (screen, widget, or prompt mode).
+# A binding entry is either:
+#   - a definition (keymap "prompt" only): name, key, action, description
+#   - a reference (all other keymaps): hotkey = <prompt entry name>, plus the
+#     footer label as `description` and optional display extras
+#
+# Optional entry flags:
+#   show      - whether the binding may appear in a Textual footer (default true)
+#   priority  - whether the binding beats focused-widget key handling (default false)
+#   bound     - whether the key is registered as a Textual binding; false means
+#               the owning widget handles the key itself in on_key (default true)
+#   key_display - footer text; {name} placeholders expand to that hotkey's key
+#
+# Keys use Textual's syntax ("ctrl+k", "shift+enter", "f1", ...).
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Prompt keymap: the definitions every other keymap references. These are the
+# keys active at the main prompt and app-wide.
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "prompt"
+description = "Main prompt input and app-wide actions"
+
+[[keymaps.bindings]]
+name = "submit"
+key = "enter"
+action = "submit_prompt"
+description = "Submit the prompt to start a run or steer one that is active"
+
+[[keymaps.bindings]]
+name = "insert_newline"
+key = "shift+enter"
+action = "insert_newline"
+description = "Insert a newline without submitting the prompt"
+
+[[keymaps.bindings]]
+name = "interrupt"
+key = "ctrl+c"
+action = "interrupt"
+description = "Stop the active model run, tool, or compaction"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Cancel the active run or close the focused overlay"
+
+[[keymaps.bindings]]
+name = "queue_follow_up"
+key = "alt+enter"
+action = "submit_follow_up"
+description = "Queue a follow-up that waits until the current run stops"
+
+[[keymaps.bindings]]
+name = "command_palette"
+key = "ctrl+k"
+action = "open_command_palette"
+description = "Open slash-command completions"
+
+[[keymaps.bindings]]
+name = "session_picker"
+key = "ctrl+r"
+action = "open_session_picker"
+description = "Open the session picker"
+
+[[keymaps.bindings]]
+name = "open_context"
+key = "ctrl+l"
+action = "open_context"
+description = "Open the active model context in the default editor"
+
+[[keymaps.bindings]]
+name = "accept_completion"
+key = "tab"
+action = "accept_completion"
+description = "Accept the highlighted completion"
+
+[[keymaps.bindings]]
+name = "completion_next"
+key = "down"
+action = "completion_next"
+description = "Select the next completion, or move down in the prompt"
+
+[[keymaps.bindings]]
+name = "completion_previous"
+key = "up"
+action = "completion_previous"
+description = "Select the previous completion, or move up in the prompt"
+
+[[keymaps.bindings]]
+name = "thinking_cycle"
+key = "ctrl+f"
+action = "cycle_thinking"
+description = "Cycle the thinking mode"
+
+[[keymaps.bindings]]
+name = "model_cycle"
+key = "ctrl+p"
+action = "cycle_model"
+description = "Cycle through available models, default provider first"
+
+[[keymaps.bindings]]
+name = "toggle_thinking"
+key = "ctrl+t"
+action = "toggle_thinking"
+description = "Toggle display of thinking tokens"
+
+[[keymaps.bindings]]
+name = "toggle_tool_results"
+key = "ctrl+o"
+action = "toggle_tool_results"
+description = "Collapse or expand tool output"
+
+[[keymaps.bindings]]
+name = "clear_prompt"
+key = "ctrl+u"
+action = "clear_prompt"
+description = "Clear the prompt input"
+
+[[keymaps.bindings]]
+name = "quit"
+key = "ctrl+d"
+action = "quit"
+description = "Quit Tau"
+
+# ---------------------------------------------------------------------------
+# App scope: bindings registered on the app itself, shown in the global footer.
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "app"
+description = "App-level bindings active across the whole TUI"
+
+[[keymaps.bindings]]
+hotkey = "cancel"
+description = "Cancel"
+
+[[keymaps.bindings]]
+hotkey = "command_palette"
+description = "Commands"
+
+[[keymaps.bindings]]
+hotkey = "session_picker"
+description = "Sessions"
+
+[[keymaps.bindings]]
+hotkey = "open_context"
+description = "Context"
+
+[[keymaps.bindings]]
+hotkey = "thinking_cycle"
+description = "Thinking"
+
+[[keymaps.bindings]]
+hotkey = "model_cycle"
+description = "Model"
+
+[[keymaps.bindings]]
+hotkey = "accept_completion"
+description = "Complete"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "queue_follow_up"
+description = "Follow-up"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "completion_next"
+description = "Next completion"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "completion_previous"
+description = "Previous completion"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "toggle_tool_results"
+description = "Tool results"
+
+[[keymaps.bindings]]
+hotkey = "toggle_thinking"
+description = "Thinking tokens"
+
+[[keymaps.bindings]]
+hotkey = "interrupt"
+description = "Stop"
+
+[[keymaps.bindings]]
+hotkey = "clear_prompt"
+description = "Clear input"
+
+[[keymaps.bindings]]
+hotkey = "quit"
+description = "Quit"
+
+# ---------------------------------------------------------------------------
+# Prompt modes: the footer subsets shown for each prompt state. Each entry
+# references a prompt hotkey and carries the footer label.
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "prompt_normal"
+description = "Footer bindings while the prompt is idle"
+
+[[keymaps.bindings]]
+hotkey = "submit"
+description = "Submit"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "insert_newline"
+description = "Newline"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "command_palette"
+description = "Commands"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "session_picker"
+description = "Sessions"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "open_context"
+description = "Context"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "thinking_cycle"
+description = "Thinking"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "model_cycle"
+description = "Model"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "interrupt"
+description = "Stop"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "clear_prompt"
+description = "Clear"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "quit"
+description = "Quit"
+priority = true
+
+[[keymaps]]
+name = "prompt_completion"
+description = "Footer bindings while slash-command completions are visible"
+
+[[keymaps.bindings]]
+hotkey = "accept_completion"
+description = "Complete"
+key_display = "{accept_completion}/Enter"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "completion_next"
+description = "Choose"
+key_display = "{completion_previous}/{completion_next}"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "cancel"
+description = "Close"
+priority = true
+
+[[keymaps]]
+name = "prompt_running"
+description = "Footer bindings while a run is active"
+
+[[keymaps.bindings]]
+hotkey = "submit"
+description = "Steer"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "queue_follow_up"
+description = "Follow-up"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "interrupt"
+description = "Stop"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "cancel"
+description = "Cancel"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "toggle_thinking"
+description = "Thinking"
+priority = true
+
+[[keymaps.bindings]]
+hotkey = "toggle_tool_results"
+description = "Tools"
+priority = true
+
+# ---------------------------------------------------------------------------
+# Extension screens
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "extension_select"
+description = "Option picker opened by an extension"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Cancel and close the picker"
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous option"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next option"
+show = false
+
+[[keymaps.bindings]]
+name = "select"
+key = "enter"
+action = "select_cursor"
+description = "Select the highlighted option"
+show = false
+
+[[keymaps]]
+name = "extension_confirm"
+description = "Confirmation dialog opened by an extension"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Cancel the confirmed action"
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous choice"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next choice"
+show = false
+
+[[keymaps.bindings]]
+name = "select"
+key = "enter"
+action = "select_cursor"
+description = "Confirm the highlighted choice"
+show = false
+
+[[keymaps]]
+name = "extension_input"
+description = "Text prompt opened by an extension"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the text prompt without a value"
+
+# ---------------------------------------------------------------------------
+# Tool reference browser
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "tools_reference_search_input"
+description = "Search field of the tool reference browser"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the tool reference browser"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move up in the tool list"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move down in the tool list"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "open"
+key = "enter"
+action = "open_selected"
+description = "Open the highlighted tool reference"
+show = false
+priority = true
+
+[[keymaps]]
+name = "tools_reference"
+description = "Searchable tool table with description details"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the tool reference browser"
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move up in the tool list"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move down in the tool list"
+show = false
+
+[[keymaps.bindings]]
+name = "open"
+key = "enter"
+action = "open_selected"
+description = "Open the highlighted tool reference"
+show = false
+
+# ---------------------------------------------------------------------------
+# Pickers
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "session_picker_search_input"
+description = "Search field of the session picker"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the session picker"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous session"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next session"
+show = false
+priority = true
+
+[[keymaps]]
+name = "prompt_template_picker"
+description = "Pick a loaded prompt template"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the template picker"
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous template"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next template"
+show = false
+
+[[keymaps.bindings]]
+name = "select"
+key = "enter"
+action = "select_cursor"
+description = "Insert the highlighted template"
+show = false
+
+[[keymaps]]
+name = "session_picker"
+description = "Resume a previous session"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the session picker"
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous session"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next session"
+show = false
+
+[[keymaps.bindings]]
+name = "select"
+key = "enter"
+action = "select_cursor"
+description = "Open the highlighted session"
+show = false
+
+[[keymaps]]
+name = "skill_picker_search_input"
+description = "Search field of the skill picker"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the skill picker"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous skill"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next skill"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "show_description"
+key = "f1"
+action = "show_description"
+description = "Show the highlighted skill's description"
+show = false
+bound = false
+
+[[keymaps.bindings]]
+name = "show_in_transcript"
+key = "ctrl+enter"
+action = "show_in_transcript"
+description = "Show the highlighted skill in the transcript"
+show = false
+bound = false
+
+[[keymaps]]
+name = "skill_picker"
+description = "Browse and insert loaded skills"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the skill picker"
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous skill"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next skill"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "insert"
+key = "enter"
+action = "select_cursor"
+description = "Insert the highlighted skill"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "show_description"
+key = "f1"
+action = "show_description"
+description = "Show the highlighted skill's description"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "show_in_transcript"
+key = "ctrl+enter"
+action = "show_in_transcript"
+description = "Show the highlighted skill in the transcript"
+show = false
+priority = true
+
+[[keymaps]]
+name = "tree_picker"
+description = "Branch from a previous session entry"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the branch picker"
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous session entry"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next session entry"
+show = false
+
+[[keymaps.bindings]]
+name = "branch"
+key = "enter"
+action = "select_cursor"
+description = "Branch from the highlighted session entry"
+show = false
+
+[[keymaps.bindings]]
+name = "summarize"
+key = "s"
+action = "select_with_summary"
+description = "Branch with a summary of the highlighted entry"
+show = false
+
+[[keymaps.bindings]]
+name = "custom_summary"
+key = "c"
+action = "select_with_custom_summary"
+description = "Branch with custom instructions"
+show = false
+
+[[keymaps.bindings]]
+name = "toggle_tool_calls"
+key = "ctrl+t"
+action = "toggle_tool_calls"
+description = "Toggle tool-call display in the session log"
+show = false
+
+[[keymaps]]
+name = "branch_summary_instructions"
+description = "Prompt for custom branch-summary instructions"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Cancel the branch instructions"
+
+[[keymaps.bindings]]
+name = "submit"
+key = "ctrl+enter"
+action = "submit"
+description = "Submit the branch instructions"
+show = false
+bound = false
+
+# ---------------------------------------------------------------------------
+# Command output
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "command_output_scroll"
+description = "Scrollable command output area"
+
+[[keymaps.bindings]]
+name = "scroll_up"
+key = "up"
+action = "scroll_up"
+description = "Scroll the command output up"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "scroll_down"
+key = "down"
+action = "scroll_down"
+description = "Scroll the command output down"
+show = false
+priority = true
+
+[[keymaps]]
+name = "command_output"
+description = "Dismissible modal for slash-command output"
+
+[[keymaps.bindings]]
+name = "close"
+key = "escape"
+action = "close"
+description = "Close the command output"
+
+[[keymaps.bindings]]
+name = "close_enter"
+key = "enter"
+action = "close"
+description = "Close the command output"
+
+[[keymaps.bindings]]
+name = "scroll_up"
+key = "up"
+action = "scroll_up"
+description = "Scroll the command output up"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "scroll_down"
+key = "down"
+action = "scroll_down"
+description = "Scroll the command output down"
+show = false
+priority = true
+
+# ---------------------------------------------------------------------------
+# Login flow
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "login_provider_search_input"
+description = "Search field of the login provider picker"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the provider picker"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous provider"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next provider"
+show = false
+priority = true
+
+[[keymaps]]
+name = "login_provider_picker"
+description = "Connect a provider with OAuth or an API key"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Cancel the login flow"
+
+[[keymaps.bindings]]
+name = "close"
+key = "ctrl+d"
+action = "close"
+description = "Close the login flow"
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous provider"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next provider"
+show = false
+
+[[keymaps.bindings]]
+name = "select"
+key = "enter"
+action = "select_cursor"
+description = "Start login with the highlighted provider"
+show = false
+
+[[keymaps]]
+name = "login_method_picker"
+description = "Choose OAuth or API-key login for a provider"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Cancel the login flow"
+priority = true
+
+[[keymaps.bindings]]
+name = "close"
+key = "ctrl+d"
+action = "cancel"
+description = "Close the login flow"
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous login method"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next login method"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "select"
+key = "enter"
+action = "select_cursor"
+description = "Select the highlighted login method"
+show = false
+priority = true
+
+[[keymaps]]
+name = "theme_picker"
+description = "Choose the TUI theme"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Cancel the theme selection"
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous theme"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next theme"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "select"
+key = "enter"
+action = "select_cursor"
+description = "Apply the highlighted theme"
+show = false
+priority = true
+
+[[keymaps]]
+name = "model_picker_search_input"
+description = "Search field of the model picker"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the model picker"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "toggle_mode_tab"
+key = "tab"
+action = "toggle_mode"
+description = "Toggle between search and recent models"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "toggle_mode_ctrl_i"
+key = "ctrl+i"
+action = "toggle_mode"
+description = "Toggle between search and recent models"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous model"
+show = false
+priority = true
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next model"
+show = false
+priority = true
+
+[[keymaps]]
+name = "model_picker"
+description = "Choose the active model"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Close the model picker"
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous model"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next model"
+show = false
+
+[[keymaps.bindings]]
+name = "accept"
+key = "enter"
+action = "accept_model"
+description = "Select the highlighted model"
+show = false
+
+[[keymaps]]
+name = "custom_provider_login"
+description = "Add an OpenAI-compatible custom provider"
+
+[[keymaps.bindings]]
+name = "back"
+key = "escape"
+action = "back"
+description = "Back to the previous login step"
+
+[[keymaps.bindings]]
+name = "close"
+key = "ctrl+d"
+action = "close"
+description = "Close the login flow"
+priority = true
+
+[[keymaps]]
+name = "login_screen"
+description = "Save a provider API key"
+
+[[keymaps.bindings]]
+name = "back"
+key = "escape"
+action = "back"
+description = "Back to the previous login step"
+
+[[keymaps.bindings]]
+name = "close"
+key = "ctrl+d"
+action = "close"
+description = "Close the login flow"
+priority = true
+
+[[keymaps]]
+name = "oauth_login"
+description = "OAuth login flow for subscription providers"
+
+[[keymaps.bindings]]
+name = "back"
+key = "escape"
+action = "back"
+description = "Back to the previous login step"
+
+[[keymaps.bindings]]
+name = "close"
+key = "ctrl+d"
+action = "close"
+description = "Close the login flow"
+priority = true
+
+# ---------------------------------------------------------------------------
+# Project trust
+# ---------------------------------------------------------------------------
+
+[[keymaps]]
+name = "project_trust"
+description = "Decide whether to trust a project input"
+
+[[keymaps.bindings]]
+name = "cancel"
+key = "escape"
+action = "cancel"
+description = "Decline the trust decision"
+
+[[keymaps.bindings]]
+name = "cursor_up"
+key = "up"
+action = "cursor_up"
+description = "Move to the previous trust choice"
+show = false
+
+[[keymaps.bindings]]
+name = "cursor_down"
+key = "down"
+action = "cursor_down"
+description = "Move to the next trust choice"
+show = false
+
+[[keymaps.bindings]]
+name = "select"
+key = "enter"
+action = "select_cursor"
+description = "Choose the highlighted trust option"
+show = false
