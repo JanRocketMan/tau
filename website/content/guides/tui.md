@@ -148,6 +148,16 @@ message blocks use the same theme background as the prompt field, with light
 vertical padding so they read as blocks rather than highlighted lines.
 This visually ties submitted prompts to the composer.
 
+## Copying code blocks
+
+Every fenced code block in the transcript gets a small copy button (`▣`) in its
+top-right corner. This covers code fences in assistant messages, in user
+messages, and in tool results. Clicking the button copies exactly the fenced
+code (without the ``` markers) to the clipboard and briefly switches the button
+to a checkmark; the keyboard focus returns to the prompt so you can keep
+typing. Rows without complete fences keep their fast plain rendering and get no
+button.
+
 ## Long sessions
 
 Tau keeps long transcripts responsive by mounting only a window of messages in

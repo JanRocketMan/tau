@@ -20,15 +20,18 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
-from textual.containers import Horizontal, VerticalScroll
+from textual import events
+from textual.app import ComposeResult
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Style as TextualStyle  # type: ignore[attr-defined]
 from textual.css.query import NoMatches
 from textual.geometry import Offset
 from textual.selection import Selection
+from textual.timer import Timer
 from textual.widget import Widget
+from textual.widgets import Button, Label, Static
 from textual.widgets import Markdown as TextualMarkdown
-from textual.widgets import Static
-from textual.widgets.markdown import MarkdownBlock, MarkdownStream
+from textual.widgets.markdown import MarkdownBlock, MarkdownFence, MarkdownStream
 
 from tau_coding.tui.autocomplete import CompletionState
 from tau_coding.tui.config import TAU_DARK_THEME, TuiRoleStyle, TuiTheme
@@ -166,10 +169,145 @@ class TauMarkdownBlock(MarkdownBlock):
         return type(content)(content.plain, spans=spans)
 
 
+class CopyFenceButton(Button, can_focus=False):
+    """Small copy button docked to the top-right corner of a code fence box.
+
+    The button reads the fence's code from its parent at click time, so it stays
+    in sync while a Markdown fence streams or a tool progress row updates in
+    place. It is not focusable, so clicking it never steals keyboard focus from
+    the prompt.
+    """
+
+    DEFAULT_CSS = """
+    CopyFenceButton {
+        dock: right;
+        height: 1;
+        min-width: 0;
+        width: auto;
+        line-pad: 1;
+        padding: 0 1;
+        margin: 0 1 0 0;
+        border: none !important;
+        background: $tau-markdown-code-block-background !important;
+        color: $tau-muted-text !important;
+        text-style: none !important;
+        text-align: center;
+        content-align: center middle;
+        pointer: pointer;
+    }
+
+    CopyFenceButton:hover {
+        color: $tau-accent !important;
+        text-style: bold !important;
+    }
+    """
+
+    def __init__(self) -> None:
+        # ▣ (U+25A3) renders optically centered in terminal cells; math-symbol
+        # lookalikes like ⧉ (U+29C9) are drawn small and raised in many fonts.
+        super().__init__("▣", tooltip="Copy code")
+        self._revert_timer: Timer | None = None
+
+    @property
+    def _source_code(self) -> str:
+        """Return the fence code currently owned by the parent widget."""
+        parent = self.parent
+        if parent is None:
+            return ""
+        code = getattr(parent, "code", None)
+        return code if isinstance(code, str) else ""
+
+    def _flash_copied(self) -> None:
+        """Flip the label to ✓ briefly as copy feedback, then revert."""
+        if self._revert_timer is not None:
+            self._revert_timer.stop()
+        self.label = "✓"
+        self.tooltip = "Copied"
+        self._revert_timer = self.set_timer(1.2, self._revert_label)
+
+    def _revert_label(self) -> None:
+        self.label = "▣"
+        self.tooltip = "Copy code"
+        self._revert_timer = None
+
+    async def _copy_code(self) -> None:
+        """Copy the parent fence's code to the clipboard; False when empty."""
+        code = self._source_code.rstrip("\n")
+        if not code:
+            return
+        self.app.copy_to_clipboard(code)
+        self._flash_copied()
+
+    async def on_click(self, _event: events.Click) -> None:
+        """Copy the fence code on click.
+
+        Textual moves keyboard focus to the transcript when the pointer lands
+        on the button; the prompt is restored so typing continues uninterrupted.
+        """
+        await self._copy_code()
+        try:
+            prompt = self.app.query_one("#prompt")
+        except NoMatches:
+            return
+        self.app.set_focus(prompt)
+
+
+class TauMarkdownFence(MarkdownFence):
+    """Markdown code fence with a copy button at its top-right.
+
+    Single-line code gets a one-row header hosting the button above the code;
+    multi-line code keeps its line count and the button sits at the end of the
+    first line instead. The ``-multi-line`` class drives the header visibility.
+    """
+
+    DEFAULT_CSS = """
+    TauMarkdownFence {
+        layout: vertical;
+    }
+
+    TauMarkdownFence > .fence-header {
+        width: 1fr;
+        height: 1;
+    }
+
+    TauMarkdownFence.-multi-line > .fence-header {
+        display: none;
+    }
+
+    TauMarkdownFence #code-content {
+        width: auto;
+        padding: 0 2;
+    }
+    """
+
+    def __init__(self, markdown: TextualMarkdown, token: Any, code: str) -> None:
+        super().__init__(markdown, token, code)
+        self._sync_multi_line_class()
+
+    def _sync_multi_line_class(self) -> None:
+        """Hide the header row once the fence content spans more than one line."""
+        self.set_class(len(self.code.splitlines()) > 1, "-multi-line")
+
+    def _copy_context(self, block: MarkdownBlock) -> None:
+        """Keep the header visibility in sync while the fence streams."""
+        super()._copy_context(block)
+        self._sync_multi_line_class()
+
+    def compose(self) -> ComposeResult:
+        yield Static("", classes="fence-header")
+        yield Label(self._highlighted_code, id="code-content", expand=True)
+        yield CopyFenceButton()
+
+
 class ThemedMarkdownWidget(TextualMarkdown):
     """Textual Markdown widget reserved for Tau transcript streaming."""
 
-    BLOCKS = {**TextualMarkdown.BLOCKS, "paragraph_open": TauMarkdownBlock}
+    BLOCKS = {
+        **TextualMarkdown.BLOCKS,
+        "paragraph_open": TauMarkdownBlock,
+        "fence": TauMarkdownFence,
+        "code_block": TauMarkdownFence,
+    }
 
     DEFAULT_CSS = """
     ThemedMarkdownWidget MarkdownH1,
@@ -263,6 +401,310 @@ class TranscriptWindowBoundary(Static):
         return f"{arrow} Scroll for {count} {self.direction} {noun}"
 
 
+@dataclass(frozen=True, slots=True)
+class PlainBodyPart:
+    """One segment of a fenced transcript plain body.
+
+    Text parts carry a pre-styled Rich renderable; fence parts carry the raw
+    fenced code (without the markers) plus an optional highlight language.
+    """
+
+    kind: Literal["text", "fence"]
+    content: RenderableType | str
+    language: str | None = None
+
+
+def _plain_parts_shape(parts: list[PlainBodyPart]) -> tuple[str, ...]:
+    """Ordered part kinds; the structure that must match for in-place updates.
+
+    Content changes (new code, new text) keep the same shape and update in
+    place; adding/removing fences changes the shape and forces a remount.
+    """
+    return tuple(part.kind for part in parts)
+
+
+def _fenced_plain_parts(text: str, *, body_style: str) -> list[PlainBodyPart] | None:
+    """Split plain transcript text into text/fence parts for well-formed fences.
+
+    Mirrors ``_render_fenced_body``: a single malformed fence keeps the whole
+    row literal (returns None), so the fast plain renderable path is used.
+    """
+    if "```" not in text:
+        return None
+    parts: list[PlainBodyPart] = []
+    cursor = 0
+    while cursor < len(text):
+        fence_start = text.find("```", cursor)
+        if fence_start == -1:
+            _append_plain_part(parts, text[cursor:], body_style=body_style)
+            break
+
+        line_start = text.rfind("\n", 0, fence_start) + 1
+        if line_start != fence_start:
+            return None
+
+        fence_line_end = text.find("\n", fence_start)
+        if fence_line_end == -1:
+            return None
+        closing_start = text.find("\n```", fence_line_end + 1)
+        if closing_start == -1:
+            return None
+
+        _append_plain_part(parts, text[cursor:fence_start], body_style=body_style)
+        language = _syntax_language(text[fence_start + 3 : fence_line_end])
+        code = text[fence_line_end + 1 : closing_start]
+        parts.append(PlainBodyPart("fence", code, language=language))
+        closing_line_end = text.find("\n", closing_start + 1)
+        cursor = len(text) if closing_line_end == -1 else closing_line_end + 1
+
+    if not any(part.kind == "fence" for part in parts):
+        return None
+    return parts
+
+
+def _append_plain_part(
+    parts: list[PlainBodyPart],
+    text: str,
+    *,
+    body_style: str,
+) -> None:
+    if text:
+        parts.append(PlainBodyPart("text", _plain_text(text.rstrip("\n"), body_style=body_style)))
+
+
+def _transcript_plain_body_parts(
+    item: ChatItem,
+    *,
+    text: str,
+    body_style: str,
+    theme: TuiTheme,
+    invocation: str | None = None,
+    result_markup: str | None = None,
+) -> list[PlainBodyPart] | None:
+    """Return fence-structured parts for a selectable plain row, or None.
+
+    None means the row has no copyable fences (or keeps its current renderable
+    fast path, e.g. custom-result markup or patch bodies) and the plain Static
+    body is used instead of the boxed FencedPlainBody.
+    """
+    if item.role != "tool":
+        return _fenced_plain_parts(text, body_style=body_style)
+    if result_markup is not None:
+        return None
+    invocation_line, separator, result_text = text.partition("\n\n")
+    if not separator:
+        return None
+    patch_body = _render_patch_body(
+        result_text,
+        body_style=body_style,
+        syntax_theme=theme.syntax_theme,
+        code_block_background=theme.markdown_code_block_background,
+    )
+    if patch_body is not None:
+        return None
+    parts: list[PlainBodyPart] = []
+    parts.append(
+        PlainBodyPart(
+            "text",
+            _render_transcript_tool_invocation(
+                invocation_line,
+                body_style=body_style,
+                accent_style=_tool_accent_style(item, theme=theme),
+            ),
+        )
+    )
+    parts.append(PlainBodyPart("text", _plain_text("", body_style=body_style)))
+    result_parts = _fenced_plain_parts(result_text, body_style=body_style)
+    if result_parts is None:
+        return None
+    parts.extend(result_parts)
+    return parts
+
+
+class FencedCodeBox(Vertical):
+    """One fenced code block rendered as a boxed area with a copy button.
+
+    A one-row header sits above the code; the copy button docks to the right
+    end of that header row so it never overlays the code content.
+    """
+
+    DEFAULT_CSS = """
+    FencedCodeBox {
+        width: 1fr;
+        height: auto;
+        margin: 1 0;
+        background: $tau-markdown-code-block-background;
+        overflow-x: auto;
+        scrollbar-size-horizontal: 1;
+    }
+
+    FencedCodeBox > .fenced-code-header {
+        width: 1fr;
+        height: 1;
+    }
+
+    FencedCodeBox.-multi-line > .fenced-code-header {
+        display: none;
+    }
+
+    FencedCodeBox > FencedCodeContent {
+        padding: 0 2;
+    }
+    """
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        language: str,
+        syntax_theme: str,
+        code_block_background: str,
+    ) -> None:
+        self._code = code
+        self._language = language
+        self._syntax_theme = syntax_theme
+        self._code_block_background = code_block_background
+        super().__init__()
+        self._sync_multi_line_class()
+
+    def _sync_multi_line_class(self) -> None:
+        """Hide the header row once the fence content spans more than one line."""
+        self.set_class(len(self._code.splitlines()) > 1, "-multi-line")
+
+    @property
+    def code(self) -> str:
+        """The fenced code text served to the copy button."""
+        return self._code
+
+    def compose(self) -> ComposeResult:
+        yield Static("", classes="fenced-code-header")
+        yield FencedCodeContent(
+            self._syntax_renderable(),
+            code=self._code,
+            expand=True,
+            shrink=True,
+            markup=False,
+            classes="fenced-code-content",
+        )
+        yield CopyFenceButton()
+
+    def _syntax_renderable(self) -> RenderableType:
+        return Syntax(
+            self._code.rstrip("\n"),
+            self._language,
+            theme=self._syntax_theme,
+            word_wrap=True,
+            background_color=self._code_block_background,
+        )
+
+    def update_code(self, code: str, *, language: str | None = None) -> None:
+        """Update the boxed code in place; the copy button keeps its position."""
+        self._code = code
+        if language is not None:
+            self._language = language
+        self._sync_multi_line_class()
+        self.query_one(FencedCodeContent).update(self._syntax_renderable())
+
+
+class FencedCodeContent(Static):
+    """Static host for syntax-highlighted fence code that stays selectable."""
+
+    def __init__(self, content: RenderableType, *, code: str, **kwargs: Any) -> None:
+        self._code = code
+        super().__init__(content, **kwargs)
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        """Report the raw fence code under a selection instead of rich markup."""
+        selected_text = _extract_text_selection(self._code, selection)
+        if not selected_text:
+            return None
+        return selected_text, "\n"
+
+
+class FencedPlainBody(Vertical):
+    """Plain transcript body that renders fenced code as copyable boxes.
+
+    Replaces the single Static used by ``_transcript_plain_body_text`` when the
+    row contains at least one well-formed fence. Plain parts keep the fast
+    selectable Static rendering; fence parts become ``FencedCodeBox`` widgets.
+    """
+
+    DEFAULT_CSS = """
+    FencedPlainBody {
+        width: 1fr;
+        height: auto;
+    }
+
+    FencedPlainBody > Static.fenced-plain-chunk {
+        width: 1fr;
+        height: auto;
+    }
+    """
+
+    def __init__(
+        self,
+        parts: list[PlainBodyPart],
+        *,
+        syntax_theme: str,
+        code_block_background: str,
+        classes: str | None = None,
+    ) -> None:
+        self._parts = parts
+        self._parts_shape = _plain_parts_shape(parts)
+        self._syntax_theme = syntax_theme
+        self._code_block_background = code_block_background
+        super().__init__(classes=classes)
+
+    def compose(self) -> ComposeResult:
+        yield from self._children_for_parts(self._parts)
+
+    def _children_for_parts(self, parts: list[PlainBodyPart]) -> list[Widget]:
+        children: list[Widget] = []
+        for part in parts:
+            if part.kind == "text":
+                children.append(
+                    Static(
+                        part.content,
+                        expand=True,
+                        shrink=True,
+                        markup=False,
+                        classes="fenced-plain-chunk",
+                    )
+                )
+            else:
+                children.append(
+                    FencedCodeBox(
+                        str(part.content),
+                        language=part.language or "text",
+                        syntax_theme=self._syntax_theme,
+                        code_block_background=self._code_block_background,
+                    )
+                )
+        return children
+
+    def update_parts(self, parts: list[PlainBodyPart]) -> bool:
+        """Update contents in place when the part structure is unchanged.
+
+        Live tool progress rows re-render each tick; remounting the body on
+        every tick causes layout flicker, so when the sequence of text/fence
+        parts has the same shape the Statics and code boxes are updated in
+        place. Returns False when the shape changed and the caller must remount.
+        """
+        if _plain_parts_shape(parts) != self._parts_shape:
+            return False
+        for part, child in zip(parts, self.children, strict=True):
+            if part.kind == "text":
+                if not isinstance(child, Static):
+                    return False
+                child.update(part.content)
+            else:
+                if not isinstance(child, FencedCodeBox):
+                    return False
+                child.update_code(str(part.content), language=part.language)
+        self._parts = parts
+        return True
+
+
 class TranscriptMessageWidget(Horizontal):
     """One selectable transcript message rendered as a full-height role block."""
 
@@ -335,8 +777,8 @@ class TranscriptMessageWidget(Horizontal):
     def compose(self) -> Any:
         yield self._body_widget()
 
-    def _body_widget(self) -> Static | ThemedMarkdownWidget:
-        body: Static | ThemedMarkdownWidget
+    def _body_widget(self) -> Static | FencedPlainBody | ThemedMarkdownWidget:
+        body: Static | FencedPlainBody | ThemedMarkdownWidget
         if self.item.role == "custom":
             return Static(
                 _custom_body_renderable(
@@ -350,20 +792,36 @@ class TranscriptMessageWidget(Horizontal):
                 classes="transcript-message-body transcript-plain-body",
             )
         if _use_plain_transcript_body(self.item):
-            body = Static(
-                _transcript_plain_body_text(
-                    self.item,
-                    text=self.selection_text,
-                    body_style=self._role_style.body,
-                    theme=self._theme,
-                    invocation=self._invocation,
-                    result_markup=self._result_markup,
-                ),
-                expand=True,
-                shrink=True,
-                markup=False,
-                classes="transcript-message-body transcript-plain-body",
+            fence_parts = _transcript_plain_body_parts(
+                self.item,
+                text=self.selection_text,
+                body_style=self._role_style.body,
+                theme=self._theme,
+                invocation=self._invocation,
+                result_markup=self._result_markup,
             )
+            if fence_parts is not None:
+                body = FencedPlainBody(
+                    fence_parts,
+                    syntax_theme=self._theme.syntax_theme,
+                    code_block_background=self._theme.markdown_code_block_background,
+                    classes="transcript-message-body transcript-plain-body",
+                )
+            else:
+                body = Static(
+                    _transcript_plain_body_text(
+                        self.item,
+                        text=self.selection_text,
+                        body_style=self._role_style.body,
+                        theme=self._theme,
+                        invocation=self._invocation,
+                        result_markup=self._result_markup,
+                    ),
+                    expand=True,
+                    shrink=True,
+                    markup=False,
+                    classes="transcript-message-body transcript-plain-body",
+                )
         else:
             body = ThemedMarkdownWidget(
                 self._markdown_text,
@@ -428,20 +886,42 @@ class TranscriptMessageWidget(Horizontal):
             show_tool_results=show_tool_results,
             invocation=self._invocation,
         )
+        plain_text = _transcript_plain_body_text(
+            self.item,
+            text=self.selection_text,
+            body_style=self._role_style.body,
+            theme=self._theme,
+            invocation=self._invocation,
+            result_markup=self._result_markup,
+        )
+        fence_parts = _transcript_plain_body_parts(
+            self.item,
+            text=self.selection_text,
+            body_style=self._role_style.body,
+            theme=self._theme,
+            invocation=self._invocation,
+            result_markup=self._result_markup,
+        )
+        fenced_bodies = list(self.query(FencedPlainBody))
+        if fence_parts is not None:
+            if not fenced_bodies:
+                # The body shape changed (plain -> fenced): remount the row.
+                return False
+            if not fenced_bodies[0].update_parts(fence_parts):
+                return False
+            if foreground:
+                fenced_bodies[0].styles.color = foreground
+            if background:
+                fenced_bodies[0].styles.background = background
+            return True
+        if fenced_bodies:
+            # The body shape changed (fenced -> plain): remount the row.
+            return False
         try:
             body = self.query_one(".transcript-plain-body", Static)
         except NoMatches:
             return False
-        body.update(
-            _transcript_plain_body_text(
-                self.item,
-                text=self.selection_text,
-                body_style=self._role_style.body,
-                theme=self._theme,
-                invocation=self._invocation,
-                result_markup=self._result_markup,
-            )
-        )
+        body.update(plain_text)
         if foreground:
             body.styles.color = foreground
         if background:
