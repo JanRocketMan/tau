@@ -15,7 +15,7 @@ command palette with **Ctrl+K**.
 | `/context` | Open a temporary snapshot of the active model context in the default editor |
 | `/compact [instructions]` | Summarize and compact the active context |
 | `/export [--format html\|jsonl] [dest]` | Export the current session |
-| `/resume [session-id]` | Resume a previous session, or open the picker |
+| `/resume [session-id]` | Resume a previous session, or open the picker (first entry starts a new session) |
 | `/tree` | Branch from an earlier point in the session tree |
 | `/name <new name>` | Rename the current session and, in supported terminals, the terminal tab title |
 | `/model` | Open the model picker |

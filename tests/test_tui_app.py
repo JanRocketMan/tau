@@ -165,6 +165,7 @@ def _tui_app(
     startup_notice: str | None = None,
     startup_notices: Sequence[str] = (),
     initial_prompt: str | None = None,
+    open_session_picker_on_start: bool = False,
 ) -> TauTuiApp:
     return TauTuiApp(
         cast(CodingSession, session),
@@ -173,6 +174,7 @@ def _tui_app(
         startup_notice=startup_notice,
         startup_notices=startup_notices,
         initial_prompt=initial_prompt,
+        open_session_picker_on_start=open_session_picker_on_start,
     )
 
 
@@ -5144,10 +5146,12 @@ async def test_tui_app_session_picker_resumes_selected_session() -> None:
         await pilot.press("ctrl+r")
         assert isinstance(app.screen, SessionPickerScreen)
 
+        await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
 
         assert session.resumed_session_ids == ["session-1"]
+        assert session.new_session_count == 0
         assert [(item.role, item.text) for item in app.state.items] == [
             ("user", "Restored prompt"),
         ]
@@ -5190,6 +5194,7 @@ async def test_tui_app_session_picker_shows_human_readable_session_metadata() ->
         ]
 
     assert labels == [
+        "Start a new session",
         "2026-06-19 14:30 - fake-model",
         "2026-06-19 14:30 - other-model - Named work",
     ]
@@ -5227,6 +5232,7 @@ async def test_tui_app_session_picker_arrow_keys_select_session() -> None:
     async with app.run_test() as pilot:
         await pilot.press("ctrl+r")
         assert isinstance(app.screen, SessionPickerScreen)
+        await pilot.press("down")
         await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
@@ -5347,6 +5353,133 @@ async def test_tui_app_session_picker_search_with_no_matches_shows_help_text() -
         assert list(session_list.children) == []
         help_text = app.screen.query_one("#session-picker-help", Static)
         assert str(help_text.render()) == "No matching sessions - Escape closes"
+
+
+@pytest.mark.anyio
+async def test_tui_app_opens_session_picker_on_start() -> None:
+    updated_at = datetime(2026, 6, 19, 14, 30).timestamp()
+    session = FakeSession()
+    session.session_manager = _FakeSessionManager(
+        [
+            CodingSessionRecord(
+                id="session-1",
+                path=Path("/tmp/session-1.jsonl"),
+                cwd=Path("/workspace/project"),
+                model="fake-model",
+                title="Earlier work",
+                created_at=1.0,
+                updated_at=updated_at,
+            ),
+        ]
+    )
+    app = _tui_app(session, open_session_picker_on_start=True)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert isinstance(app.screen, SessionPickerScreen)
+        session_list = app.screen.query_one("#session-picker-list", ListView)
+        search = app.screen.query_one("#session-picker-search", Input)
+        # The search field sits below the session list.
+        assert search.region.y > session_list.region.y
+        assert session_list.index == 0
+        labels = [item.query_one(Label).content for item in session_list.children]
+        assert labels == [
+            "Start a new session",
+            "2026-06-19 14:30 - fake-model - Earlier work",
+        ]
+
+        # Enter on the default selection starts fresh without resuming or
+        # creating a second session record.
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, SessionPickerScreen)
+        assert session.resumed_session_ids == []
+        assert session.new_session_count == 0
+
+
+@pytest.mark.anyio
+async def test_tui_app_start_picker_arrow_keys_resume_past_session() -> None:
+    session = FakeSession(messages=[UserMessage(content="Earlier")])
+    session.session_manager = _FakeSessionManager(
+        [
+            CodingSessionRecord(
+                id="session-1",
+                path=Path("/tmp/session-1.jsonl"),
+                cwd=Path("/workspace/project"),
+                model="fake-model",
+                title="Earlier work",
+                created_at=1.0,
+                updated_at=2.0,
+            ),
+        ]
+    )
+    app = _tui_app(session, open_session_picker_on_start=True)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, SessionPickerScreen)
+
+        # Up from the default new-session row is a no-op; down moves to the
+        # past session and Enter resumes it.
+        await pilot.press("up")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert session.resumed_session_ids == ["session-1"]
+
+
+@pytest.mark.anyio
+async def test_tui_app_session_picker_first_entry_starts_new_session() -> None:
+    session = FakeSession(messages=[UserMessage(content="Earlier")])
+    session.session_manager = _FakeSessionManager(
+        [
+            CodingSessionRecord(
+                id="session-1",
+                path=Path("/tmp/session-1.jsonl"),
+                cwd=Path("/workspace/project"),
+                model="fake-model",
+                title="Session",
+                created_at=1.0,
+                updated_at=2.0,
+            ),
+        ]
+    )
+    app = _tui_app(session)
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+r")
+        assert isinstance(app.screen, SessionPickerScreen)
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert session.new_session_count == 1
+        assert session.resumed_session_ids == []
+
+
+@pytest.mark.anyio
+async def test_tui_app_session_picker_with_no_records_shows_new_session_only() -> None:
+    session = FakeSession()
+    session.session_manager = _FakeSessionManager([])
+    app = _tui_app(session)
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+r")
+        assert isinstance(app.screen, SessionPickerScreen)
+
+        session_list = app.screen.query_one("#session-picker-list", ListView)
+        labels = [item.query_one(Label).content for item in session_list.children]
+        assert labels == ["Start a new session"]
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, SessionPickerScreen)
+        assert session.new_session_count == 0
+        assert session.resumed_session_ids == []
 
 
 @pytest.mark.anyio
@@ -8947,6 +9080,7 @@ async def test_run_tui_app_resumes_explicit_session(
         def __init__(self, session: str, **kwargs: object) -> None:
             assert session == "session"
             assert isinstance(kwargs["tui_settings"], TuiSettings)
+            assert kwargs["open_session_picker_on_start"] is False
 
         async def run_async(self) -> None:
             calls.append("run")

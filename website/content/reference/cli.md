@@ -10,7 +10,7 @@ cover everything else.
 tau [OPTIONS] [PROMPT] [COMMAND] [ARGS]
 ```
 
-- With no arguments, `tau` opens the interactive [TUI]({{< relref "../guides/tui.md" >}}).
+- With no arguments, `tau` opens the interactive [TUI]({{< relref "../guides/tui.md" >}}) and the session picker, where Enter starts a fresh session and the arrow keys resume a past one.
 - A positional `PROMPT` opens the TUI and submits it as the first turn.
 - `-p/--print` (or `--mode`) runs that same positional prompt in [print mode]({{< relref "../guides/print-mode.md" >}}) instead of the TUI.
 - Put flags before the prompt — Tau treats everything after the last recognized flag as prompt text, including tokens that look like flags.
@@ -41,7 +41,7 @@ transcript with the new features and fixes.
 | `--cwd PATH` | Working directory for the built-in tools |
 | `--mode [text\|json\|transcript]` | Output mode for print mode (default `text`); also triggers print mode on its own |
 | `--session TEXT` | Resume a session id in the TUI |
-| `--new-session` | Start a new session instead of resuming the default |
+| `--new-session` | Create a new session in the TUI (default); plain `tau` opens the session picker, whose first entry also starts fresh |
 | `--session-id TEXT` | Set the exact id for a newly created print-mode session; errors if it already exists |
 | `--system-prompt TEXT_OR_PATH` | Replace Tau's default system-prompt base with literal text or an existing UTF-8 file |
 | `--append-system-prompt TEXT_OR_PATH` | Append literal text or an existing UTF-8 file (repeatable) |

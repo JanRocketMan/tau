@@ -1170,6 +1170,22 @@ class ToolsReferenceScreen(ModalScreen[None]):
         return extension if extension is not None else "Built in"
 
 
+NEW_SESSION_PICKER_LABEL = "Start a new session"
+"""Label of the first session-picker row that starts a fresh session."""
+
+
+@dataclass(frozen=True)
+class SessionPickerResult:
+    """Outcome of the session picker modal.
+
+    ``start_new_session`` and ``session_id`` are mutually exclusive. The modal
+    dismisses with ``None`` when the user cancels.
+    """
+
+    start_new_session: bool = False
+    session_id: str | None = None
+
+
 class SessionPickerSearchInput(Input):
     """Search input that keeps session-picker navigation local to the picker."""
 
@@ -1289,10 +1305,16 @@ class PromptTemplatePickerScreen(ModalScreen[str | None]):
         self.query_one("#prompt-template-picker-help", Static).update(help_text)
 
 
-class SessionPickerScreen(ModalScreen[str | None]):
-    """Minimal modal picker for indexed sessions, with a search field."""
+class SessionPickerScreen(ModalScreen[SessionPickerResult | None]):
+    """Modal picker for indexed sessions, with a search field below the list.
+
+    The first list row always starts a new session and is the default
+    selection while no search query is active, so Enter begins fresh and the
+    arrow keys pick a past session to resume.
+    """
 
     BINDINGS: ClassVar[list[BindingEntry]] = hotkey_catalog().bindings("session_picker")
+    _NEW_ROW: ClassVar[str] = "__tau_new_session__"
 
     def __init__(
         self,
@@ -1310,16 +1332,10 @@ class SessionPickerScreen(ModalScreen[str | None]):
         """Compose the session picker."""
         with Vertical(id="session-picker"):
             yield Static("Sessions", id="session-picker-title")
+            yield ListView(id="session-picker-list")
             yield SessionPickerSearchInput(
                 placeholder="Search sessions",
                 id="session-picker-search",
-            )
-            yield ListView(
-                *[
-                    ListItem(Label(_session_picker_label(record), markup=False))
-                    for record in self.records
-                ],
-                id="session-picker-list",
             )
             yield Static("Enter selects - Escape closes", id="session-picker-help")
 
@@ -1378,30 +1394,44 @@ class SessionPickerScreen(ModalScreen[str | None]):
         """Close the picker without selecting a session."""
         self.dismiss(None)
 
+    def _visible_rows(self) -> tuple[str | SessionCompletionRecord, ...]:
+        """Return picker rows: a new-session marker followed by filtered records.
+
+        The new-session row is hidden while a search query is active, so the
+        first narrowed match is selected by default once the user starts typing.
+        """
+        if self.search_value.strip():
+            return self.visible_records
+        return (self._NEW_ROW, *self.visible_records)
+
     def _select_visible_record(self) -> None:
-        if not self.visible_records:
+        rows = self._visible_rows()
+        if not rows:
             return
         session_list = self.query_one("#session-picker-list", ListView)
         index = session_list.index
-        if index is None:
+        if index is None or index >= len(rows):
             return
-        self.dismiss(self.visible_records[index].id)
+        row = rows[index]
+        if isinstance(row, str):
+            self.dismiss(SessionPickerResult(start_new_session=True))
+            return
+        self.dismiss(SessionPickerResult(session_id=row.id))
 
     def _refresh_session_list(self) -> None:
         self.visible_records = _filter_session_records(self.records, self.search_value)
+        rows = self._visible_rows()
         session_list = self.query_one("#session-picker-list", ListView)
         session_list.clear()
         session_list.extend(
-            [
-                ListItem(Label(_session_picker_label(record), markup=False))
-                for record in self.visible_records
-            ]
+            ListItem(Label(NEW_SESSION_PICKER_LABEL, markup=False))
+            if isinstance(row, str)
+            else ListItem(Label(_session_picker_label(row), markup=False))
+            for row in rows
         )
-        session_list.index = 0 if self.visible_records else None
+        session_list.index = 0 if rows else None
         help_text = (
-            "Enter selects - Escape closes"
-            if self.visible_records
-            else "No matching sessions - Escape closes"
+            "Enter selects - Escape closes" if rows else "No matching sessions - Escape closes"
         )
         self.query_one("#session-picker-help", Static).update(help_text)
 
@@ -2973,6 +3003,10 @@ class TauTuiApp(App[None]):
         border: tall $tau-border;
     }
 
+    #session-picker-list {
+        margin-bottom: 1;
+    }
+
     ListView > ListItem.-highlight {
         background: $tau-highlight-background;
         color: $tau-highlight-text;
@@ -3308,12 +3342,14 @@ class TauTuiApp(App[None]):
         startup_notice: str | None = None,
         startup_notices: Sequence[str] = (),
         initial_prompt: str | None = None,
+        open_session_picker_on_start: bool = False,
     ) -> None:
         self.tui_settings = tui_settings or TuiSettings()
         self.startup_message = startup_message
         legacy_notices = (startup_notice,) if startup_notice else ()
         self.startup_notices = tuple((*startup_notices, *legacy_notices))
         self.initial_prompt = initial_prompt
+        self.open_session_picker_on_start = open_session_picker_on_start
         super().__init__()
         self._register_tau_textual_themes()
         # Assign the resolved theme's name: it is always registered, while the
@@ -3541,6 +3577,8 @@ class TauTuiApp(App[None]):
         await self.session.emit_pending_session_start()
         if self.initial_prompt and self.initial_prompt.strip():
             await self._submit_prompt(self.initial_prompt.strip())
+        elif self.open_session_picker_on_start:
+            self.action_open_session_picker()
 
     async def on_event(self, event: events.Event) -> None:
         """Consult extension key interceptors before Textual's dispatch.
@@ -4985,9 +5023,6 @@ class TauTuiApp(App[None]):
             self._notify("Tau is already working. Press Escape to cancel.")
             return
         records = _session_records(self.session)
-        if not records:
-            self._notify("No sessions found.")
-            return
         self.push_screen(
             SessionPickerScreen(records, theme=self.tui_settings.resolved_theme),
             callback=self._handle_session_picker_result,
@@ -5083,7 +5118,17 @@ class TauTuiApp(App[None]):
             theme=self.tui_settings.resolved_theme,
         )
 
-    def _handle_session_picker_result(self, session_id: str | None) -> None:
+    def _handle_session_picker_result(self, result: SessionPickerResult | None) -> None:
+        if result is None:
+            return
+        if result.start_new_session:
+            # At startup Tau already loaded a fresh, unindexed session, so
+            # keeping it avoids creating and abandoning a second record. Only
+            # when the current session already has content do we start over.
+            if self.session.messages:
+                self.run_worker(self._new_session(), exclusive=False)
+            return
+        session_id = result.session_id
         if session_id is None:
             return
         self.run_worker(self._resume_session(session_id), exclusive=False)
@@ -6682,6 +6727,9 @@ async def run_tui_app(
             startup_message=startup_message,
             startup_notices=all_startup_notices,
             initial_prompt=initial_prompt,
+            open_session_picker_on_start=(
+                session_id is None and not (initial_prompt and initial_prompt.strip())
+            ),
         )
         set_trust_prompt = getattr(session, "set_project_trust_prompt", None)
         if set_trust_prompt is not None:

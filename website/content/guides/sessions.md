@@ -30,12 +30,23 @@ From inside the TUI:
 /resume <id>       # resume a specific session
 ```
 
-The `/resume` picker has a search field that filters by session name or model.
-Start typing to narrow the list, then use the arrow keys and Enter (or click) to
-pick a session.
+Running `tau` with no arguments opens the same picker before anything else, so
+you choose where to continue before the first prompt:
 
-To deliberately start fresh instead of resuming, use `tau --new-session` (or
-`/new` in the TUI).
+- The first entry, **Start a new session**, is selected by default - press
+  **Enter** to begin fresh.
+- Arrow keys move to a past session; **Enter** resumes it.
+- The search field sits below the list and filters by session name or model.
+  While you are typing, the picker hides the new-session entry so the first
+  match is selected; **Enter** picks it.
+- **Escape** closes the picker and leaves you on a fresh session.
+
+`tau --session <session-id>` skips the picker and goes straight into that
+session, as does `tau "<prompt>"`, which opens a new session and submits the
+prompt immediately.
+
+To deliberately start fresh from inside the TUI instead of resuming, select
+**Start a new session** in the picker or use `/new`.
 
 When you quit the TUI and the session was persisted, Tau prints a reminder of
 the exact command to resume it:
