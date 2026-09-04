@@ -493,10 +493,20 @@ def _apply_session_affinity_headers(
     session_id: str | None,
     affinity_format: str | None,
 ) -> None:
+    """Write the gateway-specific session header for the configured format.
+
+    Each gateway expects its own stable per-conversation identifier: OpenAI
+    uses ``session_id`` (OpenAI-compatible convention), OpenRouter uses
+    ``x-session-id``, and OpenCode Go uses ``x-opencode-session``.
+    """
+
     if session_id is None or affinity_format is None:
         return
     if affinity_format == "openrouter":
         headers["x-session-id"] = session_id
+        return
+    if affinity_format == "opencode":
+        headers["x-opencode-session"] = session_id
         return
     if affinity_format == "openai":
         headers["session_id"] = session_id

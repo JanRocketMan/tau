@@ -70,8 +70,8 @@ def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path: Path) 
 
     assert isinstance(provider, OpenAICompatibleProvider)
     assert provider._config.compat["supportsPromptCacheKey"] is False
-    assert provider._config.compat["sendSessionAffinityHeaders"] is False
-    assert provider._config.compat["sessionAffinityFormat"] == "openai"
+    assert provider._config.compat["sendSessionAffinityHeaders"] is True
+    assert provider._config.compat["sessionAffinityFormat"] == "opencode"
 
 
 def test_huggingface_runtime_pins_backing_provider_with_model_alias(tmp_path: Path) -> None:
@@ -125,7 +125,8 @@ def test_compatible_gateway_defaults_to_no_openai_cache_affinity(tmp_path: Path)
 
     assert isinstance(provider, OpenAICompatibleProvider)
     assert provider._config.compat["supportsPromptCacheKey"] is False
-    assert provider._config.compat["sendSessionAffinityHeaders"] is False
+    assert provider._config.compat["sendSessionAffinityHeaders"] is True
+    assert provider._config.compat["sessionAffinityFormat"] == "opencode"
 
 
 def test_create_model_provider_rejects_model_not_declared_for_provider(

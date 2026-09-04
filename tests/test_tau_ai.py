@@ -2670,6 +2670,67 @@ async def test_openai_compatible_responses_reports_usage_and_sends_cache_affinit
 
 
 @pytest.mark.anyio
+async def test_openai_compatible_provider_sends_opencode_session_header() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/responses"):
+            body = (
+                'data: {"type":"response.output_text.delta","delta":"Hi"}\n\n'
+                'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+            )
+        else:
+            body = 'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}\n\n'
+        return httpx.Response(
+            200,
+            text=body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="opencode-key",
+                base_url="https://opencode.ai/zen/go/v1",
+                compat={
+                    "sendSessionAffinityHeaders": True,
+                    "sessionAffinityFormat": "opencode",
+                },
+            ),
+            client=client,
+        )
+
+        await _collect(
+            provider.stream_response(
+                model="deepseek-v4-flash",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say hi")],
+                tools=[],
+                session_id="session-42",
+            )
+        )
+        await _collect(
+            provider.stream_response(
+                model="gpt-5.5",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say hi")],
+                tools=[],
+                session_id="session-42",
+            )
+        )
+
+    assert [request.url.path for request in requests] == [
+        "/zen/go/v1/chat/completions",
+        "/zen/go/v1/responses",
+    ]
+    for request in requests:
+        assert request.headers["x-opencode-session"] == "session-42"
+        assert "session_id" not in request.headers
+        assert "x-session-id" not in request.headers
+
+
+@pytest.mark.anyio
 @pytest.mark.anyio
 async def test_openai_compatible_provider_can_disable_usage_in_streaming() -> None:
     requests: list[httpx.Request] = []
