@@ -42,20 +42,20 @@ def test_create_model_provider_uses_codex_model_image_capability(tmp_path: Path)
     assert isinstance(vision_provider, OpenAICodexProvider)
     assert vision_provider._config.supports_images is True
 
-    # Use opencode-go with deepseek-v4-flash (text-only model) for non-vision test
+    # opencode-go catalog models declare image input and DeepSeek-style compat.
     opencode_config = provider_config_from_catalog_entry("opencode-go")
-    text_provider = create_model_provider(
+    compatible_provider = create_model_provider(
         opencode_config,
         credential_store=store,
-        model="deepseek-v4-flash",
+        model="deepseek-v4.1-flash",
     )
 
-    assert isinstance(text_provider, OpenAICompatibleProvider)
-    assert text_provider._config.supports_images is False
-    assert text_provider._config.thinking_format == "deepseek"
-    assert text_provider._config.compat["supportsStore"] is False
-    assert text_provider._config.compat["maxTokensField"] == "max_tokens"
-    assert text_provider._config.compat["requiresReasoningContentOnAssistantMessages"] is True
+    assert isinstance(compatible_provider, OpenAICompatibleProvider)
+    assert compatible_provider._config.supports_images is True
+    assert compatible_provider._config.thinking_format == "deepseek"
+    assert compatible_provider._config.compat["supportsStore"] is False
+    assert compatible_provider._config.compat["maxTokensField"] == "max_tokens"
+    assert compatible_provider._config.compat["requiresReasoningContentOnAssistantMessages"] is True
 
 
 def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path: Path) -> None:
@@ -65,7 +65,7 @@ def test_direct_openai_runtime_enables_responses_cache_affinity(tmp_path: Path) 
     provider = create_model_provider(
         provider_config_from_catalog_entry("opencode-go"),
         credential_store=store,
-        model="gpt-5.6-luna",
+        model="deepseek-v4.1-flash",
     )
 
     assert isinstance(provider, OpenAICompatibleProvider)

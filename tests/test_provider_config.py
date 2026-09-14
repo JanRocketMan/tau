@@ -64,7 +64,7 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     opencode_go = settings.get_provider("opencode-go")
 
     assert codex.context_windows["gpt-5.6-luna"] == 272_000
-    assert opencode_go.context_windows["gpt-5.6-luna"] == 1_000_000
+    assert opencode_go.context_windows["deepseek-v4.1-flash"] == 1_000_000
     assert provider_thinking_levels(codex, model="gpt-5.6-luna") == (
         "low",
         "medium",
@@ -75,25 +75,23 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     assert provider_thinking_unavailable_reason(codex, model="unknown") == (
         "Provider openai-codex does not declare thinking metadata for unknown"
     )
-    assert provider_thinking_levels(opencode_go, model="deepseek-v4-flash") == (
+    assert provider_thinking_levels(opencode_go, model="deepseek-v4.1-flash") == (
         "high",
         "max",
     )
-    assert provider_default_thinking_level(opencode_go, model="deepseek-v4-flash") == "max"
-    assert resolve_startup_thinking_level(opencode_go, "deepseek-v4-flash") == "max"
-    assert provider_thinking_levels(opencode_go, model="gpt-5.6-luna") == (
+    assert provider_default_thinking_level(opencode_go, model="deepseek-v4.1-flash") == "max"
+    assert resolve_startup_thinking_level(opencode_go, "deepseek-v4.1-flash") == "max"
+    assert provider_thinking_levels(opencode_go, model="glm-5.3-flash") == (
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max",
     )
     # Remembered preferences (packaged thinking_defaults) beat catalog metadata
     # defaults when resolving startup thinking levels.
     assert codex.thinking_defaults == {"gpt-5.6-luna": "xhigh", "gpt-5.6-sol": "xhigh"}
     assert opencode_go.thinking_defaults == {
-        "deepseek-v4-flash": "max",
-        "gpt-5.6-luna": "xhigh",
+        "deepseek-v4.1-flash": "max",
+        "glm-5.3-flash": "max",
     }
     assert resolve_startup_thinking_level(codex, "gpt-5.6-sol") == "xhigh"
 

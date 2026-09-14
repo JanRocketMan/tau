@@ -134,14 +134,15 @@ It can also read `OPENCODE_API_KEY`. Tau stores its saved credentials under the
 [OpenCode Go](https://opencode.ai/docs/go) page for the current list.
 
 Tau starts new OpenCode Go sessions with model-specific reasoning defaults:
-`deepseek-v4-flash` uses `max` and `gpt-5.6-luna` uses `xhigh`. Cycle the
+`deepseek-v4.1-flash` and `glm-5.3-flash` both use `max`. Cycle the
 setting for the current session with the thinking keybinding; the available
 levels are model-aware and the selected value is sent as the provider's
 `reasoning_effort`
 
-The DeepSeek V4 model entry also enables DeepSeek's `thinking` request shape and
-`reasoning_content` history replay. This is required after tool calls, including
-the case where the preceding assistant response omitted its reasoning delta
+The DeepSeek V4.1 Flash model entry also enables DeepSeek's `thinking` request
+shape and `reasoning_content` history replay. This is required after tool
+calls, including the case where the preceding assistant response omitted its
+reasoning delta
 
 OpenCode Go can occasionally end a response without a finish reason, or after
 reasoning but before text or a tool call. This can affect more than one model.
