@@ -2469,6 +2469,7 @@ class CodingSession:
             system=SESSION_NAME_SYSTEM_PROMPT,
             messages=[UserMessage(content=prompt)],
             tools=[],
+            session_id=self._config.session_id,
         ):
             if isinstance(event, TextDeltaEvent):
                 text_parts.append(event.delta)

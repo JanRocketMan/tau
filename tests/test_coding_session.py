@@ -2250,6 +2250,7 @@ async def test_session_auto_names_first_unnamed_managed_session(tmp_path: Path) 
     assert renamed.title == "Fix broken CLI output"
     assert provider.calls[0][0] == "fake"
     assert provider.calls[0][3] == []
+    assert provider.session_ids[0] == record.id
     assert "Please fix the broken CLI output." in message_text(provider.calls[0][2][0])
     _assert_messages(
         provider.calls[1][2], [UserMessage(content="Please fix the broken CLI output.")]
