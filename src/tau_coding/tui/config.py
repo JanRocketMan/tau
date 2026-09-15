@@ -69,28 +69,14 @@ class TuiKeybindings:
     model_cycle: str | None = None
     toggle_thinking: str | None = None
     toggle_tool_results: str | None = None
-    clear_prompt: str | None = None
     quit: str | None = None
-    copy_message: str | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Resolve unset keys from the catalog and apply legacy aliases."""
+        """Resolve unset keys from the catalog."""
         defaults = _default_keybindings()
-        clear_prompt_override = self.clear_prompt
-        if self.copy_message is not None and clear_prompt_override is None:
-            # ``copy_message`` was the old name for clearing the prompt.
-            clear_prompt_override = self.copy_message
-        if self.copy_message == "ctrl+c":
-            # An untouched legacy Ctrl+C value yields to the hard interrupt
-            # binding; custom values continue to work as the clear key.
-            clear_prompt_override = "ctrl+u"
-        if clear_prompt_override == "ctrl+c":
-            raise TuiConfigError("TUI keybinding 'ctrl+c' is reserved for interrupt")
         for action in _CONFIGURABLE_ACTIONS:
             if getattr(self, action) is None:
                 object.__setattr__(self, action, defaults[action])
-        object.__setattr__(self, "clear_prompt", clear_prompt_override or self.clear_prompt)
-        object.__setattr__(self, "copy_message", self.clear_prompt)
 
     def to_json(self) -> dict[str, str]:
         """Serialize these keybindings to JSON-compatible data."""
@@ -171,7 +157,6 @@ _CONFIGURABLE_ACTIONS: tuple[str, ...] = (
     "model_cycle",
     "toggle_thinking",
     "toggle_tool_results",
-    "clear_prompt",
     "quit",
 )
 
@@ -190,16 +175,7 @@ def _keybindings_from_json(data: dict[str, Any]) -> TuiKeybindings:
         field_name: _key_string(data.get(field_name, default_value), field_name)
         for field_name, default_value in defaults.to_json().items()
     }
-    # ``copy_message`` was the old name for clearing the prompt. An untouched
-    # old Ctrl+C value now yields to the hard interrupt binding; custom values
-    # continue to work as the clear-prompt key.
-    if "clear_prompt" not in data and "copy_message" in data:
-        legacy_clear_prompt = _key_string(data["copy_message"], "copy_message")
-        if legacy_clear_prompt != "ctrl+c":
-            values["clear_prompt"] = legacy_clear_prompt
     _reject_duplicate_keys(values)
-    if values["clear_prompt"] == "ctrl+c":
-        raise TuiConfigError("TUI keybinding 'ctrl+c' is reserved for interrupt")
     return TuiKeybindings(**values)
 
 

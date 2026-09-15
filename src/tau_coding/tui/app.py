@@ -607,7 +607,7 @@ class PromptInput(TextArea):
         self._completion_target().action_toggle_thinking()
 
     def action_clear_prompt(self) -> None:
-        """Clear the current prompt."""
+        """Clear the prompt draft."""
         if self.selected_text:
             return
         if self.text:
@@ -616,7 +616,7 @@ class PromptInput(TextArea):
             self._clear_pending_paste()
 
     def action_interrupt(self) -> None:
-        """Stop active work, falling back to clearing an idle prompt."""
+        """Run the app-level Ctrl+C action."""
         self._completion_target().action_interrupt()
 
     def get_line(self, line_index: int) -> Text:
@@ -795,12 +795,6 @@ class PromptInput(TextArea):
             event.stop()
             event.prevent_default()
             self._completion_target().action_interrupt()
-        elif event.key == keys["clear_prompt"]:
-            if self.selected_text:
-                return
-            event.stop()
-            event.prevent_default()
-            self.action_clear_prompt()
         elif event.key == keys["completion_next"]:
             event.stop()
             if self._has_completion_options():
@@ -4823,13 +4817,23 @@ class TauTuiApp(App[None]):
         self._cancel_active_prompt()
 
     def action_interrupt(self) -> None:
-        """Stop current work on Ctrl+C, or clear the prompt when Tau is idle."""
+        """Clear a non-empty prompt draft first, otherwise stop active work.
+
+        A draft never dies together with the run: Ctrl+C keeps the draft and the
+        run, so steering text is not lost by a stop reflex. Whitespace-only
+        content is not a draft, so it clears and the stop continues. An empty
+        prompt stops the compaction or agent turn, as before.
+        """
+        with suppress(NoMatches):
+            prompt = self.query_one("#prompt", PromptInput)
+            if prompt.text and not prompt.selected_text:
+                has_draft = bool(prompt.text.strip())
+                prompt.action_clear_prompt()
+                if has_draft:
+                    return
         if self._cancel_active_compaction(notify=True):
             return
-        if self._cancel_active_prompt():
-            return
-        with suppress(NoMatches):
-            self.query_one("#prompt", PromptInput).action_clear_prompt()
+        self._cancel_active_prompt()
 
     def _cancel_active_compaction(self, *, notify: bool) -> bool:
         """Cancel the active manual compaction worker and restore visible session state."""

@@ -44,7 +44,7 @@ description = "Insert a newline without submitting the prompt"
 name = "interrupt"
 key = "ctrl+c"
 action = "interrupt"
-description = "Stop the active model run, tool, or compaction"
+description = "Clear a non-empty prompt draft, or stop the active run"
 
 [[keymaps.bindings]]
 name = "cancel"
@@ -125,10 +125,10 @@ action = "toggle_tool_results"
 description = "Collapse or expand tool output"
 
 [[keymaps.bindings]]
-name = "clear_prompt"
+name = "delete_line"
 key = "ctrl+u"
-action = "clear_prompt"
-description = "Clear the prompt input"
+action = "delete_line"
+description = "Delete the current prompt line"
 
 [[keymaps.bindings]]
 name = "quit"
@@ -205,10 +205,6 @@ hotkey = "interrupt"
 description = "Stop"
 
 [[keymaps.bindings]]
-hotkey = "clear_prompt"
-description = "Clear input"
-
-[[keymaps.bindings]]
 hotkey = "quit"
 description = "Quit"
 
@@ -264,11 +260,6 @@ priority = true
 [[keymaps.bindings]]
 hotkey = "interrupt"
 description = "Stop"
-priority = true
-
-[[keymaps.bindings]]
-hotkey = "clear_prompt"
-description = "Clear"
 priority = true
 
 [[keymaps.bindings]]

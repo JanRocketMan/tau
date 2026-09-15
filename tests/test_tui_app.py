@@ -2721,7 +2721,6 @@ async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
         assert len(app.query("#shortcut-hints")) == 0
         assert _visible_footer_bindings(app) == {
             "Quit": "ctrl+d",
-            "Clear": "ctrl+u",
             "Stop": "ctrl+c",
             "Commands": "ctrl+k",
             "Submit": "enter",
@@ -6435,7 +6434,7 @@ async def test_tui_app_ctrl_c_stops_worker_before_agent_start_event() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_ctrl_c_stops_running_session_from_prompt() -> None:
+async def test_tui_app_ctrl_c_clears_draft_before_stopping_running_session() -> None:
     class RunningSession(FakeSession):
         @property
         def is_running(self) -> bool:
@@ -6448,14 +6447,45 @@ async def test_tui_app_ctrl_c_stops_running_session_from_prompt() -> None:
         app.adapter.apply(AgentStartEvent())
         app._refresh()
         prompt = app.query_one("#prompt", PromptInput)
-        prompt.value = "keep this draft"
+        prompt.value = "steering draft"
 
         await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        assert prompt.value == ""
+        assert session.cancel_count == 0
+        assert app.state.running is True
+
+        await pilot.press("ctrl+c")
+        await pilot.pause()
 
         assert session.cancel_count == 1
         assert app.state.running is False
         assert app.state.last_run_interrupted is True
-        assert prompt.value == "keep this draft"
+
+
+@pytest.mark.anyio
+async def test_tui_app_ctrl_c_treats_whitespace_only_prompt_as_empty() -> None:
+    class RunningSession(FakeSession):
+        @property
+        def is_running(self) -> bool:
+            return True
+
+    session = RunningSession()
+    app = _tui_app(session)
+
+    async with app.run_test() as pilot:
+        app.adapter.apply(AgentStartEvent())
+        app._refresh()
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "\n  "
+
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        assert prompt.value == ""
+        assert session.cancel_count == 1
+        assert app.state.running is False
 
 
 @pytest.mark.anyio
@@ -7869,17 +7899,47 @@ async def test_tui_prompt_ctrl_c_clears_text_when_idle() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_prompt_ctrl_u_clears_text() -> None:
+async def test_tui_prompt_ctrl_u_deletes_current_line() -> None:
     app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", TextArea)
         prompt.focus()
-        prompt.text = "discard this prompt"
+        prompt.text = "first line\nsecond line\nthird line"
+        prompt.move_cursor((1, 4))
         await pilot.press("ctrl+u")
         await pilot.pause()
 
+        assert prompt.text == "first line\nthird line"
+
+
+@pytest.mark.anyio
+async def test_tui_prompt_ctrl_c_stops_stuck_run_when_prompt_empty() -> None:
+    class StuckSession(FakeSession):
+        events: object = None
+
+        async def prompt(
+            self,
+            text: str,
+            **kwargs: object,
+        ) -> AsyncIterator[CodingSessionEvent]:
+            yield AgentStartEvent()
+            await asyncio.sleep(3600)
+
+    app = _tui_app(StuckSession())
+
+    async with app.run_test() as pilot:
+        await app._submit_prompt("stream")
+        await pilot.pause()
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.focus()
         assert prompt.text == ""
+
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        assert app.state.running is False
+        assert app.state.last_run_interrupted is True
 
 
 @pytest.mark.anyio

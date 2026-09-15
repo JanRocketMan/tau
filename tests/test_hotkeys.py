@@ -30,7 +30,7 @@ EXPECTED_PROMPT_KEYS = {
     "model_cycle": "ctrl+p",
     "toggle_thinking": "ctrl+t",
     "toggle_tool_results": "ctrl+o",
-    "clear_prompt": "ctrl+u",
+    "delete_line": "ctrl+u",
     "quit": "ctrl+d",
 }
 
@@ -122,7 +122,6 @@ def test_app_keymap_matches_app_scope_bindings() -> None:
         ("ctrl+o", "toggle_tool_results"),
         ("ctrl+t", "toggle_thinking"),
         ("ctrl+c", "interrupt"),
-        ("ctrl+u", "clear_prompt"),
         ("ctrl+d", "quit"),
     ]
     assert all(binding.show for binding in bindings)
@@ -138,7 +137,6 @@ def test_app_keymap_matches_app_scope_bindings() -> None:
         True,
         True,
         True,
-        False,
         False,
         False,
         False,
@@ -159,7 +157,6 @@ def test_prompt_mode_keymaps_carry_footer_labels() -> None:
         ("ctrl+f", "Thinking"),
         ("ctrl+p", "Model"),
         ("ctrl+c", "Stop"),
-        ("ctrl+u", "Clear"),
         ("ctrl+d", "Quit"),
     ]
     assert [(b.key, b.description) for b in catalog.bindings("prompt_running")] == [

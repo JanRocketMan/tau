@@ -421,14 +421,15 @@ cancel: escape        command_palette: ctrl+k   session_picker: ctrl+r
 open_context: ctrl+l  queue_follow_up: alt+enter  accept_completion: tab
 completion_next: down completion_previous: up    thinking_cycle: ctrl+f
 model_cycle: ctrl+p   toggle_thinking: ctrl+t    toggle_tool_results: ctrl+o
-clear_prompt: ctrl+u  quit: ctrl+d
+quit: ctrl+d
 ```
 
 Built-in themes: `codeyellow` (default), `tau-light`, `tau-dark`,
 `high-contrast`. Custom themes are JSON files in `~/.tau/themes/` or a
 project's `.tau/themes/` — see [Themes]({{< relref "../guides/themes.md" >}}).
 Set one with `/theme`; the choice applies to the current session (it is not
-persisted). `Ctrl+C` is reserved as the hard stop key and is not remappable.
+persisted). `Ctrl+C` is reserved and is not remappable: it clears a non-empty
+prompt draft, and stops the active run when the prompt is empty.
 
 - `turn_notification`: `"desktop"` (default), `"bell"`, or `"off"`. When Tau's
   terminal surface is unfocused and the agent becomes fully idle, `"desktop"`

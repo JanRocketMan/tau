@@ -20,7 +20,8 @@ carries the defaults.
 | --- | --- |
 | `Enter` | Submit the prompt (or apply a highlighted completion) |
 | `Shift+Enter` | Insert a newline |
-| `Ctrl+C` | Stop the active model run, tool, or compaction |
+| `Ctrl+U` | Delete the current prompt line |
+| `Ctrl+C` | Clear a non-empty prompt draft, or stop the active run |
 | `Esc` | Cancel the active run |
 | `Enter` (while running) | Queue text as steering for the current run |
 | `Alt+Enter` | Queue a follow-up that waits until the run would stop |
@@ -50,7 +51,6 @@ carries the defaults.
 | Key | Action |
 | --- | --- |
 | `Ctrl+O` | Toggle full tool output (vs. compact preview) |
-| `Ctrl+U` | Clear the prompt input |
 | `Ctrl+D` | Quit |
 
 {{% note title="Keys" %}}

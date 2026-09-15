@@ -2,12 +2,11 @@
 
 ## What changed
 
-Tau now reserves `Ctrl+C` as a hard TUI stop action
+Tau now reserves `Ctrl+C` as a hard TUI action; extensions cannot intercept it
 
-- During a model request, tool call, or manual compaction, it cancels the active work
-- During idle input, it keeps the former fallback behavior and clears the prompt
-- `Ctrl+U` is the explicit clear-prompt key
-- Extensions cannot intercept `Ctrl+C`
+- A non-empty prompt draft is cleared first, so Ctrl+C never stops a run and discards the draft at the same time
+- With an empty prompt (only whitespace counts as empty) it cancels the active model request, tool call, or manual compaction
+- `Ctrl+U` deletes the current prompt line
 
 The prompt left border now uses existing theme tokens to show the latest run state
 
@@ -29,7 +28,7 @@ The compact session status and model picker show `codex:<model>`. Provider routi
 
 ## Why
 
-`Ctrl+C` is the terminal-standard stop reflex. It must stop a provider stream or active tool without forcing the user to quit Tau. The border colors make run state visible without adding new chrome or changing the current theme palette
+`Ctrl+C` is the terminal-standard stop reflex. It must stop a provider stream or active tool without forcing the user to quit Tau or losing a draft that is still being edited. The border colors make run state visible without adding new chrome or changing the current theme palette
 
 Provider labels solve a separate display problem. A short user label must not change provider identity because that identity connects catalog metadata, credentials, runtime routing, preferences, and saved sessions
 
@@ -50,4 +49,4 @@ uv run ty check
 uv run mypy
 ```
 
-For a manual check, start a slow run and press `Ctrl+C` during model output and during a `bash` tool call. Confirm that Tau stays open, work stops, and the draft prompt is preserved. Trigger a provider error and confirm that the prompt border becomes the theme error color. Add the label mapping above to `~/.tau/catalog.toml`, restart Tau, and confirm that the status block and model picker show `codex` while `tau --provider openai-codex` still works
+For a manual check, start a slow run and press `Ctrl+C` during model output and during a `bash` tool call. Confirm that Tau stays open, that an empty prompt stops the work, and that a typed draft is cleared without stopping the run. Trigger a provider error and confirm that the prompt border becomes the theme error color. Add the label mapping above to `~/.tau/catalog.toml`, restart Tau, and confirm that the status block and model picker show `codex` while `tau --provider openai-codex` still works

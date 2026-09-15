@@ -46,9 +46,9 @@ conversation history.
 
 While the agent is working you don't have to wait:
 
-- **Ctrl+C** stops the active model request, tool, or compaction. If Tau is idle,
-  it keeps the former behavior and clears the prompt. Use **Ctrl+U** to clear the
-  prompt directly.
+- **Ctrl+C** clears a non-empty prompt draft without stopping the run. A prompt
+  with only spaces or newlines counts as empty: then it stops the active model
+  request, tool, or compaction. **Ctrl+U** deletes the current line.
 - **Esc** also cancels the active run. Cancellation is treated as an intentional
   stop, not an error. After an interrupt, the status bar above the prompt
   reports `interrupted after Xm Ys` with the elapsed time.
