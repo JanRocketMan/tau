@@ -1259,8 +1259,50 @@ async def test_textual_markdown_widget_uses_theme_link_style() -> None:
     assert markdown.tau_link_style == CODEYELLOW_THEME.markdown_link
     assert not block.styles.link_style
     assert block.styles.link_style_hover.underline is True
-    assert [(span.start, span.end) for span in link_spans] == [(5, 9)]
-    assert block.content.plain[5:9] == "docs"
+    # The link text and the appended URL form one clickable entry.
+    assert [block.content.plain[span.start : span.end] for span in link_spans] == [
+        "docs",
+        " (https://example.com)",
+    ]
+    assert block.content.plain == "Read docs (https://example.com)."
+
+
+@pytest.mark.anyio
+async def test_textual_markdown_link_with_visible_url_is_not_duplicated() -> None:
+    app = _tui_app(
+        FakeSession([_assistant("Read [https://example.com](https://example.com).")]),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        block = app.query_one(TauMarkdownBlock)
+
+    assert isinstance(block.content, TextualContent)
+    assert block.content.plain == "Read https://example.com."
+
+
+@pytest.mark.anyio
+async def test_textual_markdown_link_click_copies_url_instead_of_opening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _tui_app(FakeSession([_assistant("Read [docs](https://example.com).")]))
+    opened: list[str] = []
+    copied: list[str] = []
+    notifications: list[str] = []
+    monkeypatch.setattr(app, "open_url", opened.append)
+    monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+    monkeypatch.setattr(app, "_notify", lambda message, **kwargs: notifications.append(message))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        block = app.query_one(TauMarkdownBlock)
+        # Click the appended URL text after the link text on the first line.
+        await pilot.click(block, offset=(12, 0))
+        await pilot.pause()
+
+    assert opened == []
+    assert copied == ["https://example.com"]
+    assert notifications == ["Link copied to clipboard."]
 
 
 def test_textual_markdown_uses_theme_highlight_and_aqua_inline_code() -> None:

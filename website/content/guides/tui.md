@@ -158,6 +158,16 @@ to a checkmark; the keyboard focus returns to the prompt so you can keep
 typing. Rows without complete fences keep their fast plain rendering and get no
 button.
 
+## Links
+
+Markdown links show their target URL in parentheses after the link text. This
+keeps the target visible in terminals that cannot open links.
+
+Click a link to copy the URL to the clipboard. Tau confirms the copy with a
+`Link copied to clipboard.` message. This avoids the browser launch that a
+click would otherwise trigger, which fails on remote hosts without a graphical
+browser.
+
 ## Long sessions
 
 Tau keeps long transcripts responsive by mounting only a window of messages in

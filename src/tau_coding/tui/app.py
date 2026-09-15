@@ -32,6 +32,7 @@ from textual.widgets import (
     Label,
     ListItem,
     ListView,
+    Markdown,
     Static,
     TextArea,
 )
@@ -3692,6 +3693,16 @@ class TauTuiApp(App[None]):
         if selection:
             self.copy_to_clipboard(selection)
             self._notify("Copied selection to clipboard.")
+
+    def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
+        """Copy transcript links instead of opening a browser.
+
+        Tau often runs on a remote host without a browser, where Textual's
+        default ``open_url`` falls back to a text browser such as lynx.
+        """
+        event.stop()
+        self.copy_to_clipboard(event.href)
+        self._notify("Link copied to clipboard.")
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Update prompt autocomplete when the prompt text changes."""

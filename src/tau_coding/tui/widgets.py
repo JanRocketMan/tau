@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -166,7 +167,48 @@ class TauMarkdownBlock(MarkdownBlock):
             if isinstance(style, TextualStyle) and "@click" in style.meta:
                 style = link_style + style
             spans.append(type(span)(span.start, span.end, style))
-        return type(content)(content.plain, spans=spans)
+        return _append_link_urls(type(content)(content.plain, spans=spans))
+
+
+def _markdown_link_href(style: Any) -> str | None:
+    """Return the URL carried by a Textual markdown link span, else None.
+
+    Textual marks link spans with an ``@click`` meta action formatted as
+    ``link('https://example.com')``, with the URL as a Python repr.
+    """
+    if not isinstance(style, TextualStyle):
+        return None
+    action = style.meta.get("@click", "")
+    if not (action.startswith("link(") and action.endswith(")")):
+        return None
+    try:
+        href = ast.literal_eval(action[5:-1])
+    except (SyntaxError, ValueError):
+        return None
+    return href if isinstance(href, str) and href else None
+
+
+def _append_link_urls(content: Any) -> Any:
+    """Append `` (url)`` after each markdown link that hides its target.
+
+    Model answers link the text only, so a link over SSH shows a highlight
+    with no URL to open. The appended URL keeps the link's click style, so
+    clicking either the text or the URL copies the link.
+    """
+    parts: list[Any] = []
+    cursor = 0
+    for span in content.spans:
+        href = _markdown_link_href(span.style)
+        if href is None or href in content.plain[span.start : span.end]:
+            continue
+        url = f" ({href})"
+        parts.append(content[cursor : span.end])
+        parts.append(type(content)(url, spans=[type(span)(0, len(url), span.style)]))
+        cursor = span.end
+    if not parts:
+        return content
+    parts.append(content[cursor:])
+    return type(content)().join(parts)
 
 
 class CopyFenceButton(Button, can_focus=False):
@@ -361,7 +403,9 @@ class ThemedMarkdownWidget(TextualMarkdown):
         classes: str | None = None,
     ) -> None:
         self.tau_link_style = theme.markdown_link
-        super().__init__(markdown, classes=classes)
+        # Tau handles link clicks itself (copy to clipboard); the default
+        # open_url path calls a local browser, which remote hosts rarely have.
+        super().__init__(markdown, classes=classes, open_links=False)
 
 
 # Roles rendered as free-flowing text with no left accent or role background,
@@ -2289,6 +2333,9 @@ class ThemedMarkdown(Markdown):
             style=style,
             code_theme=code_theme,
             inline_code_theme=inline_code_theme,
+            # Show the target URL in parentheses instead of relying on a
+            # terminal hyperlink, which remote sessions often cannot open.
+            hyperlinks=False,
         )
         self.heading_style = heading_style
         self.inline_code_style = inline_code_style
