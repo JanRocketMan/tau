@@ -20,19 +20,19 @@ base_url = "https://chatgpt.com/backend-api"
 api_key_env = "OPENAI_CODEX_ACCESS_TOKEN"
 credential_name = "openai-codex"
 auth_methods = ["oauth"]
-models = ["gpt-5.6-luna", "gpt-5.6-sol"]
-default_model = "gpt-5.6-sol"
+models = ["gpt-5.6-luna", "gpt-6-sol"]
+default_model = "gpt-6-sol"
 docs_url = "https://chatgpt.com/codex"
 thinking_parameter = "reasoning.effort"
 timeout_seconds = 60.0
 stream_idle_timeout_seconds = 600.0
 max_retries = 2
 max_retry_delay_seconds = 1.0
-thinking_defaults = { "gpt-5.6-luna" = "xhigh", "gpt-5.6-sol" = "xhigh" }
+thinking_defaults = { "gpt-5.6-luna" = "xhigh", "gpt-6-sol" = "xhigh" }
 
 [providers.context_windows]
 "gpt-5.6-luna" = 272000
-"gpt-5.6-sol" = 272000
+"gpt-6-sol" = 272000
 
 [providers.model_metadata."gpt-5.6-luna"]
 name = "GPT-5.6 Luna"
@@ -44,8 +44,8 @@ cost = { input = 0.2, output = 1.2, cacheRead = 0.02, cacheWrite = 0.25 }
 thinking_default = "xhigh"
 thinking_levels = ["low", "medium", "high", "xhigh"]
 
-[providers.model_metadata."gpt-5.6-sol"]
-name = "GPT-5.6 Sol"
+[providers.model_metadata."gpt-6-sol"]
+name = "GPT-6 Sol"
 reasoning = true
 input = ["text", "image"]
 context_window = 272000
