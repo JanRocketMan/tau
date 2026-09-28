@@ -134,7 +134,7 @@ It can also read `OPENCODE_API_KEY`. Tau stores its saved credentials under the
 [OpenCode Go](https://opencode.ai/docs/go) page for the current list.
 
 Tau starts new OpenCode Go sessions with model-specific reasoning defaults:
-`deepseek-v4.1-flash` and `glm-5.3-flash` both use `max`. Cycle the
+`deepseek-v4.1-flash` uses `max` and `mimo-v2.6-pro` uses `high`. Cycle the
 setting for the current session with the thinking keybinding; the available
 levels are model-aware and the selected value is sent as the provider's
 `reasoning_effort`

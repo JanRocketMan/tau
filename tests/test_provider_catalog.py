@@ -105,7 +105,7 @@ def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
             "opencode-go",
             {
                 "deepseek-v4.1-flash",
-                "glm-5.3-flash",
+                "mimo-v2.6-pro",
             },
         ),
     ],
@@ -130,7 +130,7 @@ def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> No
         },
         "opencode-go": {
             "deepseek-v4.1-flash": (1_000_000, 384_000),
-            "glm-5.3-flash": (1_000_000, 131_072),
+            "mimo-v2.6-pro": (1_048_576, 131_072),
         },
     }
 
@@ -191,14 +191,13 @@ def test_builtin_catalog_auth_and_thinking_metadata() -> None:
         "requiresReasoningContentOnAssistantMessages": True,
         "thinkingFormat": "deepseek",
     }
-    glm = opencode_go.model_metadata["glm-5.3-flash"]
-    assert glm.thinking_default == "max"
-    assert glm.thinking_levels == ("low", "high", "max")
-    assert glm.compat == {
+    mimo = opencode_go.model_metadata["mimo-v2.6-pro"]
+    assert mimo.thinking_default == "high"
+    assert mimo.thinking_levels == ("low", "medium", "high")
+    assert mimo.compat == {
         "supportsStore": False,
         "maxTokensField": "max_tokens",
         "requiresReasoningContentOnAssistantMessages": True,
-        "thinkingFormat": "deepseek",
     }
 
 
@@ -217,7 +216,7 @@ def test_builtin_catalog_declares_default_and_preferences() -> None:
     assert codex.thinking_defaults == {"gpt-5.6-luna": "xhigh", "gpt-5.6-sol": "xhigh"}
     assert opencode_go.thinking_defaults == {
         "deepseek-v4.1-flash": "max",
-        "glm-5.3-flash": "max",
+        "mimo-v2.6-pro": "high",
     }
 
 
@@ -324,8 +323,8 @@ def test_catalog_custom_model_extends_builtin_provider(tmp_path: Path) -> None:
     body = (
         builtin_catalog_resource_text()
         .replace(
-            'models = ["deepseek-v4.1-flash", "glm-5.3-flash"]',
-            'models = ["custom-model", "deepseek-v4.1-flash", "glm-5.3-flash"]',
+            'models = ["deepseek-v4.1-flash", "mimo-v2.6-pro"]',
+            'models = ["custom-model", "deepseek-v4.1-flash", "mimo-v2.6-pro"]',
         )
         .replace(
             'default_model = "deepseek-v4.1-flash"',
@@ -357,8 +356,8 @@ def test_catalog_thinking_metadata_replaces_per_model(tmp_path: Path) -> None:
             'thinking_default = "low"\nthinking_levels = ["low", "high"]',
         )
         .replace(
-            'thinking_defaults = { "deepseek-v4.1-flash" = "max", "glm-5.3-flash" = "max" }',
-            'thinking_defaults = { "deepseek-v4.1-flash" = "low", "glm-5.3-flash" = "max" }',
+            'thinking_defaults = { "deepseek-v4.1-flash" = "max", "mimo-v2.6-pro" = "high" }',
+            'thinking_defaults = { "deepseek-v4.1-flash" = "low", "mimo-v2.6-pro" = "high" }',
         )
     )
     paths = _catalog_paths(tmp_path, body)
@@ -366,8 +365,8 @@ def test_catalog_thinking_metadata_replaces_per_model(tmp_path: Path) -> None:
     assert entry.model_metadata["deepseek-v4.1-flash"].thinking_levels == ("low", "high")
     assert entry.model_metadata["deepseek-v4.1-flash"].thinking_default == "low"
     # Untouched models keep their packaged per-model thinking metadata.
-    assert entry.model_metadata["glm-5.3-flash"].thinking_levels == ("low", "high", "max")
-    assert entry.model_metadata["glm-5.3-flash"].thinking_default == "max"
+    assert entry.model_metadata["mimo-v2.6-pro"].thinking_levels == ("low", "medium", "high")
+    assert entry.model_metadata["mimo-v2.6-pro"].thinking_default == "high"
 
 
 def test_catalog_rejects_provider_level_thinking_fields(tmp_path: Path) -> None:
@@ -569,7 +568,7 @@ def test_catalog_default_provider_controls_settings(tmp_path: Path) -> None:
     assert settings.get_provider("openai-codex").default_model == "gpt-5.6-sol"
     assert settings.get_provider("opencode-go").thinking_defaults == {
         "deepseek-v4.1-flash": "max",
-        "glm-5.3-flash": "max",
+        "mimo-v2.6-pro": "high",
     }
 
 
@@ -584,7 +583,7 @@ def test_catalog_rejects_unknown_default_provider(tmp_path: Path) -> None:
 
 def test_catalog_rejects_thinking_defaults_for_unknown_model(tmp_path: Path) -> None:
     body = builtin_catalog_resource_text().replace(
-        'thinking_defaults = { "deepseek-v4.1-flash" = "max", "glm-5.3-flash" = "max" }',
+        'thinking_defaults = { "deepseek-v4.1-flash" = "max", "mimo-v2.6-pro" = "high" }',
         'thinking_defaults = { "deepseek-v4.1-flash" = "max", "missing-model" = "xhigh" }',
     )
     paths = _catalog_paths(tmp_path, body)
@@ -594,8 +593,8 @@ def test_catalog_rejects_thinking_defaults_for_unknown_model(tmp_path: Path) -> 
 
 def test_catalog_rejects_thinking_default_outside_levels(tmp_path: Path) -> None:
     body = builtin_catalog_resource_text().replace(
-        'thinking_defaults = { "deepseek-v4.1-flash" = "max", "glm-5.3-flash" = "max" }',
-        'thinking_defaults = { "deepseek-v4.1-flash" = "low", "glm-5.3-flash" = "max" }',
+        'thinking_defaults = { "deepseek-v4.1-flash" = "max", "mimo-v2.6-pro" = "high" }',
+        'thinking_defaults = { "deepseek-v4.1-flash" = "low", "mimo-v2.6-pro" = "high" }',
     )
     paths = _catalog_paths(tmp_path, body)
     with pytest.raises(CatalogError, match=r"thinking_defaults\.deepseek-v4\.1-flash"):

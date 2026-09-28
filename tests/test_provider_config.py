@@ -81,17 +81,17 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     )
     assert provider_default_thinking_level(opencode_go, model="deepseek-v4.1-flash") == "max"
     assert resolve_startup_thinking_level(opencode_go, "deepseek-v4.1-flash") == "max"
-    assert provider_thinking_levels(opencode_go, model="glm-5.3-flash") == (
+    assert provider_thinking_levels(opencode_go, model="mimo-v2.6-pro") == (
         "low",
+        "medium",
         "high",
-        "max",
     )
     # Remembered preferences (packaged thinking_defaults) beat catalog metadata
     # defaults when resolving startup thinking levels.
     assert codex.thinking_defaults == {"gpt-5.6-luna": "xhigh", "gpt-5.6-sol": "xhigh"}
     assert opencode_go.thinking_defaults == {
         "deepseek-v4.1-flash": "max",
-        "glm-5.3-flash": "max",
+        "mimo-v2.6-pro": "high",
     }
     assert resolve_startup_thinking_level(codex, "gpt-5.6-sol") == "xhigh"
 

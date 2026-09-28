@@ -61,7 +61,7 @@ kind = "openai-compatible"
 base_url = "https://opencode.ai/zen/go/v1"
 api_key_env = "OPENCODE_API_KEY"
 credential_name = "opencode"
-models = ["deepseek-v4.1-flash", "glm-5.3-flash"]
+models = ["deepseek-v4.1-flash", "mimo-v2.6-pro"]
 default_model = "deepseek-v4.1-flash"
 docs_url = "https://opencode.ai/docs/go"
 api = "openai-completions"
@@ -70,13 +70,13 @@ timeout_seconds = 60.0
 stream_idle_timeout_seconds = 600.0
 max_retries = 3
 max_retry_delay_seconds = 5.0
-thinking_defaults = { "deepseek-v4.1-flash" = "max", "glm-5.3-flash" = "max" }
+thinking_defaults = { "deepseek-v4.1-flash" = "max", "mimo-v2.6-pro" = "high" }
 # OpenCode Go requires a stable per-conversation session header on every request.
 compat = { sendSessionAffinityHeaders = true, sessionAffinityFormat = "opencode" }
 
 [providers.context_windows]
 "deepseek-v4.1-flash" = 1000000
-"glm-5.3-flash" = 1000000
+"mimo-v2.6-pro" = 1048576
 
 [providers.model_metadata."deepseek-v4.1-flash"]
 input = ["text", "image"]
@@ -87,14 +87,16 @@ thinking_default = "max"
 thinking_levels = ["high", "max"]
 compat = { supportsStore = false, maxTokensField = "max_tokens", requiresReasoningContentOnAssistantMessages = true, thinkingFormat = "deepseek" }
 
-[providers.model_metadata."glm-5.3-flash"]
+[providers.model_metadata."mimo-v2.6-pro"]
 input = ["text", "image"]
-context_window = 1000000
+context_window = 1048576
 max_tokens = 131072
-cost = { input = 0.15, output = 0.5, cacheRead = 0.03, cacheWrite = 0.0 }
-thinking_default = "max"
-thinking_levels = ["low", "high", "max"]
-compat = { supportsStore = false, maxTokensField = "max_tokens", requiresReasoningContentOnAssistantMessages = true, thinkingFormat = "deepseek" }
+cost = { input = 0.435, output = 0.87, cacheRead = 0.003625, cacheWrite = 0.0 }
+thinking_default = "high"
+thinking_levels = ["low", "medium", "high"]
+# This model rejects the `thinking` envelope and the `max`/`xhigh`/`minimal`
+# efforts; plain `reasoning_effort` with low/medium/high works.
+compat = { supportsStore = false, maxTokensField = "max_tokens", requiresReasoningContentOnAssistantMessages = true }
 
 # Web-search providers for the optional `search` tool. Select a provider by
 # setting TAU_SEARCH_PROVIDER; when unset, default_search_provider wins.
