@@ -255,6 +255,7 @@ class FakeSession:
         self.auto_compact_token_threshold = 200000
         self.context_window_tokens = 216384
         self.thinking_level = "medium"
+        self.fast_mode = False
         self.available_thinking_levels: tuple[str, ...] = (
             "off",
             "minimal",
@@ -293,6 +294,10 @@ class FakeSession:
         return self._session_title
 
     def handle_command(self, text: str) -> CommandResult:
+        if text == "/fast":
+            if self.provider_name == "openai-codex":
+                self.fast_mode = not self.fast_mode
+            return CommandResult(handled=True)
         if text == "/session":
             return CommandResult(
                 handled=True,
@@ -547,6 +552,19 @@ def test_compact_session_info_renders_session_title_and_status() -> None:
     assert context_line == provider_line + 1
 
 
+@pytest.mark.parametrize("fast_mode", [False, True])
+def test_compact_session_info_shows_fast_effort(fast_mode: bool) -> None:
+    session = FakeSession()
+    session.provider_name = "openai-codex"
+    session.fast_mode = fast_mode
+    console = Console(record=True, width=120)
+
+    console.print(render_compact_session_info(session))
+
+    expected = "(medium-fast)" if fast_mode else "(medium)"
+    assert expected in console.export_text()
+
+
 def test_compact_session_info_uses_provider_display_name() -> None:
     session = FakeSession()
     session.provider_display_name = "codex"
@@ -605,6 +623,24 @@ def test_compact_session_info_redraws_when_provider_usage_becomes_available(
     second_output = second_console.export_text()
     assert "12k/200k" in second_output
     assert "?/200k" not in second_output
+
+
+def test_compact_session_info_redraws_immediately_when_fast_mode_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    session.provider_name = "openai-codex"
+    widget = CompactSessionInfo()
+    updates: list[object] = []
+    monkeypatch.setattr(widget, "update", updates.append)
+
+    for fast_mode in (False, True, False):
+        session.fast_mode = fast_mode
+        widget.update_from_session(session)
+        console = Console(record=True, width=120)
+        console.print(updates[-1])
+        expected = "(medium-fast)" if fast_mode else "(medium)"
+        assert expected in console.export_text()
 
 
 def test_model_picker_labels_and_search_use_provider_display_name() -> None:
@@ -2728,7 +2764,7 @@ async def test_tui_app_omits_footer_but_keeps_shortcuts_active() -> None:
             "Sessions": "ctrl+r",
             "Tree": "ctrl+g",
             "Context": "ctrl+l",
-            "Thinking": "ctrl+f",
+            "Thinking": "ctrl+y",
             "Model": "ctrl+p",
             "Cancel": "escape",
         }
@@ -7943,6 +7979,33 @@ async def test_tui_prompt_ctrl_c_stops_stuck_run_when_prompt_empty() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("provider_name", ["openai-codex", "openai"])
+async def test_tui_fast_hotkey_updates_effort_without_modal_or_prompt_changes(
+    provider_name: str,
+) -> None:
+    session = FakeSession()
+    session.provider_name = provider_name
+    app = _tui_app(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.text = "keep this draft"
+        screen = app.screen
+        for expected_fast in (provider_name == "openai-codex", False):
+            await pilot.press("ctrl+f")
+            await pilot.pause()
+            assert session.fast_mode is expected_fast
+            assert session.thinking_level == "medium"
+            assert prompt.text == "keep this draft"
+            assert app.screen is screen
+            status = app.query_one("#compact-session-info", CompactSessionInfo)
+            console = Console(record=True, width=120)
+            console.print(status.content)
+            expected = "(medium-fast)" if expected_fast else "(medium)"
+            assert expected in console.export_text()
+
+
+@pytest.mark.anyio
 async def test_tui_app_cycles_thinking_from_keybinding() -> None:
     session = FakeSession()
     app = _tui_app(session)
@@ -7955,7 +8018,7 @@ async def test_tui_app_cycles_thinking_from_keybinding() -> None:
     app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+f")
+        await pilot.press("ctrl+y")
         await pilot.pause()
 
     assert session.thinking_level == "high"
@@ -7976,7 +8039,7 @@ async def test_tui_app_cycles_thinking_is_noop_with_single_level() -> None:
     app._notify = fake_notify  # ty: ignore[invalid-assignment]
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+f")
+        await pilot.press("ctrl+y")
         await pilot.pause()
 
     # The model exposes a single thinking level: cycling changes nothing and
@@ -7999,7 +8062,7 @@ async def test_tui_app_cycles_thinking_from_keybinding_while_running() -> None:
 
     async with app.run_test() as pilot:
         app.state.running = True
-        await pilot.press("ctrl+f")
+        await pilot.press("ctrl+y")
         await pilot.pause()
 
     assert session.thinking_level == "high"
@@ -8063,7 +8126,7 @@ async def test_tui_app_uses_configured_thinking_keybinding() -> None:
     )
 
     async with app.run_test() as pilot:
-        await pilot.press("ctrl+f")
+        await pilot.press("ctrl+y")
         await pilot.pause()
         assert session.thinking_level == "medium"
 

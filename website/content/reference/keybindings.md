@@ -43,7 +43,8 @@ carries the defaults.
 | Key | Action |
 | --- | --- |
 | `Ctrl+P` | Cycle through all available models (default provider first) |
-| `Ctrl+F` | Cycle the thinking mode |
+| `Ctrl+Y` | Cycle the thinking mode |
+| `Ctrl+F` | Toggle Fast mode for the Codex subscription; no effect on other providers |
 | `Ctrl+T` | Toggle display of thinking/reasoning tokens |
 
 ## Output & session

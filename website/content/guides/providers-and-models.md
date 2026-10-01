@@ -119,6 +119,11 @@ by Tau to reach the model. The built-in Codex catalog exposes `gpt-6-luna` and
 model so older user catalog overlays and saved preferences cannot restore the
 obsolete route.
 
+The Codex provider entry sets `fast = true` in the catalog. New and resumed
+sessions start with Fast routing, which can use subscription credits faster.
+Use `/fast` or **Ctrl+F** to toggle it for the loaded session without changing
+reasoning effort. Set `fast = false` in the catalog to start with standard routing
+
 ### OpenCode Go
 
 OpenCode Go is an **API-key provider**, not an OAuth provider. Sign in at the

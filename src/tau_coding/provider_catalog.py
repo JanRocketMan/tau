@@ -88,6 +88,7 @@ class ProviderCatalogEntry:
     max_retry_delay_seconds: float | None = None
     thinking_defaults: dict[str, ThinkingLevel] = field(default_factory=dict)
     inference_providers: dict[str, str] = field(default_factory=dict)
+    fast: bool = False
 
 
 DEFAULT_SEARCH_PROVIDER = "parallel"

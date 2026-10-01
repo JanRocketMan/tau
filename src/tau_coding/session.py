@@ -406,6 +406,10 @@ class CodingSession:
         self._inference_provider = config.inference_provider
         self._provider_settings = config.provider_settings
         self._runtime_provider_config = config.runtime_provider_config
+        provider_config = self._active_provider_config() or self._runtime_provider_config
+        self._fast_mode = (
+            isinstance(provider_config, OpenAICodexProviderConfig) and provider_config.fast
+        )
         self._resource_paths = resource_paths_with_cwd(config.resource_paths, config.cwd)
         self._provider_display_names = effective_provider_labels(self._resource_paths.paths)
         self._auto_compact_token_threshold = config.auto_compact_token_threshold
@@ -1305,6 +1309,11 @@ class CodingSession:
                 credential_store=self._credential_store,
                 model=model,
                 thinking_level=thinking_level,
+                service_tier=(
+                    "priority"
+                    if provider_config.name == "openai-codex" and self._fast_mode
+                    else None
+                ),
                 inference_provider=_configured_inference_provider(provider_config, model),
                 response_headers_observer=(
                     self._observe_response_headers
@@ -1331,6 +1340,22 @@ class CodingSession:
                 inference_provider=self._inference_provider,
                 preserve_inference_provider=False,
             )
+
+    @property
+    def fast_mode(self) -> bool:
+        return self._provider_name == "openai-codex" and self._fast_mode
+
+    def toggle_fast_mode(self) -> str | None:
+        """Toggle Codex fast routing for this session without changing effort."""
+        if self._provider_name != "openai-codex":
+            return None
+        self._fast_mode = not self._fast_mode
+        try:
+            self._refresh_runtime_provider()
+        except ProviderConfigError:
+            self._fast_mode = not self._fast_mode
+            raise
+        return f"Fast mode: {'on' if self.fast_mode else 'off'}"
 
     async def set_thinking_level(self, level: str) -> str:
         """Activate a thinking mode for future turns (current session only)."""
@@ -1460,6 +1485,7 @@ class CodingSession:
                 credential_store=self._credential_store,
                 model=self.model,
                 thinking_level=self._thinking_level,
+                service_tier="priority" if self.fast_mode else None,
                 inference_provider=inference_provider,
                 response_headers_observer=(
                     self._observe_response_headers
@@ -1898,6 +1924,7 @@ class CodingSession:
         self._command_registry = replacement._command_registry
         self._provider_name = replacement._provider_name
         self._inference_provider = replacement._inference_provider
+        self._fast_mode = replacement._fast_mode
         self._provider_settings = replacement._provider_settings
         self._provider_display_names = replacement._provider_display_names
         self._runtime_provider_config = replacement._runtime_provider_config
@@ -3145,8 +3172,17 @@ def _create_runtime_provider(
     model: str,
     thinking_level: ThinkingLevel | None,
     inference_provider: str | None,
+    service_tier: str | None = None,
     response_headers_observer: Callable[[Mapping[str, str]], None] | None = None,
 ) -> ClosableModelProvider:
+    if service_tier is not None:
+        return create_model_provider(
+            provider,
+            credential_store=credential_store,
+            model=model,
+            thinking_level=thinking_level,
+            service_tier=service_tier,
+        )
     if inference_provider is None and response_headers_observer is None:
         return create_model_provider(
             provider,

@@ -174,6 +174,7 @@ class OpenAICompatibleProviderConfig:
 class OpenAICodexProviderConfig:
     """Durable settings for OpenAI Codex subscription OAuth."""
 
+    fast: bool = False
     name: str = "openai-codex"
     base_url: str = DEFAULT_OPENAI_CODEX_BASE_URL
     api_key_env: str = "OPENAI_CODEX_ACCESS_TOKEN"
@@ -216,6 +217,7 @@ class OpenAICodexProviderConfig:
         return {
             "name": self.name,
             "type": "openai-codex",
+            "fast": self.fast,
             "base_url": self.base_url,
             "api_key_env": self.api_key_env,
             "credential_name": self.credential_name,
@@ -335,6 +337,7 @@ def provider_config_from_entry(entry: ProviderCatalogEntry) -> ProviderConfig:
             max_retry_delay_seconds=max_retry_delay_seconds,
             thinking_parameter=entry.thinking_parameter,
             thinking_defaults=thinking_defaults,
+            fast=entry.fast,
         )
     return OpenAICompatibleProviderConfig(
         name=entry.name,

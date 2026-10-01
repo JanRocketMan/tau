@@ -43,7 +43,13 @@ from tau_agent.session import (
     ThinkingLevelChangeEntry,
 )
 from tau_agent.types import JSONValue
-from tau_ai import CancellationToken, FakeProvider, ModelProvider, RuntimeModelLimits
+from tau_ai import (
+    CancellationToken,
+    FakeProvider,
+    ModelProvider,
+    OpenAICodexProvider,
+    RuntimeModelLimits,
+)
 from tau_ai.events import AssistantMessageEvent
 from tau_ai.openai_remote_compaction import RemoteCompactionResult
 from tau_coding import (
@@ -1441,6 +1447,120 @@ async def test_session_uses_codex_subscription_thinking_capabilities(
     )
     assert session.thinking_unavailable_reason is None
     assert await session.set_thinking_level("high") == "Thinking mode: high"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("fast", [False, True])
+async def test_codex_session_starts_with_catalog_fast_default(tmp_path: Path, fast: bool) -> None:
+    provider_config = OpenAICodexProviderConfig(fast=fast)
+    config = CodingSessionConfig(
+        provider=FakeProvider([]),
+        model=provider_config.default_model,
+        system="You are Tau.",
+        storage=JsonlSessionStorage(tmp_path / "fast-default.jsonl"),
+        cwd=tmp_path,
+        provider_name="openai-codex",
+        provider_settings=ProviderSettings(providers=(provider_config,)),
+        runtime_provider_config=provider_config,
+    )
+    session = await CodingSession.load(config)
+    try:
+        assert session.fast_mode is fast
+        assert isinstance(session._harness.config.provider, OpenAICodexProvider)
+        assert session._harness.config.provider._config.service_tier == (
+            "priority" if fast else None
+        )
+        await session.append_custom_entry("test", {})
+        session.handle_command("/fast")
+        assert session.fast_mode is not fast
+    finally:
+        await session.aclose()
+
+    resumed = await CodingSession.load(config)
+    try:
+        assert resumed.fast_mode is fast
+        assert isinstance(resumed._harness.config.provider, OpenAICodexProvider)
+        assert resumed._harness.config.provider._config.service_tier == (
+            "priority" if fast else None
+        )
+    finally:
+        await resumed.aclose()
+
+
+@pytest.mark.anyio
+async def test_fast_mode_survives_effort_and_provider_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TAU_TEST_OTHER_API_KEY", "test-key")
+    codex = OpenAICodexProviderConfig(
+        models=("reasoner",),
+        default_model="reasoner",
+        thinking_parameter="reasoning.effort",
+        model_metadata={
+            "reasoner": ProviderModelMetadata(
+                reasoning=True,
+                thinking_default="medium",
+                thinking_levels=("medium", "xhigh"),
+            ),
+        },
+    )
+    other = OpenAICompatibleProviderConfig(
+        name="other",
+        models=("other-model",),
+        default_model="other-model",
+        api_key_env="TAU_TEST_OTHER_API_KEY",
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=FakeProvider([]),
+            model="reasoner",
+            system="You are Tau.",
+            storage=JsonlSessionStorage(tmp_path / "fast-session.jsonl"),
+            cwd=tmp_path,
+            provider_name="openai-codex",
+            provider_settings=ProviderSettings(providers=(codex, other)),
+            runtime_provider_config=codex,
+        )
+    )
+    try:
+        assert session.fast_mode is False
+        assert session.handle_command("/fast").message is None
+        assert session.fast_mode is True
+        assert session.thinking_level == "medium"
+        assert session._harness.config.provider._config.service_tier == "priority"
+
+        await session.set_thinking_level("xhigh")
+        assert session.fast_mode is True
+        assert session._harness.config.provider._config.service_tier == "priority"
+
+        session.set_provider("other")
+        assert session.fast_mode is False
+        assert session.handle_command("/fast").message is None
+        session.set_provider("openai-codex")
+        assert session.fast_mode is True
+        assert session._harness.config.provider._config.service_tier == "priority"
+
+        assert session.handle_command("/fast").message is None
+        assert session.fast_mode is False
+        assert session._harness.config.provider._config.service_tier is None
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.anyio
+async def test_fast_command_does_not_change_other_provider(tmp_path: Path) -> None:
+    provider = FakeProvider([])
+    session = await CodingSession.load(
+        _config(tmp_path, provider, JsonlSessionStorage(tmp_path / "session.jsonl"))
+    )
+    try:
+        result = session.handle_command("/fast")
+        assert result.handled is True
+        assert result.message is None
+        assert session.fast_mode is False
+        assert session._harness.config.provider is provider
+    finally:
+        await session.aclose()
 
 
 @pytest.mark.anyio

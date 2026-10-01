@@ -26,7 +26,8 @@ EXPECTED_PROMPT_KEYS = {
     "accept_completion": "tab",
     "completion_next": "down",
     "completion_previous": "up",
-    "thinking_cycle": "ctrl+f",
+    "thinking_cycle": "ctrl+y",
+    "toggle_fast": "ctrl+f",
     "model_cycle": "ctrl+p",
     "toggle_thinking": "ctrl+t",
     "toggle_tool_results": "ctrl+o",
@@ -113,7 +114,8 @@ def test_app_keymap_matches_app_scope_bindings() -> None:
         ("ctrl+r", "open_session_picker"),
         ("ctrl+g", "open_tree_picker"),
         ("ctrl+l", "open_context"),
-        ("ctrl+f", "cycle_thinking"),
+        ("ctrl+y", "cycle_thinking"),
+        ("ctrl+f", "toggle_fast"),
         ("ctrl+p", "cycle_model"),
         ("tab", "accept_completion"),
         ("alt+enter", "submit_follow_up"),
@@ -126,6 +128,7 @@ def test_app_keymap_matches_app_scope_bindings() -> None:
     ]
     assert all(binding.show for binding in bindings)
     assert [binding.priority for binding in bindings] == [
+        False,
         False,
         False,
         False,
@@ -154,7 +157,7 @@ def test_prompt_mode_keymaps_carry_footer_labels() -> None:
         ("ctrl+r", "Sessions"),
         ("ctrl+g", "Tree"),
         ("ctrl+l", "Context"),
-        ("ctrl+f", "Thinking"),
+        ("ctrl+y", "Thinking"),
         ("ctrl+p", "Model"),
         ("ctrl+c", "Stop"),
         ("ctrl+d", "Quit"),

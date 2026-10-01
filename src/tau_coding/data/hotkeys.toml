@@ -102,9 +102,15 @@ description = "Select the previous completion, or move up in the prompt"
 
 [[keymaps.bindings]]
 name = "thinking_cycle"
-key = "ctrl+f"
+key = "ctrl+y"
 action = "cycle_thinking"
 description = "Cycle the thinking mode"
+
+[[keymaps.bindings]]
+name = "toggle_fast"
+key = "ctrl+f"
+action = "toggle_fast"
+description = "Toggle fast mode for the Codex subscription"
 
 [[keymaps.bindings]]
 name = "model_cycle"
@@ -167,6 +173,10 @@ description = "Context"
 [[keymaps.bindings]]
 hotkey = "thinking_cycle"
 description = "Thinking"
+
+[[keymaps.bindings]]
+hotkey = "toggle_fast"
+description = "Fast"
 
 [[keymaps.bindings]]
 hotkey = "model_cycle"

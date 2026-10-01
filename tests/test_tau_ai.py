@@ -1165,6 +1165,49 @@ async def test_openai_compatible_provider_reports_stream_read_timeout() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("service_tier", [None, "priority"])
+async def test_openai_codex_fast_tier_and_routing_header(service_tier: str | None) -> None:
+    requests: list[httpx.Request] = []
+
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200, text=_CODEX_TEXT_SSE, headers={"content-type": "text/event-stream"}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                reasoning_effort="medium",
+                service_tier=service_tier,
+            ),
+            client=client,
+        )
+        events = await _collect(
+            provider.stream_response(
+                model="gpt-6.1-sol",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert isinstance(events[-1], AssistantDoneEvent)
+    payload = loads(requests[0].content)
+    assert payload["reasoning"]["effort"] == "medium"
+    if service_tier is None:
+        assert "service_tier" not in payload
+        assert "x-codex-routing-hint" not in requests[0].headers
+    else:
+        assert payload["service_tier"] == "priority"
+        assert requests[0].headers["x-codex-routing-hint"] == "model=gpt-6.1-sol;tier=priority"
+
+
+@pytest.mark.anyio
 async def test_openai_codex_provider_reports_stream_read_timeout() -> None:
     requests: list[httpx.Request] = []
 

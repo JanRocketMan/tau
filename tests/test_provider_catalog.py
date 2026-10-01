@@ -21,7 +21,7 @@ from tau_coding.provider_catalog import (
     builtin_provider_entry,
     model_cost_for_input_tokens,
 )
-from tau_coding.provider_config import load_provider_settings
+from tau_coding.provider_config import OpenAICodexProviderConfig, load_provider_settings
 
 VALID_PROVIDER = """
 [[providers]]
@@ -570,6 +570,24 @@ def test_catalog_new_provider_appears_in_settings(tmp_path: Path) -> None:
     provider = settings.get_provider("nebius")
     assert provider.base_url == "https://api.studio.nebius.ai/v1"
     assert provider.default_model == "deepseek-ai/DeepSeek-V4-Pro"
+
+
+@pytest.mark.parametrize("value, expected", [("true", True), ("false", False)])
+def test_catalog_codex_fast_default_reaches_provider_settings(
+    tmp_path: Path, value: str, expected: bool
+) -> None:
+    text = builtin_catalog_resource_text().replace("fast = true", f"fast = {value}")
+    settings = load_provider_settings(_catalog_paths(tmp_path, text))
+    codex = settings.get_provider("openai-codex")
+    assert isinstance(codex, OpenAICodexProviderConfig)
+    assert codex.fast is expected
+    assert codex.to_json()["fast"] is expected
+
+
+def test_catalog_rejects_non_boolean_fast_default(tmp_path: Path) -> None:
+    text = builtin_catalog_resource_text().replace("fast = true", 'fast = "true"')
+    with pytest.raises(CatalogError, match="fast"):
+        effective_catalog(_catalog_paths(tmp_path, text))
 
 
 def test_catalog_default_provider_controls_settings(tmp_path: Path) -> None:

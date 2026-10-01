@@ -125,6 +125,7 @@ def _session_summary_fingerprint(
         getattr(session, "provider_display_name", session.provider_name),
         session.model,
         session.thinking_level,
+        getattr(session, "fast_mode", False),
         session.context_token_estimate,
         session.has_provider_context_usage,
         session.auto_compact_token_threshold,
@@ -2033,7 +2034,10 @@ def render_compact_session_info(
     model.append(provider_display_name, style=theme.completion_description)
     model.append(f":{session.model}", style=theme.prompt_text)
     model.append(" ")
-    model.append(f"({_thinking_level(session)})", style=theme.completion_description)
+    effort = _thinking_level(session)
+    if getattr(session, "fast_mode", False):
+        effort = f"{effort}-fast"
+    model.append(f"({effort})", style=theme.completion_description)
     context = Text(
         _context_usage(session),
         style=theme.completion_description,

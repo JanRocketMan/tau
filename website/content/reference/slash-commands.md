@@ -19,6 +19,7 @@ command palette with **Ctrl+K**.
 | `/tree` | Branch from an earlier point in the session tree |
 | `/name <new name>` | Rename the current session and, in supported terminals, the terminal tab title |
 | `/model` | Open the model picker |
+| `/fast` | Toggle Fast mode for the Codex subscription; no effect on other providers |
 | `/tools` | Browse active tools and open their full descriptions |
 | `/theme [name]` | Show or set the TUI theme |
 | `/login [provider]` | Connect a built-in provider with OAuth or an API key; Anthropic uses `anthropic-subscription` or `anthropic-api` |
@@ -27,6 +28,16 @@ command palette with **Ctrl+K**.
 | `/prompts` | Search loaded prompt templates and insert an invocation for editing |
 | `/skills` | Open a searchable picker of loaded skills and insert a selection into the prompt |
 | `/skill:<name> [request]` | Expand a loaded skill into your prompt |
+
+`/fast` and **Ctrl+F** toggle the same setting for the current loaded session.
+The Codex catalog entry sets `fast = true`, so Fast mode starts on. Set it to
+`false` to start with standard routing. It changes
+Codex request routing, not reasoning effort: `(medium)` becomes `(medium-fast)`
+while enabled. The label updates immediately without a confirmation window.
+Fast requests use `service_tier: "priority"` and a matching routing
+header. Tau does not check model or account support; provider errors are shown
+normally. Fast mode can consume subscription credits at a higher rate. Starting
+or resuming a session restores the catalog default
 
 {{% note title="Live HTML exports include the system prompt" %}}
 `/export` includes the current system prompt in a collapsed section when it

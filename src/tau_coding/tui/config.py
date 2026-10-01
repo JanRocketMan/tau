@@ -66,6 +66,7 @@ class TuiKeybindings:
     completion_next: str | None = None
     completion_previous: str | None = None
     thinking_cycle: str | None = None
+    toggle_fast: str | None = None
     model_cycle: str | None = None
     toggle_thinking: str | None = None
     toggle_tool_results: str | None = None
@@ -154,6 +155,7 @@ _CONFIGURABLE_ACTIONS: tuple[str, ...] = (
     "completion_next",
     "completion_previous",
     "thinking_cycle",
+    "toggle_fast",
     "model_cycle",
     "toggle_thinking",
     "toggle_tool_results",

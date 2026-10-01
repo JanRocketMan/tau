@@ -220,7 +220,7 @@ of that list used when no preference is remembered).
 `catalog.toml` also stores runtime preferences directly on the matching
 `[[providers]]` entry: `headers`, `thinking_defaults`, `timeout_seconds`,
 `stream_idle_timeout_seconds`, `max_retries`, `max_retry_delay_seconds` (and
-`inference_providers` for the Hugging Face provider). See
+`inference_providers` for the Hugging Face provider and `fast` for Codex). See
 [Provider preferences](#provider-preferences) below.
 
 Invalid catalog files fail loudly. Tau rejects unknown keys, empty required
@@ -419,9 +419,9 @@ and no other TUI settings file. Keybindings:
 ```text
 cancel: escape        command_palette: ctrl+k   session_picker: ctrl+r
 open_context: ctrl+l  queue_follow_up: alt+enter  accept_completion: tab
-completion_next: down completion_previous: up    thinking_cycle: ctrl+f
+completion_next: down completion_previous: up    thinking_cycle: ctrl+y
 model_cycle: ctrl+p   toggle_thinking: ctrl+t    toggle_tool_results: ctrl+o
-quit: ctrl+d
+toggle_fast: ctrl+f    quit: ctrl+d
 ```
 
 Built-in themes: `codeyellow` (default), `tau-light`, `tau-dark`,

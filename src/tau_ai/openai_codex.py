@@ -87,6 +87,7 @@ class OpenAICodexConfig:
     originator: str = "tau"
     reasoning_effort: str | None = None
     reasoning_summary: str = "auto"
+    service_tier: str | None = None
     supports_images: bool = False
     provider_name: str = "OpenAI Codex"
     # The Codex catalog filters models by the official client's compatibility
@@ -189,6 +190,7 @@ class OpenAICodexProvider:
                 tools=tools,
                 reasoning_effort=self._config.reasoning_effort,
                 reasoning_summary=self._config.reasoning_summary,
+                service_tier=self._config.service_tier,
                 supports_images=self._config.supports_images,
                 prompt_cache_key=cache_key,
                 prepend_input=remote_input_items,
@@ -209,6 +211,10 @@ class OpenAICodexProvider:
                         originator=self._config.originator,
                         session_id=cache_key,
                     )
+                    if self._config.service_tier is not None:
+                        headers["x-codex-routing-hint"] = (
+                            f"model={model};tier={self._config.service_tier}"
+                        )
                     async with client.stream(
                         "POST",
                         url,
@@ -406,6 +412,7 @@ def _build_codex_payload(
     tools: list[AgentTool],
     reasoning_effort: str | None = None,
     reasoning_summary: str = "auto",
+    service_tier: str | None = None,
     supports_images: bool = False,
     prompt_cache_key: str | None = None,
     prepend_input: list[JSONValue] | None = None,
@@ -424,6 +431,8 @@ def _build_codex_payload(
         "tool_choice": "auto",
         "parallel_tool_calls": True,
     }
+    if service_tier is not None:
+        payload["service_tier"] = service_tier
     if prompt_cache_key is not None:
         payload["prompt_cache_key"] = prompt_cache_key
     if reasoning_effort is not None:

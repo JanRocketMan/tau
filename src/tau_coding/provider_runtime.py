@@ -54,6 +54,7 @@ def create_model_provider(
     credential_store: FileCredentialStore | None = None,
     model: str | None = None,
     thinking_level: ThinkingLevel | None = None,
+    service_tier: str | None = None,
     inference_provider: str | None = None,
     response_headers_observer: Callable[[Mapping[str, str]], None] | None = None,
 ) -> ClosableModelProvider:
@@ -86,6 +87,7 @@ def create_model_provider(
                     model=model,
                     thinking_level=thinking_level,
                 ),
+                service_tier=service_tier,
                 supports_images=provider_model_supports_images(provider, model),
             )
         )

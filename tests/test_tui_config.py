@@ -13,7 +13,8 @@ from tau_coding.tui.config import (
 def test_tui_settings_defaults_are_builtin() -> None:
     assert TuiSettings().keybindings.open_context == "ctrl+l"
     assert TuiSettings().keybindings.quit == "ctrl+d"
-    assert TuiSettings().keybindings.thinking_cycle == "ctrl+f"
+    assert TuiSettings().keybindings.thinking_cycle == "ctrl+y"
+    assert TuiSettings().keybindings.toggle_fast == "ctrl+f"
     assert TuiSettings().theme == "codeyellow"
 
 

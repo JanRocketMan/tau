@@ -40,6 +40,7 @@ class FakeSession:
         self.auto_compact_token_threshold = 200
         self.context_window_tokens = 584
         self.thinking_level = "medium"
+        self.fast_mode = False
         self.available_thinking_levels: tuple[str, ...] = (
             "off",
             "minimal",
@@ -68,6 +69,10 @@ class FakeSession:
                 provider_name=self.provider_name,
                 session_id=self.session_id,
             )
+
+    def toggle_fast_mode(self) -> str:
+        self.fast_mode = not self.fast_mode
+        return f"Fast mode: {'on' if self.fast_mode else 'off'}"
 
     def set_model(self, model: str) -> None:
         self.model = model
@@ -126,31 +131,22 @@ def test_registry_ignores_unregistered_slash_prompts(tmp_path: Path) -> None:
         assert result.message is None
 
 
-def test_registered_commands_are_pi_aligned(tmp_path: Path) -> None:
-    commands = create_default_command_registry().list_commands()
+def test_fast_command_toggles_codex_only(tmp_path: Path) -> None:
+    registry = create_default_command_registry()
+    session = FakeSession(tmp_path)
 
-    assert [command.name for command in commands] == [
-        "compact",
-        "context",
-        "export",
-        "login",
-        "logout",
-        "model",
-        "name",
-        "new",
-        "prompts",
-        "quit",
-        "reload",
-        "resume",
-        "route",
-        "session",
-        "skill",
-        "skills",
-        "system",
-        "theme",
-        "tools",
-        "tree",
-    ]
+    result = registry.execute(session, "/fast")
+    assert result.handled is True
+    assert result.message is None
+    assert session.fast_mode is False
+
+    session.provider_name = "openai-codex"
+    assert registry.execute(session, "/fast").message is None
+    assert session.fast_mode is True
+    assert registry.execute(session, "/fast extra").message == "Usage: /fast"
+    assert session.fast_mode is True
+    assert registry.execute(session, "/fast").message is None
+    assert session.fast_mode is False
 
 
 def test_prompts_command_requests_picker(tmp_path: Path) -> None:

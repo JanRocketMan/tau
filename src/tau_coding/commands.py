@@ -88,6 +88,8 @@ class CommandSession(Protocol):
 
     def set_inference_provider(self, route: str | None) -> str: ...
 
+    def toggle_fast_mode(self) -> str | None: ...
+
     def reload_provider_settings(self) -> None: ...
 
 
@@ -337,6 +339,14 @@ def create_default_command_registry() -> CommandRegistry:
     )
     registry.register(
         SlashCommand(
+            name="fast",
+            usage="/fast",
+            description="Toggle fast mode for the Codex subscription.",
+            handler=_fast_command,
+        )
+    )
+    registry.register(
+        SlashCommand(
             name="model",
             usage="/model",
             description="Choose the active model.",
@@ -413,6 +423,15 @@ def _export_command(context: CommandContext) -> CommandResult:
         export_destination=destination,
         export_format=export_format,
     )
+
+
+def _fast_command(context: CommandContext) -> CommandResult:
+    if context.session.provider_name != "openai-codex":
+        return CommandResult(handled=True)
+    if context.args:
+        return CommandResult(handled=True, message="Usage: /fast")
+    context.session.toggle_fast_mode()
+    return CommandResult(handled=True)
 
 
 def _route_command(context: CommandContext) -> CommandResult:

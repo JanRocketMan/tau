@@ -116,6 +116,7 @@ class _CatalogProvider(BaseModel):
     max_retry_delay_seconds: _NonNegativeFloat | None = None
     thinking_defaults: dict[_NonEmptyString, ThinkingLevel] = {}
     inference_providers: dict[_NonEmptyString, _NonEmptyString] = {}
+    fast: bool = Field(default=False, strict=True)
 
 
 class _CatalogSearchProvider(BaseModel):
@@ -537,6 +538,7 @@ def _entry_from_provider(provider: _CatalogProvider, *, source: str) -> Provider
         max_retry_delay_seconds=provider.max_retry_delay_seconds,
         thinking_defaults=dict(provider.thinking_defaults),
         inference_providers=dict(provider.inference_providers),
+        fast=provider.fast,
     )
 
 

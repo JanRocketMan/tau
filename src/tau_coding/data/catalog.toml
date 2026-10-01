@@ -16,6 +16,7 @@ opencode-go = "go"
 name = "openai-codex"
 display_name = "OpenAI Codex subscription"
 kind = "openai-codex"
+fast = true
 base_url = "https://chatgpt.com/backend-api"
 api_key_env = "OPENAI_CODEX_ACCESS_TOKEN"
 credential_name = "openai-codex"

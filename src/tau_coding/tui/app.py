@@ -462,6 +462,8 @@ class CompletionActionTarget(Protocol):
 
     def action_cycle_thinking(self) -> None: ...
 
+    def action_toggle_fast(self) -> None: ...
+
     def action_cycle_model(self) -> None: ...
 
     def action_toggle_tool_results(self) -> None: ...
@@ -593,6 +595,10 @@ class PromptInput(TextArea):
     def action_cycle_thinking(self) -> None:
         """Cycle the app-level thinking mode."""
         self._completion_target().action_cycle_thinking()
+
+    def action_toggle_fast(self) -> None:
+        """Toggle app-level Codex Fast mode."""
+        self._completion_target().action_toggle_fast()
 
     def action_cycle_model(self) -> None:
         """Cycle the app-level model."""
@@ -782,6 +788,10 @@ class PromptInput(TextArea):
         elif _is_thinking_cycle_key(event.key, keys["thinking_cycle"]):
             event.stop()
             self._completion_target().action_cycle_thinking()
+        elif event.key == keys["toggle_fast"]:
+            event.stop()
+            event.prevent_default()
+            self._completion_target().action_toggle_fast()
         elif event.key == keys["model_cycle"]:
             event.stop()
             self._completion_target().action_cycle_model()
@@ -5105,6 +5115,15 @@ class TauTuiApp(App[None]):
         """Cycle the active thinking mode."""
         self.run_worker(self._cycle_thinking_level(), exclusive=False)
 
+    def action_toggle_fast(self) -> None:
+        """Toggle Codex Fast mode without changing the prompt or opening a modal."""
+        try:
+            self.session.handle_command("/fast")
+        except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
+            self._notify(f"Could not change fast mode: {exc}", severity="error")
+            return
+        self._refresh_chrome()
+
     def action_cycle_model(self) -> None:
         """Cycle through all available models across providers."""
         if self.state.running:
@@ -6347,7 +6366,7 @@ def _command_output_title(command_text: str) -> str:
 
 def _is_thinking_cycle_key(key: str, configured_key: str) -> bool:
     # Backtab (shift+tab) is sent by some terminals for the forward-thinking
-    # legacy binding; the default is ctrl+f.
+    # legacy binding; the default is ctrl+y.
     return key == configured_key
 
 

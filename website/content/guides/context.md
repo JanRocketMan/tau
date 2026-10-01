@@ -122,7 +122,7 @@ thinking level you can cycle:
 off → minimal → low → medium → high → xhigh → max
 ```
 
-- **Ctrl+F** cycles the thinking level.
+- **Ctrl+Y** cycles the thinking level.
 - **Ctrl+T** toggles whether reasoning tokens are shown (hidden by default).
   Reasoning blocks are saved with the assistant response, so their original
   positions and visibility toggle are restored when you resume a session.
