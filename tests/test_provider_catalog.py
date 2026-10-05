@@ -97,8 +97,8 @@ def test_builtin_catalog_oauth_and_opencode_auth_methods() -> None:
         (
             "openai-codex",
             {
-                "gpt-5.6-sol",
-                "gpt-5.6-luna",
+                "gpt-6.1-sol",
+                "gpt-6-luna",
             },
         ),
         (
@@ -125,8 +125,8 @@ def test_sparse_provider_catalogs_declare_model_input_modalities(
 def test_builtin_catalog_entries_match_context_windows_and_output_limits() -> None:
     expected: dict[str, dict[str, tuple[int, int | None]]] = {
         "openai-codex": {
-            "gpt-5.6-sol": (272_000, 128_000),
-            "gpt-5.6-luna": (272_000, 128_000),
+            "gpt-6.1-sol": (272_000, 128_000),
+            "gpt-6-luna": (272_000, 128_000),
         },
         "opencode-go": {
             "deepseek-v4.1-flash": (1_000_000, 384_000),
@@ -165,23 +165,38 @@ def test_builtin_catalog_auth_and_thinking_metadata() -> None:
     assert codex is not None
     assert opencode_go is not None
     assert codex.auth_methods == ("oauth",)
+    assert codex.removed_models == ("gpt-6-sol",)
     assert opencode_go.auth_methods == ("api_key",)
     assert opencode_go.api == "openai-completions"
     assert codex.thinking_parameter == "reasoning.effort"
     assert opencode_go.thinking_parameter == "reasoning_effort"
-    assert codex.model_metadata["gpt-5.6-luna"].thinking_default == "xhigh"
-    assert codex.model_metadata["gpt-5.6-luna"].thinking_levels == (
+    assert codex.model_metadata["gpt-6-luna"].thinking_default == "xhigh"
+    assert codex.model_metadata["gpt-6-luna"].thinking_levels == (
         "low",
         "medium",
         "high",
         "xhigh",
+        "max",
     )
-    assert codex.model_metadata["gpt-5.6-sol"].thinking_levels == (
+    assert codex.model_metadata["gpt-6.1-sol"].thinking_levels == (
         "low",
         "medium",
         "high",
         "xhigh",
+        "max",
     )
+    assert codex.model_metadata["gpt-6-luna"].cost == {
+        "input": 0.1,
+        "output": 0.5,
+        "cacheRead": 0.01,
+        "cacheWrite": 0.125,
+    }
+    assert codex.model_metadata["gpt-6.1-sol"].cost == {
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
+        "cacheWrite": 2.5,
+    }
     deepseek = opencode_go.model_metadata["deepseek-v4.1-flash"]
     assert deepseek.thinking_default == "max"
     assert deepseek.thinking_levels == ("high", "max")
@@ -208,12 +223,12 @@ def test_builtin_catalog_declares_default_and_preferences() -> None:
 
     assert codex is not None
     assert opencode_go is not None
-    assert codex.default_model == "gpt-5.6-sol"
+    assert codex.default_model == "gpt-6.1-sol"
     assert codex.timeout_seconds == 60.0
     assert codex.stream_idle_timeout_seconds == 600.0
     assert codex.max_retries == 2
     assert codex.max_retry_delay_seconds == 1.0
-    assert codex.thinking_defaults == {"gpt-5.6-luna": "xhigh", "gpt-5.6-sol": "xhigh"}
+    assert codex.thinking_defaults == {"gpt-6-luna": "xhigh", "gpt-6.1-sol": "xhigh"}
     assert opencode_go.thinking_defaults == {
         "deepseek-v4.1-flash": "max",
         "mimo-v2.6-pro": "high",
@@ -565,7 +580,7 @@ def test_catalog_default_provider_controls_settings(tmp_path: Path) -> None:
         "openai-codex",
         "opencode-go",
     ]
-    assert settings.get_provider("openai-codex").default_model == "gpt-5.6-sol"
+    assert settings.get_provider("openai-codex").default_model == "gpt-6.1-sol"
     assert settings.get_provider("opencode-go").thinking_defaults == {
         "deepseek-v4.1-flash": "max",
         "mimo-v2.6-pro": "high",

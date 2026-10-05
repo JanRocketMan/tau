@@ -47,14 +47,14 @@ def test_load_provider_settings_uses_packaged_catalog(tmp_path: Path) -> None:
         "openai-codex",
         "opencode-go",
     ]
-    assert settings.get_provider("openai-codex").default_model == "gpt-5.6-sol"
+    assert settings.get_provider("openai-codex").default_model == "gpt-6.1-sol"
 
 
 def test_builtin_codex_preserves_model_input_capabilities() -> None:
     codex = ProviderSettings().get_provider("openai-codex")
 
-    assert provider_model_supports_images(codex, "gpt-5.6-luna")
-    assert provider_model_supports_images(codex, "gpt-5.6-sol")
+    assert provider_model_supports_images(codex, "gpt-6-luna")
+    assert provider_model_supports_images(codex, "gpt-6.1-sol")
     assert not provider_model_supports_images(codex, "gpt-5.5")
 
 
@@ -63,15 +63,16 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     codex = settings.get_provider("openai-codex")
     opencode_go = settings.get_provider("opencode-go")
 
-    assert codex.context_windows["gpt-5.6-luna"] == 272_000
+    assert codex.context_windows["gpt-6-luna"] == 272_000
     assert opencode_go.context_windows["deepseek-v4.1-flash"] == 1_000_000
-    assert provider_thinking_levels(codex, model="gpt-5.6-luna") == (
+    assert provider_thinking_levels(codex, model="gpt-6-luna") == (
         "low",
         "medium",
         "high",
         "xhigh",
+        "max",
     )
-    assert provider_default_thinking_level(codex, model="gpt-5.6-luna") == "xhigh"
+    assert provider_default_thinking_level(codex, model="gpt-6-luna") == "xhigh"
     assert provider_thinking_unavailable_reason(codex, model="unknown") == (
         "Provider openai-codex does not declare thinking metadata for unknown"
     )
@@ -88,12 +89,12 @@ def test_builtin_catalog_declares_model_scoped_capabilities() -> None:
     )
     # Remembered preferences (packaged thinking_defaults) beat catalog metadata
     # defaults when resolving startup thinking levels.
-    assert codex.thinking_defaults == {"gpt-5.6-luna": "xhigh", "gpt-5.6-sol": "xhigh"}
+    assert codex.thinking_defaults == {"gpt-6-luna": "xhigh", "gpt-6.1-sol": "xhigh"}
     assert opencode_go.thinking_defaults == {
         "deepseek-v4.1-flash": "max",
         "mimo-v2.6-pro": "high",
     }
-    assert resolve_startup_thinking_level(codex, "gpt-5.6-sol") == "xhigh"
+    assert resolve_startup_thinking_level(codex, "gpt-6.1-sol") == "xhigh"
 
 
 def test_catalog_preferences_flow_into_provider_configs(tmp_path: Path) -> None:
@@ -715,12 +716,12 @@ def test_openai_compatible_provider_config_rejects_inference_providers_for_non_h
 def test_openai_codex_provider_config_round_trips_preferences() -> None:
     provider = OpenAICodexProviderConfig(
         name="openai-codex",
-        default_model="gpt-5.6-sol",
-        thinking_defaults={"gpt-5.6-luna": "xhigh", "gpt-5.6-sol": "xhigh"},
+        default_model="gpt-6.1-sol",
+        thinking_defaults={"gpt-6-luna": "xhigh", "gpt-6.1-sol": "xhigh"},
     )
 
-    assert provider.thinking_defaults["gpt-5.6-sol"] == "xhigh"
-    assert provider.to_json()["default_model"] == "gpt-5.6-sol"
+    assert provider.thinking_defaults["gpt-6.1-sol"] == "xhigh"
+    assert provider.to_json()["default_model"] == "gpt-6.1-sol"
 
 
 def test_catalog_default_provider_fallback_when_absent(tmp_path: Path) -> None:

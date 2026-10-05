@@ -99,7 +99,7 @@ cache usage appears in the **Cache** tab of an HTML session export.
 OpenAI's public API and the ChatGPT/Codex subscription are separate serving
 surfaces. A model with the same ID can have a smaller, rollout-specific context
 window through Codex OAuth than through an API key. For example, the public
-GPT-5.6 Sol API advertises a 1.05M-token window, while Codex has advertised
+GPT-6.1 Sol API advertises a 1.05M-token window, while Codex has advertised
 substantially smaller limits through its authenticated model catalog.
 
 Tau queries that catalog when a Codex session starts and uses the returned
@@ -114,11 +114,10 @@ A discovery failure is non-fatal: Tau reports it in `/session` and continues wit
 the fallback. Direct OpenAI API sessions retain the context limits documented on
 the API model page. Vision-capable Codex models retain their image-input
 metadata separately from these runtime context limits, allowing image files read
-by Tau to reach the model. The `gpt-5.6` alias, which routes to GPT-5.6 Sol, is only
-available through the direct OpenAI API; Codex subscription users should select
-the explicit `gpt-5.6-sol` model instead. Tau tombstones the API-only alias for
-the Codex provider, so older user catalog overlays and saved preferences cannot
-restore it after an upgrade.
+by Tau to reach the model. The built-in Codex catalog exposes `gpt-6-luna` and
+`gpt-6.1-sol`. Tau withdraws `gpt-6-sol` from this provider and tombstones the
+model so older user catalog overlays and saved preferences cannot restore the
+obsolete route.
 
 ### OpenCode Go
 

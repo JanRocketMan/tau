@@ -1432,7 +1432,7 @@ def test_providers_command_lists_default_provider(
     result = CliRunner().invoke(app, ["providers"])
 
     assert result.exit_code == 0
-    assert "*\topenai-codex\topenai-codex\tgpt-5.6-sol" in result.stdout
+    assert "*\topenai-codex\topenai-codex\tgpt-6.1-sol" in result.stdout
     assert " \topencode-go\topenai-compatible\tdeepseek-v4.1-flash" in result.stdout
 
 

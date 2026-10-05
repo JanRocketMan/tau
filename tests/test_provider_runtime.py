@@ -36,7 +36,7 @@ def test_create_model_provider_uses_codex_model_image_capability(tmp_path: Path)
     vision_provider = create_model_provider(
         config,
         credential_store=store,
-        model="gpt-5.6-sol",
+        model="gpt-6.1-sol",
     )
 
     assert isinstance(vision_provider, OpenAICodexProvider)

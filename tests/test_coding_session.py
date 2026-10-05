@@ -4490,7 +4490,7 @@ async def test_session_set_model_does_not_change_catalog_default(
     assert session.model == "gpt-5-mini"
     saved = load_provider_settings(tau_paths)
     assert saved.default_provider == "openai-codex"
-    assert saved.get_provider("openai-codex").default_model == "gpt-5.6-sol"
+    assert saved.get_provider("openai-codex").default_model == "gpt-6.1-sol"
 
 
 @pytest.mark.anyio

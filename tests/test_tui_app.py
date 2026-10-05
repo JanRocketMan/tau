@@ -9126,7 +9126,7 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
     )
 
     assert calls == [
-        f"prepare:{tmp_path}:gpt-5.6-sol:openai-codex",
+        f"prepare:{tmp_path}:gpt-6.1-sol:openai-codex",
         "load:LoginRequiredProvider",
         "run",
     ]
