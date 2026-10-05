@@ -7935,18 +7935,18 @@ async def test_tui_prompt_ctrl_c_clears_text_when_idle() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_prompt_ctrl_u_deletes_current_line() -> None:
+async def test_tui_prompt_ctrl_u_deletes_to_line_start() -> None:
     app = _tui_app(FakeSession())
 
     async with app.run_test() as pilot:
         prompt = app.query_one("#prompt", TextArea)
         prompt.focus()
-        prompt.text = "first line\nsecond line\nthird line"
-        prompt.move_cursor((1, 4))
+        prompt.text = "first line\nkill meKEEP\nthird line"
+        prompt.move_cursor((1, 7))
         await pilot.press("ctrl+u")
         await pilot.pause()
 
-        assert prompt.text == "first line\nthird line"
+        assert prompt.text == "first line\nKEEP\nthird line"
 
 
 @pytest.mark.anyio

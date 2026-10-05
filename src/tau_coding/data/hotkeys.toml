@@ -131,10 +131,10 @@ action = "toggle_tool_results"
 description = "Collapse or expand tool output"
 
 [[keymaps.bindings]]
-name = "delete_line"
+name = "delete_to_line_start"
 key = "ctrl+u"
-action = "delete_line"
-description = "Delete the current prompt line"
+action = "delete_to_start_of_line"
+description = "Delete from the line start to the cursor"
 
 [[keymaps.bindings]]
 name = "quit"

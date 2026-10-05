@@ -48,7 +48,8 @@ While the agent is working you don't have to wait:
 
 - **Ctrl+C** clears a non-empty prompt draft without stopping the run. A prompt
   with only spaces or newlines counts as empty: then it stops the active model
-  request, tool, or compaction. **Ctrl+U** deletes the current line.
+  request, tool, or compaction. **Ctrl+U** deletes from the cursor to the
+  start of the current line, like zsh.
 - **Esc** also cancels the active run. Cancellation is treated as an intentional
   stop, not an error. After an interrupt, the status bar above the prompt
   reports `interrupted after Xm Ys` with the elapsed time.

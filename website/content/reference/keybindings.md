@@ -20,7 +20,7 @@ carries the defaults.
 | --- | --- |
 | `Enter` | Submit the prompt (or apply a highlighted completion) |
 | `Shift+Enter` | Insert a newline |
-| `Ctrl+U` | Delete the current prompt line |
+| `Ctrl+U` | Delete from the line start to the cursor |
 | `Ctrl+C` | Clear a non-empty prompt draft, or stop the active run |
 | `Esc` | Cancel the active run |
 | `Enter` (while running) | Queue text as steering for the current run |

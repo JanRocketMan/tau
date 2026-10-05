@@ -31,7 +31,7 @@ EXPECTED_PROMPT_KEYS = {
     "model_cycle": "ctrl+p",
     "toggle_thinking": "ctrl+t",
     "toggle_tool_results": "ctrl+o",
-    "delete_line": "ctrl+u",
+    "delete_to_line_start": "ctrl+u",
     "quit": "ctrl+d",
 }
 
