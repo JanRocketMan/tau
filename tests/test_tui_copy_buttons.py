@@ -1,10 +1,11 @@
-"""Tests for the code-fence copy buttons in the Tau TUI.
+"""Tests for the code-fence and user-prompt copy buttons in the Tau TUI.
 
 Fenced ``` blocks inside assistant (Markdown) messages, user messages, and
 tool results render as boxed code areas with a small copy button in the
-top-right corner. This module covers button presence, the copied text, live
-updates (streaming fences and in-place tool progress), and the plain fast
-path staying untouched for rows without fences.
+top-right corner. Submitted user prompts additionally carry their own copy
+button on the first line. This module covers button presence, the copied
+text, live updates (streaming fences and in-place tool progress), and the
+plain fast path staying untouched for rows without fences.
 """
 
 from typing import cast
@@ -27,6 +28,7 @@ from tau_coding.tui.app import PromptInput, TauTuiApp
 from tau_coding.tui.config import TAU_DARK_THEME
 from tau_coding.tui.widgets import (
     CopyFenceButton,
+    CopyPromptButton,
     FencedCodeBox,
     FencedPlainBody,
     TauMarkdownFence,
@@ -50,6 +52,10 @@ def _assistant_message(text: str) -> AssistantMessage:
 
 def _message_buttons(app: TauTuiApp) -> list[CopyFenceButton]:
     return list(app.query(CopyFenceButton))
+
+
+def _prompt_buttons(app: TauTuiApp) -> list[CopyPromptButton]:
+    return list(app.query(CopyPromptButton))
 
 
 @pytest.mark.anyio
@@ -129,6 +135,97 @@ async def test_user_message_fence_gets_button_and_copies_code() -> None:
 
         await pilot.click(buttons[0])
         assert app.clipboard == "x = 1\nprint(x)"
+
+
+@pytest.mark.anyio
+async def test_user_prompt_gets_copy_button_and_copies_full_text() -> None:
+    prompt = "first line\nsecond line\nthird line"
+    app = _tui_app((_user_message(prompt),))
+
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        buttons = _prompt_buttons(app)
+        assert len(buttons) == 1
+        message = app.query_one(TranscriptMessageWidget)
+        assert buttons[0].parent is message
+        # The button docks to the right edge of the first prompt line and
+        # blends with the prompt row background, unlike fence buttons.
+        assert buttons[0].styles.dock == "right"
+        assert buttons[0].styles.background == message.styles.background
+        assert buttons[0].region.y == message.query_one(".transcript-plain-body").region.y
+
+        await pilot.click(buttons[0])
+        assert app.clipboard == prompt
+        assert buttons[0].label.plain == "✓"
+        await pilot.pause(1.5)
+        assert buttons[0].label.plain == "▣"
+
+
+@pytest.mark.anyio
+async def test_fenced_user_prompt_copies_prompt_while_fence_button_copies_code() -> None:
+    prompt = "Run this:\n\n```python\nx = 1\nprint(x)\n```\n\nthanks"
+    app = _tui_app((_user_message(prompt),))
+
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        prompt_button = _prompt_buttons(app)[0]
+        fence_button = _message_buttons(app)[0]
+        assert isinstance(prompt_button.parent, TranscriptMessageWidget)
+        assert isinstance(fence_button.parent, FencedCodeBox)
+        # Each button blends with the box it sits in: the prompt button with
+        # the prompt row, the fence button with the code block.
+        assert prompt_button.styles.background == prompt_button.parent.styles.background
+        assert fence_button.styles.background == fence_button.parent.styles.background
+        # The prompt button sits above the fence, on the prompt's first line.
+        assert prompt_button.region.y < fence_button.region.y
+
+        # The prompt button copies the raw prompt, fences included, while the
+        # fence button keeps copying just the fenced code.
+        await pilot.click(prompt_button)
+        assert app.clipboard == prompt
+        await pilot.click(fence_button)
+        assert app.clipboard == "x = 1\nprint(x)"
+
+
+@pytest.mark.anyio
+async def test_malformed_user_fence_still_gets_prompt_copy_button() -> None:
+    prompt = "broken fence\n```python\nx = 1"
+    app = _tui_app((_user_message(prompt),))
+
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        assert not _message_buttons(app)
+
+        await pilot.click(_prompt_buttons(app)[0])
+        assert app.clipboard == prompt
+
+
+@pytest.mark.anyio
+async def test_prompt_copy_button_is_not_focusable_and_keeps_prompt_focus() -> None:
+    app = _tui_app((_user_message("plain prompt"),))
+
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        button = _prompt_buttons(app)[0]
+        assert button.can_focus is False
+
+        prompt = app.query_one(PromptInput)
+        assert app.focused is prompt
+        await pilot.click(button)
+        assert app.focused is prompt
+
+
+@pytest.mark.anyio
+async def test_only_user_rows_get_prompt_copy_button() -> None:
+    app = _tui_app((_user_message("prompt"), _assistant_message("answer")))
+
+    async with app.run_test(size=(110, 30)) as pilot:
+        await pilot.pause()
+        buttons = _prompt_buttons(app)
+        assert len(buttons) == 1
+        parent = buttons[0].parent
+        assert isinstance(parent, TranscriptMessageWidget)
+        assert parent.item.role == "user"
 
 
 @pytest.mark.anyio

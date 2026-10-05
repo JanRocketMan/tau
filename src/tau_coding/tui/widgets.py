@@ -212,17 +212,16 @@ def _append_link_urls(content: Any) -> Any:
     return type(content)().join(parts)
 
 
-class CopyFenceButton(Button, can_focus=False):
-    """Small copy button docked to the top-right corner of a code fence box.
+class CopyButton(Button, can_focus=False):
+    """Small copy button docked to the top-right corner of a boxed area.
 
-    The button reads the fence's code from its parent at click time, so it stays
-    in sync while a Markdown fence streams or a tool progress row updates in
-    place. It is not focusable, so clicking it never steals keyboard focus from
-    the prompt.
+    The button reads the text to copy from its parent at click time, so it
+    stays in sync while content streams or updates in place. It is not
+    focusable, so clicking it never steals keyboard focus from the prompt.
     """
 
     DEFAULT_CSS = """
-    CopyFenceButton {
+    CopyButton {
         dock: right;
         height: 1;
         min-width: 0;
@@ -231,7 +230,6 @@ class CopyFenceButton(Button, can_focus=False):
         padding: 0 1;
         margin: 0 1 0 0;
         border: none !important;
-        background: $tau-markdown-code-block-background !important;
         color: $tau-muted-text !important;
         text-style: none !important;
         text-align: center;
@@ -239,26 +237,27 @@ class CopyFenceButton(Button, can_focus=False):
         pointer: pointer;
     }
 
-    CopyFenceButton:hover {
+    CopyButton:hover {
         color: $tau-accent !important;
         text-style: bold !important;
     }
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, tooltip: str) -> None:
         # ▣ (U+25A3) renders optically centered in terminal cells; math-symbol
         # lookalikes like ⧉ (U+29C9) are drawn small and raised in many fonts.
-        super().__init__("▣", tooltip="Copy code")
+        super().__init__("▣", tooltip=tooltip)
+        self._default_tooltip = tooltip
         self._revert_timer: Timer | None = None
 
     @property
-    def _source_code(self) -> str:
-        """Return the fence code currently owned by the parent widget."""
+    def _source_text(self) -> str:
+        """Return the text currently owned by the parent widget."""
         parent = self.parent
         if parent is None:
             return ""
-        code = getattr(parent, "code", None)
-        return code if isinstance(code, str) else ""
+        text = getattr(parent, "copy_text", None)
+        return text if isinstance(text, str) else ""
 
     def _flash_copied(self) -> None:
         """Flip the label to ✓ briefly as copy feedback, then revert."""
@@ -270,29 +269,73 @@ class CopyFenceButton(Button, can_focus=False):
 
     def _revert_label(self) -> None:
         self.label = "▣"
-        self.tooltip = "Copy code"
+        self.tooltip = self._default_tooltip
         self._revert_timer = None
 
-    async def _copy_code(self) -> None:
-        """Copy the parent fence's code to the clipboard; False when empty."""
-        code = self._source_code.rstrip("\n")
-        if not code:
+    async def _copy_text(self) -> None:
+        """Copy the parent's text to the clipboard; no-op when empty."""
+        text = self._source_text.rstrip("\n")
+        if not text:
             return
-        self.app.copy_to_clipboard(code)
+        self.app.copy_to_clipboard(text)
         self._flash_copied()
 
     async def on_click(self, _event: events.Click) -> None:
-        """Copy the fence code on click.
+        """Copy the parent's text on click.
 
         Textual moves keyboard focus to the transcript when the pointer lands
         on the button; the prompt is restored so typing continues uninterrupted.
         """
-        await self._copy_code()
+        await self._copy_text()
         try:
             prompt = self.app.query_one("#prompt")
         except NoMatches:
             return
         self.app.set_focus(prompt)
+
+
+class CopyFenceButton(CopyButton):
+    """Copy button for a code fence box in a Markdown or plain transcript row.
+
+    It blends with the code block background so the box reads as one area.
+    """
+
+    DEFAULT_CSS = """
+    CopyFenceButton {
+        background: $tau-markdown-code-block-background !important;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__(tooltip="Copy code")
+
+    @property
+    def _source_text(self) -> str:
+        """Return the fence code currently owned by the parent widget."""
+        parent = self.parent
+        if parent is None:
+            return ""
+        code = getattr(parent, "code", None)
+        return code if isinstance(code, str) else ""
+
+
+class CopyPromptButton(CopyButton):
+    """Copy button for a submitted user prompt.
+
+    It copies the row's raw text, including any ``` fence markers, so the
+    copied prompt keeps its code blocks exactly as submitted. The transcript
+    row sets its background to the prompt block's color, matching the fence
+    buttons' behavior of blending with the box they sit in.
+    """
+
+    DEFAULT_CSS = """
+    CopyPromptButton {
+        background: transparent !important;
+    }
+    """
+
+    def __init__(self) -> None:
+        super().__init__(tooltip="Copy prompt")
 
 
 class TauMarkdownFence(MarkdownFence):
@@ -821,6 +864,16 @@ class TranscriptMessageWidget(Horizontal):
 
     def compose(self) -> Any:
         yield self._body_widget()
+        if self.item.role == "user":
+            button = CopyPromptButton()
+            if self._body_background:
+                button.styles.background = self._body_background
+            yield button
+
+    @property
+    def copy_text(self) -> str:
+        """Raw prompt text served to the message copy button (fences included)."""
+        return self.item.text
 
     def _body_widget(self) -> Static | FencedPlainBody | ThemedMarkdownWidget:
         body: Static | FencedPlainBody | ThemedMarkdownWidget
